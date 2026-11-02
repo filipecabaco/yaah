@@ -9,15 +9,21 @@ use tauri::{AppHandle, Emitter, State};
 
 // ── UI component library ────────────────────────────────────────────────────
 
+/// Async and off the async workers: it reads every component file, and the
+/// main thread (which runs sync commands) must never wait on that.
 #[tauri::command]
-pub fn list_components(library: State<'_, Arc<Library>>) -> Result<Vec<Component>, String> {
-    library.list()
+pub async fn list_components(library: State<'_, Arc<Library>>) -> Result<Vec<Component>, String> {
+    let library = library.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || library.list()).await.map_err(|e| e.to_string())?
 }
 
 /// Render-ready tree for a library component with the given props (previews).
 #[tauri::command]
-pub fn preview_component(library: State<'_, Arc<Library>>, name: String, props: serde_json::Value) -> Result<Prepared, String> {
-    library.prepare(Some(&name), props, None).map_err(|errs| errs.join("\n"))
+pub async fn preview_component(library: State<'_, Arc<Library>>, name: String, props: serde_json::Value) -> Result<Prepared, String> {
+    let library = library.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || library.prepare(Some(&name), props, None).map_err(|errs| errs.join("\n")))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 // ── Sources and data connections ────────────────────────────────────────────

@@ -631,7 +631,7 @@
       }
     },
     "button": {
-      "description": "A button. `prompt` sends that text to you (the agent) as the user's next message; `draft` puts text in the user's message box for them to edit and send; `href` opens a URL. Give exactly one.",
+      "description": "A button. `prompt` sends that text to you (the agent) as the user's next message; `draft` puts text in the user's message box for them to edit and send; `href` opens a URL. Give exactly one. A `prompt` that differs from `label` is shown to the user to confirm before it is sent.",
       "children": false,
       "props": {
         "label": {
@@ -704,7 +704,7 @@
       }
     },
     "browser": {
-      "description": "A live, interactive preview of a web page in a browser frame. `src` is an http(s) URL (e.g. a dev server on localhost) or the absolute path of a self-contained .html file inside this chat's folders. The page runs sandboxed.",
+      "description": "A live, interactive preview of a web page in a browser frame. `src` is an http(s) URL (e.g. a dev server on localhost) or the absolute path of a self-contained .html file inside this chat's folders. The page runs sandboxed. A local .html file shows at once; any URL waits for the user to click Load, showing them the full URL.",
       "children": false,
       "props": {
         "src": {

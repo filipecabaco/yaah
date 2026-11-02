@@ -53,6 +53,18 @@ after your turn ends; you never see credentials. Look at the data first with sou
 
 Validation errors say exactly what to fix; fix and call again.";
 
+/// Tools Claude Code may call without a permission prompt: the ones that only
+/// show UI in this chat or read and grow the component library. `source_read`
+/// isn't one: it reads the user's databases, Docker logs and integrations, so
+/// the user approves it like any other tool.
+const NO_PROMPT_TOOLS: &[&str] = &["ui_catalog", "ui_get_component", "ui_render", "ui_ask", "ui_get_values", "ui_set_values", "ui_save_component"];
+
+/// Claude Code's `allowedTools` for this server: each tool by its full name,
+/// never the whole server (`mcp__yaah-ui`), so a tool added later asks first.
+pub fn allowed_tools() -> Vec<String> {
+    NO_PROMPT_TOOLS.iter().map(|t| format!("mcp__{SERVER_NAME}__{t}")).collect()
+}
+
 /// The largest request body read: a render's tree and props. Files never come
 /// this way (they are inlined from paths), so this is generous.
 const MAX_BODY: usize = 8 << 20;
@@ -96,9 +108,17 @@ impl UiHost {
     }
 
     /// A URL serving `file`'s folder, so the page's own CSS/JS/images load.
-    /// It is a different origin from the app, so the page can't reach it.
-    fn preview_url(&self, file: &Path) -> String {
+    /// It is a different origin from the app, so the page can't reach it. A
+    /// page directly in a shared temp folder is refused: that would serve
+    /// everything other programs leave there.
+    fn preview_url(&self, file: &Path) -> Result<String, String> {
         let dir = file.parent().unwrap_or(Path::new("/")).to_path_buf();
+        if crate::ui_files::shared_temp_dir(&dir) {
+            return Err(format!(
+                "a page directly in {} can't be previewed (its whole folder would be served); put it in a folder of its own, with its assets",
+                dir.display()
+            ));
+        }
         let mut previews = self.previews.lock().unwrap_or_else(PoisonError::into_inner);
         let id = if let Some((id, _)) = previews.iter().find(|(_, d)| **d == dir) {
             id.clone()
@@ -108,7 +128,7 @@ impl UiHost {
             id
         };
         let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        format!("http://127.0.0.1:{}/preview/{id}/{}", self.port.get().copied().unwrap_or(0), encode_path(&name))
+        Ok(format!("http://127.0.0.1:{}/preview/{id}/{}", self.port.get().copied().unwrap_or(0), encode_path(&name)))
     }
 }
 
@@ -462,14 +482,19 @@ fn header(k: &str, v: &str) -> Header {
     Header::from_bytes(k.as_bytes(), v.as_bytes()).expect("static header")
 }
 
-/// Turn local screenshot/page paths into data URLs, limited to the chat's folders.
+/// Turn the local screenshot and page paths `image` and `browser` nodes show
+/// into data URLs and preview URLs, limited to the chat's folders.
 fn inline_files(host: &UiHost, session_id: &str, tree: &mut Value, props: &mut Value) -> Vec<String> {
     let roots = host.hub.session_roots(session_id);
-    let serve = |p: &Path| host.preview_url(p);
-    let mut refused = crate::ui_files::inline(tree, &roots, &serve);
-    refused.extend(crate::ui_files::inline(props, &roots, &serve));
-    refused
+    crate::ui_files::inline(tree, props, &roots, &|p: &Path| host.preview_url(p))
 }
+
+/// A previewed page may load what it likes from the web (CDN scripts, styles,
+/// fonts, images) but only talk to its own folder: no fetch, XHR or WebSocket
+/// elsewhere, no form posts, no popups or top-level navigation (`sandbox`
+/// without `allow-popups`/`allow-top-navigation`; the same flags as the iframe in the chat).
+const PREVIEW_CSP: &str = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; connect-src 'self'; form-action 'none'; \
+    frame-ancestors *; sandbox allow-scripts allow-forms allow-modals allow-same-origin";
 
 /// The file `rest` names inside the preview folder `dir`: never outside it (no
 /// `../`, no symlink out), and never a hidden file or folder (`.env`, `.git`).
@@ -481,7 +506,7 @@ fn preview_file(dir: &Path, rest: &str) -> Option<PathBuf> {
     }
     let inside = path.strip_prefix(&root).ok()?;
     let hidden = inside.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
-    (!hidden && path.is_file()).then_some(path)
+    (!hidden && path.is_file() && web_asset(&path)).then_some(path)
 }
 
 /// GET /preview/<id>/<path>: a file from a registered preview folder.
@@ -502,28 +527,47 @@ fn serve_preview(host: &UiHost, req: Request) {
     let _ = match file {
         // Streamed, not read whole.
         Some((path, f)) => req.respond(
-            Response::from_file(f).with_header(header("Content-Type", content_type(&path))).with_header(header("Cache-Control", "no-store")),
+            Response::from_file(f)
+                .with_header(header("Content-Type", content_type(&path)))
+                .with_header(header("Cache-Control", "no-store"))
+                .with_header(header("Content-Security-Policy", PREVIEW_CSP))
+                .with_header(header("X-Content-Type-Options", "nosniff")),
         ),
         None => req.respond(Response::from_string("not found").with_status_code(404)),
     };
 }
 
-fn content_type(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase().as_str() {
+/// The type a preview serves a file as; `None` for anything that isn't a
+/// static web asset (sources, data, keys…), which isn't served at all.
+fn web_type(path: &Path) -> Option<&'static str> {
+    Some(match path.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase().as_str() {
         "html" | "htm" => "text/html; charset=utf-8",
         "js" | "mjs" => "text/javascript; charset=utf-8",
         "css" => "text/css; charset=utf-8",
-        "json" => "application/json",
+        "json" | "map" => "application/json",
         "svg" => "image/svg+xml",
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
+        "avif" => "image/avif",
         "ico" => "image/x-icon",
+        "woff" => "font/woff",
         "woff2" => "font/woff2",
-        "txt" | "md" => "text/plain; charset=utf-8",
-        _ => "application/octet-stream",
-    }
+        "ttf" => "font/ttf",
+        "otf" => "font/otf",
+        "txt" => "text/plain; charset=utf-8",
+        "wasm" => "application/wasm",
+        _ => return None,
+    })
+}
+
+fn web_asset(path: &Path) -> bool {
+    web_type(path).is_some()
+}
+
+fn content_type(path: &Path) -> &'static str {
+    web_type(path).unwrap_or("application/octet-stream")
 }
 
 fn encode_path(s: &str) -> String {
@@ -786,6 +830,53 @@ mod tests {
     }
 
     #[test]
+    fn only_ui_tools_skip_the_permission_prompt() {
+        let allowed = allowed_tools();
+        assert!(!allowed.iter().any(|t| t == "mcp__yaah-ui"), "never the whole server");
+        assert!(!allowed.iter().any(|t| t.ends_with("source_read")), "reading data sources asks the user");
+        let tools = tools();
+        let names: Vec<&str> = tools.as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
+        for t in NO_PROMPT_TOOLS {
+            assert!(names.contains(t), "`{t}` is a real tool: {names:?}");
+        }
+        assert_eq!(allowed.len(), names.len() - 1, "every tool but source_read: {allowed:?}");
+        assert!(allowed.contains(&"mcp__yaah-ui__ui_render".to_owned()));
+    }
+
+    #[test]
+    fn pages_directly_in_the_temp_folder_are_not_previewed() {
+        let (_, host, _) = serve_chat(&temp_dir("cwd"));
+        let loose = std::env::temp_dir().join(format!("yaah-loose-{}.html", crate::session::random_token()));
+        std::fs::write(&loose, "<p>hi</p>").unwrap();
+        let e = host.preview_url(&loose).unwrap_err();
+        assert!(e.contains("can't be previewed") && e.contains("folder of its own"), "{e}");
+        assert!(host.preview_url(Path::new("/tmp/page.html")).is_err());
+        assert!(host.previews.lock().unwrap().is_empty(), "nothing registered");
+        let own = temp_dir("own-folder");
+        assert!(host.preview_url(&own.join("index.html")).is_ok(), "a folder of its own in temp is fine");
+        let _ = std::fs::remove_file(loose);
+    }
+
+    #[test]
+    fn ui_get_values_never_returns_file_contents() {
+        let cwd = temp_dir("cwd");
+        let (_, _, port) = serve_chat(&cwd);
+        let secret = cwd.join("secret.png");
+        std::fs::write(&secret, b"top secret").unwrap();
+        let secret = secret.canonicalize().unwrap().to_string_lossy().into_owned();
+        let form = json!({ "type": "form", "children": [
+            { "type": "textfield", "props": { "name": "where", "label": "Where", "default": secret } },
+            { "type": "textfield", "props": { "name": "bound", "label": "Bound", "default": "{{p}}" } },
+            { "type": "image", "props": { "src": secret, "alt": "shown" } }
+        ] });
+        let (text, err) = call(port, "ui_render", &json!({ "tree": form, "props": { "p": secret }, "id": "f" }));
+        assert!(!err, "{text}");
+        let (values, err) = call(port, "ui_get_values", &json!({ "id": "f" }));
+        assert!(!err && values.contains(&secret), "the path comes back as a path: {values}");
+        assert!(!values.contains("data:") && !values.contains("dG9wIHNlY3JldA"), "never the file: {values}");
+    }
+
+    #[test]
     fn clips_on_a_character_boundary() {
         let text = "é".repeat(10);
         assert_eq!(clip(text.clone(), 100), text);
@@ -806,8 +897,14 @@ mod tests {
         // A folder whose index.html is a link out of the preview folder.
         std::os::unix::fs::symlink(root.join("secret.txt"), site.join("escape/index.html")).unwrap();
 
+        std::fs::write(site.join("style.css"), "h1{}").unwrap();
+        std::fs::write(site.join("notes.md"), "private").unwrap();
+        std::fs::write(site.join("db.sqlite"), "private").unwrap();
+        std::fs::write(site.join("id_rsa"), "private").unwrap();
+        std::fs::write(site.join("main.rs"), "private").unwrap();
+
         let (_, host, port) = serve_chat(&root);
-        let url = host.preview_url(&site.join("index.html"));
+        let url = host.preview_url(&site.join("index.html")).unwrap();
         let path = url.split_once(&format!("127.0.0.1:{port}")).unwrap().1.to_owned();
         let base = path.trim_end_matches("index.html");
         let local = format!("127.0.0.1:{port}");
@@ -815,6 +912,10 @@ mod tests {
         let (status, page) = get(port, &path, &local);
         assert_eq!((status, page.as_str()), (200, "<h1>todo</h1>"));
         assert_eq!(get(port, &format!("{base}app.js"), "localhost").0, 200);
+        assert_eq!(get(port, &format!("{base}style.css"), &local).0, 200);
+        for not_web in ["notes.md", "db.sqlite", "id_rsa", "main.rs"] {
+            assert_eq!(get(port, &format!("{base}{not_web}"), &local).0, 404, "only static web assets are served: {not_web}");
+        }
         assert_eq!(get(port, base, &local).1, "<h1>todo</h1>", "a folder serves its index.html");
         for hidden in [
             format!("{base}../secret.txt"),
@@ -827,6 +928,17 @@ mod tests {
             assert_eq!(get(port, &hidden, &local).0, 404, "{hidden}");
         }
         assert_eq!(get(port, &path, "evil.example:80").0, 404, "a rebound hostname gets nothing");
+
+        // Every file comes with a policy that keeps what the page reads at home.
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(s, "GET {path} HTTP/1.1\r\nHost: {local}\r\nConnection: close\r\n\r\n").unwrap();
+        let mut head = String::new();
+        let _ = s.read_to_string(&mut head);
+        let csp = head.lines().find_map(|l| l.strip_prefix("Content-Security-Policy: ")).unwrap_or_default();
+        for part in ["connect-src 'self'", "form-action 'none'", "frame-ancestors *", "https:"] {
+            assert!(csp.contains(part), "{part} in {csp}");
+        }
+        assert!(csp.contains("sandbox ") && !csp.contains("allow-popups") && !csp.contains("allow-top-navigation"), "{csp}");
         assert_eq!(exchange(port, &format!("POST {path} HTTP/1.1\r\nHost: {local}"), "").0, 405);
         let _ = std::fs::remove_dir_all(root);
     }

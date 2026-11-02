@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -26,6 +27,10 @@ const PRIMITIVES_JSON: &str = include_str!("../../src/ui-primitives.json");
 const MAX_DEPTH: usize = 30;
 const MAX_NODES: usize = 3000;
 const MAX_NESTING: usize = 8;
+/// Nodes a render may have once every library component in it is filled in.
+/// Each use of a component copies its whole tree, so a few small components
+/// nested a few deep would otherwise expand exponentially.
+const MAX_EXPANDED: usize = 3000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -244,11 +249,13 @@ impl Library {
                 by_name.entry(c.name.clone()).or_insert(c);
             }
         }
-        Ok(by_name.into_values().map(|c| self.with_uses(c)).collect())
+        // One memo for the whole list: each component's libraries are worked out once.
+        let mut memo = HashMap::new();
+        Ok(by_name.into_values().map(|c| self.with_uses(c, &mut memo)).collect())
     }
 
     pub fn get(&self, name: &str) -> Result<Option<Component>, String> {
-        Ok(self.raw_get(name)?.map(|c| self.with_uses(c)))
+        Ok(self.raw_get(name)?.map(|c| self.with_uses(c, &mut HashMap::new())))
     }
 
     fn raw_get(&self, name: &str) -> Result<Option<Component>, String> {
@@ -260,31 +267,50 @@ impl Library {
         Ok(None)
     }
 
-    fn with_uses(&self, mut c: Component) -> Component {
+    /// `c` with its `uses` filled in. `memo` holds each nested component's
+    /// libraries once worked out, so a component used many times is walked once.
+    fn with_uses(&self, mut c: Component, memo: &mut Uses) -> Component {
         let mut uses = BTreeSet::new();
-        self.collect_uses(&c.tree, &mut vec![c.name.clone()], &mut uses);
+        self.collect_uses(&c.tree, &mut vec![c.name.clone()], memo, &mut 0, &mut uses);
         c.uses = uses.into_iter().collect();
         c
     }
 
+    /// The libraries component `name` is built on, worked out once per `memo`.
+    fn uses_of(&self, name: &str, stack: &mut Vec<String>, memo: &mut Uses) -> Rc<BTreeSet<String>> {
+        if let Some(u) = memo.get(name) {
+            return u.clone();
+        }
+        let mut out = BTreeSet::new();
+        if let Ok(Some(c)) = self.raw_get(name) {
+            stack.push(name.to_owned());
+            self.collect_uses(&c.tree, stack, memo, &mut 0, &mut out);
+            stack.pop();
+        }
+        let out = Rc::new(out);
+        memo.insert(name.to_owned(), out.clone());
+        out
+    }
+
     /// Libraries a tree is built on, following nested components (cycle-safe).
-    fn collect_uses(&self, node: &Value, stack: &mut Vec<String>, out: &mut BTreeSet<String>) {
+    /// At most [`MAX_NODES`] nodes of one tree are walked (`walked` counts them):
+    /// the save checks keep trees under that, but a file on disk may not be.
+    fn collect_uses(&self, node: &Value, stack: &mut Vec<String>, memo: &mut Uses, walked: &mut usize, out: &mut BTreeSet<String>) {
+        *walked += 1;
+        if *walked > MAX_NODES {
+            return;
+        }
         let Some(obj) = node.as_object() else { return };
         for key in ["children", "else"] {
             for kid in obj.get(key).and_then(Value::as_array).into_iter().flatten() {
-                self.collect_uses(kid, stack, out);
+                self.collect_uses(kid, stack, memo, walked, out);
             }
         }
         let Some(t) = obj.get("type").and_then(Value::as_str) else { return };
         if let Some(p) = primitive(t) {
             out.extend(p.get("uses").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned));
-        } else if !stack.iter().any(|s| s == t)
-            && stack.len() < MAX_NESTING
-            && let Ok(Some(c)) = self.raw_get(t)
-        {
-            stack.push(t.to_owned());
-            self.collect_uses(&c.tree, stack, out);
-            stack.pop();
+        } else if !stack.iter().any(|s| s == t) && stack.len() < MAX_NESTING {
+            out.extend(self.uses_of(t, stack, memo).iter().cloned());
         }
     }
 
@@ -314,7 +340,7 @@ impl Library {
         if !req.props.is_object() || req.props.get("type").is_some_and(|t| t != "object") {
             errs.push("props must be a JSON Schema object: { type: \"object\", properties: {...}, required: [...] }".into());
         }
-        let existing = self.get(&req.name).map_err(|e| vec![e])?;
+        let existing = self.raw_get(&req.name).map_err(|e| vec![e])?;
         if let Some(c) = &existing
             && self.sources.iter().any(|s| !s.writable() && s.id() == c.source)
         {
@@ -363,7 +389,7 @@ impl Library {
         };
         let target = self.sources.iter().find(|s| s.writable()).ok_or_else(|| vec!["no writable component source".to_owned()])?;
         target.save(&component).map_err(|e| vec![e])?;
-        Ok(self.with_uses(Component { source: target.id().to_owned(), ..component }))
+        Ok(self.with_uses(Component { source: target.id().to_owned(), ..component }, &mut HashMap::new()))
     }
 
     /// Validate a render request and expand library references.
@@ -372,7 +398,7 @@ impl Library {
         let props = if props.is_null() { json!({}) } else { props };
         let (root, name, version) = match (component, tree) {
             (Some(name), None) => {
-                let Some(c) = self.get(name).map_err(|e| vec![e])? else {
+                let Some(c) = self.raw_get(name).map_err(|e| vec![e])? else {
                     return Err(vec![format!("no component named `{name}`; call ui_catalog to see what exists")]);
                 };
                 check_props(&c.props, &props, "props", &mut errs);
@@ -387,20 +413,58 @@ impl Library {
         if !errs.is_empty() {
             return Err(errs);
         }
-        let tree = self.expand(&root, &mut vec![], &mut errs);
+        let tree = Expansion::new(self).expand(&root, &mut vec![], &mut errs);
         if !errs.is_empty() {
             return Err(errs);
         }
         Ok(Prepared { component: name, version, tree, props })
     }
 
+    /// Refuse a tree that contains itself, nests too deep, or expands past [`MAX_EXPANDED`].
     fn check_cycles(&self, node: &Value, stack: &[String], errs: &mut Vec<String>) {
         let mut stack = stack.to_vec();
-        self.expand(node, &mut stack, errs);
+        Expansion::new(self).expand(node, &mut stack, errs);
+    }
+}
+
+/// Libraries per component name, for one list or catalog call.
+type Uses = HashMap<String, Rc<BTreeSet<String>>>;
+
+/// One expansion of a tree: a single node budget for everything it pulls in,
+/// and each component read once.
+struct Expansion<'a> {
+    lib: &'a Library,
+    nodes: usize,
+    read: HashMap<String, Option<Rc<Component>>>,
+}
+
+impl<'a> Expansion<'a> {
+    fn new(lib: &'a Library) -> Self {
+        Self { lib, nodes: 0, read: HashMap::new() }
+    }
+
+    fn component(&mut self, name: &str) -> Option<Rc<Component>> {
+        if let Some(c) = self.read.get(name) {
+            return c.clone();
+        }
+        let c = self.lib.raw_get(name).ok().flatten().map(Rc::new);
+        self.read.insert(name.to_owned(), c.clone());
+        c
     }
 
     /// Replace library references with `$component` nodes holding their tree.
-    fn expand(&self, node: &Value, stack: &mut Vec<String>, errs: &mut Vec<String>) -> Value {
+    fn expand(&mut self, node: &Value, stack: &mut Vec<String>, errs: &mut Vec<String>) -> Value {
+        self.nodes += 1;
+        if self.nodes > MAX_EXPANDED {
+            // Said once; everything after it is skipped without more work.
+            if self.nodes == MAX_EXPANDED + 1 {
+                errs.push(format!(
+                    "with its components filled in this UI has more than {MAX_EXPANDED} nodes (every use of a component copies its whole tree, \
+                     so nesting multiplies); use fewer or smaller nested components, or an `each` over a list in props"
+                ));
+            }
+            return Value::Null;
+        }
         let Some(obj) = node.as_object() else { return node.clone() };
         let mut out = obj.clone();
         for key in ["children", "else"] {
@@ -420,7 +484,7 @@ impl Library {
             errs.push(format!("components nest more than {MAX_NESTING} deep: {}", stack.join(" → ")));
             return Value::Null;
         }
-        let Ok(Some(c)) = self.get(t) else {
+        let Some(c) = self.component(t) else {
             errs.push(format!("no component named `{t}`"));
             return Value::Null;
         };
@@ -538,7 +602,7 @@ fn validate(node: &Value, path: &str, lib: &Library, ctx: &mut Ctx, depth: usize
             }
             walk("children", ctx, errs);
         } else {
-            match lib.get(t) {
+            match lib.raw_get(t) {
                 Ok(Some(c)) => check_props(&c.props, &Value::Object(props.clone()), &format!("{path}.props"), errs),
                 Ok(None) => errs.push(format!("{path}: unknown type `{t}`; use a primitive from ui_catalog or an existing component")),
                 Err(e) => errs.push(e),
@@ -718,6 +782,95 @@ mod tests {
         .unwrap();
         assert_eq!(dash.uses, vec!["react-markdown", "recharts", "remark-gfm"]);
         assert!(lib.catalog().unwrap()["components"].as_array().unwrap().iter().any(|c| c["uses"] == json!(["recharts"])));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `lvl-0` holds ten charts; every `lvl-k` holds ten `lvl-(k-1)`: lvl-6 would expand to millions of nodes.
+    fn level(k: usize) -> Component {
+        let kid = if k == 0 {
+            json!({ "type": "chart", "props": { "kind": "bar", "data": [], "x": "day", "series": [] } })
+        } else {
+            json!({ "type": format!("lvl-{}", k - 1), "props": {} })
+        };
+        Component {
+            name: format!("lvl-{k}"),
+            version: 1,
+            description: "A level of a deeply nested test component".into(),
+            props: empty_object_schema(),
+            tree: json!({ "type": "stack", "children": vec![kid; 10] }),
+            examples: vec![],
+            change_note: None,
+            updated_at: 0,
+            source: String::new(),
+            uses: vec![],
+        }
+    }
+
+    #[test]
+    fn nesting_that_multiplies_is_refused_quickly() {
+        let (lib, dir) = lib();
+        let started = std::time::Instant::now();
+        let mut refused = None;
+        for k in 0..=6 {
+            let c = level(k);
+            let req = SaveRequest {
+                name: c.name,
+                description: c.description,
+                props: c.props,
+                tree: c.tree,
+                examples: vec![],
+                change_note: None,
+                expected_version: None,
+            };
+            match lib.save(req) {
+                Ok(_) => assert!(refused.is_none()),
+                Err(errs) => {
+                    refused.get_or_insert(k);
+                    let errs = errs.join(" ");
+                    assert!(errs.contains("more than 3000 nodes") || errs.contains("unknown type `lvl-"), "{errs}");
+                }
+            }
+        }
+        assert_eq!(refused, Some(3), "lvl-2 expands to 1,221 nodes and fits; lvl-3 (12,221) doesn't");
+        assert!(lib.prepare(Some("lvl-2"), json!({}), None).is_ok());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "took {:?}", started.elapsed());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A library that already holds such components (written to disk by hand, or
+    /// before the budget existed) stays quick to list, read and refuse.
+    #[test]
+    fn a_library_with_exploding_components_stays_responsive() {
+        let (lib, dir) = lib();
+        let store = LocalDir::new(dir.clone());
+        for k in 0..=6 {
+            store.save(&level(k)).unwrap();
+        }
+        let started = std::time::Instant::now();
+        let catalog = lib.catalog().unwrap();
+        let top = catalog["components"].as_array().unwrap().iter().find(|c| c["name"] == "lvl-6").unwrap();
+        assert_eq!(top["uses"], json!(["recharts"]), "libraries still come through every level");
+        assert_eq!(lib.list().unwrap().len(), 7);
+        assert_eq!(lib.get("lvl-6").unwrap().unwrap().uses, ["recharts"]);
+        let errs = lib.prepare(Some("lvl-6"), json!({}), None).unwrap_err();
+        assert_eq!(errs.len(), 1, "said once: {errs:?}");
+        assert!(errs[0].contains("more than 3000 nodes"), "{errs:?}");
+        let errs = lib.prepare(None, json!({}), Some(json!({ "type": "card", "children": [{ "type": "lvl-5" }] }))).unwrap_err();
+        assert!(errs[0].contains("more than 3000 nodes"), "{errs:?}");
+        let mut wrap = level(7);
+        wrap.name = "wrapper".into();
+        wrap.tree = json!({ "type": "lvl-6" });
+        let req = SaveRequest {
+            name: wrap.name,
+            description: wrap.description,
+            props: wrap.props,
+            tree: wrap.tree,
+            examples: vec![],
+            change_note: None,
+            expected_version: None,
+        };
+        assert!(lib.save(req).unwrap_err().join(" ").contains("more than 3000 nodes"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(1), "took {:?}", started.elapsed());
         std::fs::remove_dir_all(dir).unwrap();
     }
 

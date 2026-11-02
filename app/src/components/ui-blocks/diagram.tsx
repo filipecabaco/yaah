@@ -6,11 +6,14 @@
 // - click callbacks are never bound (strict ignores them, and `bindFunctions`
 //   isn't called); `click … href` links go through Mermaid's URL sanitiser and,
 //   when clicked, open in the system browser only if http(s);
-// - user `style`/`classDef` CSS is compiled under the SVG's own id.
+// - user `style`/`classDef` CSS is compiled under the SVG's own id;
+// - nothing in the finished SVG fetches: images and remote `url()`s are
+//   stripped (svg-clean.ts), so a diagram can't send data out just by being drawn.
 import { useEffect, useId, useState } from "react";
 import mermaid from "mermaid";
 import { ErrorText } from "@/components/error-text";
 import { keepLinksOutside } from "@/components/ui-blocks/links";
+import { stripRemoteResources } from "@/components/ui-blocks/svg-clean";
 import { errorMessage } from "@/lib/narrow";
 
 let theme: string | null = null;
@@ -33,7 +36,7 @@ export default function UiDiagram({ text }: { text: string }) {
     let stale = false;
     setup();
     mermaid.render(id, text).then(
-      ({ svg }) => !stale && setDrawn({ text, svg }),
+      ({ svg }) => !stale && setDrawn({ text, svg: stripRemoteResources(svg) }),
       (e: unknown) => !stale && setDrawn({ text, error: errorMessage(e) }),
     );
     return () => {
@@ -55,7 +58,7 @@ export default function UiDiagram({ text }: { text: string }) {
       className="overflow-x-auto [&_svg]:mx-auto [&_svg]:max-w-full"
       onClickCapture={keepLinksOutside}
       onAuxClickCapture={keepLinksOutside}
-      // Mermaid's output in strict mode, sanitised by its DOMPurify (see above).
+      // Mermaid's output in strict mode, sanitised by its DOMPurify, then stripped of anything that fetches (see above).
       dangerouslySetInnerHTML={{ __html: drawn.svg }}
     />
   );

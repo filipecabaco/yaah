@@ -703,8 +703,10 @@ fn page(msg: &str, status: u16) -> tiny_http::Response<std::io::Cursor<Vec<u8>>>
     tiny_http::Response::from_string(body).with_status_code(status).with_header(html)
 }
 
-/// Serve the loopback callback once: check `state`, answer the browser, return
-/// the code. Gives up after `window`, or when `cancel` is set.
+/// Serve the loopback callback: check `state`, answer the browser, return the
+/// code. A callback with another `state` is answered 400 and the wait goes on:
+/// any web page can send the browser here, and it mustn't end the sign-in.
+/// Gives up after `window`, or when `cancel` is set.
 fn wait_for_callback(server: &tiny_http::Server, svc: &Service, state: &str, cancel: &AtomicBool, window: Duration) -> Result<String, String> {
     let until = Instant::now() + window;
     let callback = format!("/oauth/callback/{}", svc.id);
@@ -721,7 +723,7 @@ fn wait_for_callback(server: &tiny_http::Server, svc: &Service, state: &str, can
         let q: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
         if q.get("state").map(String::as_str) != Some(state) {
             let _ = req.respond(page("This sign-in link is stale. Start again from yaah.", 400));
-            return Err("the sign-in didn't match (stale state)".into());
+            continue;
         }
         if let Some(e) = q.get("error") {
             let _ = req.respond(page(&format!("{} said: {e}. You can close this tab.", svc.label), 200));
@@ -1283,9 +1285,15 @@ mod tests {
         assert!(get(port, "/oauth/callback/linear?code=abc&state=s3cret").starts_with("HTTP/1.1 200"));
         assert_eq!(done.join().unwrap(), Ok("abc".to_owned()));
 
+        // A wrong (or missing) state, from any page that sends the browser here, is refused
+        // without ending the sign-in: the right callback still gets through.
         let (done, port) = serve("s3cret");
         assert!(get(port, "/oauth/callback/linear?code=abc&state=forged").starts_with("HTTP/1.1 400"));
-        assert!(done.join().unwrap().unwrap_err().contains("stale state"));
+        assert!(get(port, "/oauth/callback/linear?error=access_denied").starts_with("HTTP/1.1 400"));
+        assert!(get(port, "/oauth/callback/linear?code=evil").starts_with("HTTP/1.1 400"));
+        assert!(!done.is_finished(), "still waiting");
+        assert!(get(port, "/oauth/callback/linear?code=right&state=s3cret").starts_with("HTTP/1.1 200"));
+        assert_eq!(done.join().unwrap(), Ok("right".to_owned()));
 
         let (done, port) = serve("s3cret");
         let page = get(port, "/oauth/callback/linear?error=%3Cscript%3Ex%3C/script%3E&state=s3cret");

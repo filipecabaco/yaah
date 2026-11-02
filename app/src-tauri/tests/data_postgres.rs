@@ -1,12 +1,57 @@
 //! `postgres.*` sources against a real database: the demo container
-//! (`yaah-pg-demo`, 127.0.0.1:54329, database `shop`) or `YAAH_PG_TEST_URL`.
+//! (`yaah-pg-demo`, 127.0.0.1:54329, database `shop`) or `YAAH_PG_TEST_URL`
+//! (a superuser URL). yaah only connects as a read-only role, so the tests
+//! create `yaah_ro` there with the superuser and run yaah as it.
 //! Every test skips (passes, with a note) when neither answers.
 
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::time::Duration;
 use yaah_lib::sources::Sources;
 
 const DEMO: &str = "postgres://postgres:yaahdemo@127.0.0.1:54329/shop";
+
+fn admin_url() -> String {
+    std::env::var("YAAH_PG_TEST_URL").unwrap_or_else(|_| DEMO.into())
+}
+
+/// The admin URL with another user and password.
+fn as_role(admin: &str, user: &str, password: &str) -> String {
+    let mut url = reqwest::Url::parse(admin).unwrap();
+    url.set_username(user).unwrap();
+    url.set_password(Some(password)).unwrap();
+    url.into()
+}
+
+/// Run `sql` as the superuser; retried, since tests (and test processes) create the same roles at once.
+async fn as_admin(sql: &str) -> Result<(), String> {
+    let (client, conn) = tokio_postgres::connect(&admin_url(), tokio_postgres::NoTls).await.map_err(|e| e.to_string())?;
+    tokio::spawn(conn);
+    let mut attempt = 0;
+    loop {
+        match client.batch_execute(sql).await {
+            Ok(()) => return Ok(()),
+            Err(_) if attempt < 3 => tokio::time::sleep(Duration::from_millis(50)).await,
+            Err(e) => return Err(e.to_string()),
+        }
+        attempt += 1;
+    }
+}
+
+/// Create a login role if it's missing, then run `grants`; returns its URL.
+async fn role(name: &str, password: &str, grants: &str) -> Result<String, String> {
+    as_admin(&format!(
+        "do $$ begin if not exists (select from pg_roles where rolname = '{name}') then \
+         create role {name} login password '{password}'; end if; end $$; {grants}"
+    ))
+    .await?;
+    Ok(as_role(&admin_url(), name, password))
+}
+
+/// `yaah_ro`: what the README tells users to create.
+async fn read_only_url() -> Result<String, String> {
+    role("yaah_ro", "yaahro", "grant pg_read_all_data to yaah_ro").await
+}
 
 fn temp_dir() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("yaah-data-pg-{}-{}", std::process::id(), yaah_lib::session::random_token()));
@@ -16,10 +61,13 @@ fn temp_dir() -> PathBuf {
 
 /// Sources with one saved connection, `shop`, or `None` when there's no database to test against.
 async fn shop() -> Option<(Sources, PathBuf)> {
-    let url = std::env::var("YAAH_PG_TEST_URL").unwrap_or_else(|_| DEMO.into());
     let dir = temp_dir();
     let sources = Sources::with_connections_file(dir.join("connections.json"));
-    match sources.add_connection("shop", &url).await {
+    let added = match read_only_url().await {
+        Ok(url) => sources.add_connection("shop", &url).await,
+        Err(e) => Err(e),
+    };
+    match added {
         Ok(_) => Some((sources, dir)),
         Err(e) => {
             eprintln!("skipped: no Postgres to test against ({e})");
@@ -144,11 +192,56 @@ async fn connections_are_tested_saved_privately_and_shown_without_credentials() 
     let file = dir.join("connections.json");
     assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
     let shown = serde_json::to_string(&s.connections()).unwrap();
-    assert!(shown.contains("\"name\":\"shop\"") && !shown.contains("yaahdemo") && !shown.contains("postgres:"), "{shown}");
+    assert!(shown.contains("\"name\":\"shop\"") && !shown.contains("yaahro") && !shown.contains("yaah_ro"), "{shown}");
 
     let e = s.add_connection("shop2", "postgres://postgres:wrong@127.0.0.1:54329/shop").await.unwrap_err();
     assert!(e.starts_with("couldn't connect:") && !e.contains("wrong"), "{e}");
     assert!(s.add_connection("bad name", DEMO).await.unwrap_err().contains("letters, digits"));
     assert_eq!(s.connections().len(), 1, "a connection that doesn't work isn't saved");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn superusers_and_server_file_roles_are_refused() {
+    let Some((s, dir)) = shop().await else { return };
+    let e = s.add_connection("admin", &admin_url()).await.unwrap_err();
+    assert!(e.contains("`postgres`") && e.contains("superuser") && e.contains("CREATE ROLE yaah_ro") && e.contains("pg_read_all_data"), "{e}");
+    // A predefined role that reaches the server's files counts too, granted directly or not.
+    let files = role("yaah_files", "yaahfiles", "grant pg_read_server_files to yaah_files").await.unwrap();
+    let e = s.add_connection("files", &files).await.unwrap_err();
+    assert!(e.contains("pg_read_server_files"), "{e}");
+    let via = role("yaah_via_super", "yaahvia", "grant postgres to yaah_via_super").await.unwrap();
+    assert!(s.add_connection("via", &via).await.unwrap_err().contains("superuser"), "a member of a superuser can SET ROLE to it");
+    assert_eq!(s.connections().len(), 1, "only the read-only one was saved");
+
+    // A superuser connection saved before this check (by hand, or an older yaah) runs nothing.
+    let file = dir.join("connections.json");
+    std::fs::write(&file, json!({ "connections": [{ "name": "old", "url": admin_url() }] }).to_string()).unwrap();
+    let e = s.read(&json!({ "kind": "postgres.query", "connection": "old", "sql": "select pg_read_file('/etc/hostname')" })).await.unwrap_err();
+    assert!(e.contains("superuser") && e.contains("CREATE ROLE"), "{e}");
+    assert!(s.read(&json!({ "kind": "postgres.schema", "connection": "old" })).await.unwrap_err().contains("superuser"));
+    // Don't leave roles with these powers (and known passwords) behind.
+    as_admin("drop role if exists yaah_files; drop role if exists yaah_via_super").await.unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn the_read_only_role_cant_read_server_files_or_end_sessions() {
+    let Some((s, _)) = shop().await else { return };
+    for sql in [
+        "select pg_read_file('/etc/hostname')",
+        "select pg_read_binary_file('/etc/passwd')",
+        "select * from pg_ls_dir('.')",
+        "select pg_terminate_backend(pid) from pg_stat_activity where usename = 'postgres' and pid <> pg_backend_pid()",
+    ] {
+        match query(&s, sql, None).await {
+            Err(e) => assert!(e.contains("permission denied"), "{sql}: {e}"),
+            // No other session to end right now: nothing was ended either.
+            Ok(v) => assert!(
+                sql.contains("pg_terminate_backend")
+                    && v["rows"].as_array().unwrap().iter().all(|r| r.as_object().unwrap().values().all(|b| b != true)),
+                "{sql}: {v}"
+            ),
+        }
+    }
 }

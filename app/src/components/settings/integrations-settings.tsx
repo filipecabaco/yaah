@@ -171,6 +171,8 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
         )}
       </PanelHeader>
 
+      {s.id === "github" && <GitHubAccessNote />}
+
       {start?.flow === "device" && (
         <section className="flex flex-col gap-2 rounded-lg border p-4">
           <p className="text-sm">GitHub opened in your browser. Paste this code there (it's on your clipboard) and approve yaah:</p>
@@ -267,6 +269,34 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
   );
 }
 
+/** What a GitHub token can reach, and the narrower option. */
+function GitHubAccessNote() {
+  return (
+    <section
+      aria-label="What GitHub access yaah gets"
+      className="flex flex-col gap-1.5 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground"
+    >
+      <p>
+        Signing in with GitHub asks for the <code className="font-mono text-foreground">repo</code> scope, because GitHub's OAuth apps offer no
+        read-only one. That token can read your private repositories. yaah itself only reads.
+      </p>
+      <p>
+        For narrower access, use a{" "}
+        <button type="button" className="underline underline-offset-2" onClick={() => openExternal(FINE_GRAINED_TOKEN_URL)}>
+          fine-grained personal access token
+        </button>{" "}
+        with read-only <span className="text-foreground">Contents</span> and <span className="text-foreground">Pull requests</span>, limited to the
+        repositories you choose, and paste it below.
+      </p>
+    </section>
+  );
+}
+
+const FINE_GRAINED_TOKEN_URL = "https://github.com/settings/personal-access-tokens/new";
+
+const READ_ONLY_ROLE = `CREATE ROLE yaah_ro LOGIN PASSWORD '…';
+GRANT pg_read_all_data TO yaah_ro;`;
+
 function Databases() {
   const [list, setList] = useState<ConnectionInfo[] | null>(null);
   const [name, setName] = useState("");
@@ -305,6 +335,13 @@ function Databases() {
           timeout, row limit).
         </p>
       </PanelHeader>
+      <section aria-label="Read-only role" className="flex flex-col gap-2 rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
+        <p>
+          yaah only connects as a read-only role and refuses superusers. To make one on Postgres 14 or later, run this as an admin, then put{" "}
+          <code className="font-mono text-foreground">yaah_ro</code> and its password in the URL:
+        </p>
+        <pre className="overflow-x-auto rounded-md bg-background px-2 py-1.5 font-mono text-foreground">{READ_ONLY_ROLE}</pre>
+      </section>
       <ul className="flex flex-col divide-y rounded-lg border">
         {list?.length === 0 && <li className="p-3 text-sm text-muted-foreground">None yet.</li>}
         {list?.map((c) => (

@@ -36,6 +36,7 @@ fn main() {
         ("agents_yaah_cant_use_are_refused", agents_yaah_cant_use_are_refused),
         ("auth_errors_ask_for_a_login", auth_errors_ask_for_a_login),
         ("logins_run_the_agents_methods", logins_run_the_agents_methods),
+        ("an_agent_cant_write_into_or_take_over_another_agents_chat", an_agent_cant_write_into_or_take_over_another_agents_chat),
     ];
     let filters: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let chosen: Vec<_> = tests.iter().filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))).collect();
@@ -71,23 +72,28 @@ impl Fixture {
         // An existing file, so nothing migrates this machine's real Claude accounts in.
         std::fs::write(dir.join("agents.json"), r#"{ "profiles": [] }"#).unwrap();
         let profiles: &'static Store = Box::leak(Box::new(Store::at(dir.join("agents.json"))));
+        let events = Arc::default();
+        let hub = Arc::new(Hub::open(emitter(&events), Some(dir.join("sessions")), profiles));
+        let f = Self { dir, profiles, hub, events };
+        assert_eq!(f.add_profile("Scripted", env), ACCOUNT);
+        f
+    }
+
+    /// Another profile running the scripted agent; returns its id.
+    fn add_profile(&self, label: &str, env: &[(&str, &str)]) -> String {
         let exe = std::env::current_exe().unwrap();
         let mut draft = Draft {
-            label: "Scripted".into(),
+            label: label.into(),
             preset: agents::CUSTOM.into(),
             command_line: agents::join_args([exe.to_string_lossy()]),
             ..Draft::default()
         };
         draft.env.insert(agent::ENV.into(), "1".into());
-        draft.env.insert("YAAH_AGENT_LOG".into(), dir.join("agent.log").to_string_lossy().into_owned());
+        draft.env.insert("YAAH_AGENT_LOG".into(), self.dir.join("agent.log").to_string_lossy().into_owned());
         for (k, v) in env {
             draft.env.insert((*k).into(), (*v).into());
         }
-        let (profile, _) = profiles.save(&draft).unwrap();
-        assert_eq!(profile.id, ACCOUNT);
-        let events = Arc::default();
-        let hub = Arc::new(Hub::open(emitter(&events), Some(dir.join("sessions")), profiles));
-        Self { dir, profiles, hub, events }
+        self.profiles.save(&draft).unwrap().0.id
     }
 
     /// Flush, as the app does on exit, and open the store again in a new Hub (the
@@ -476,4 +482,31 @@ fn logins_run_the_agents_methods() {
     // Variables: nothing to run, just what to set.
     assert!(start("key").unwrap_err().contains("SCRIPTED_KEY"));
     assert!(start("nope").unwrap_err().contains("does not offer"));
+}
+
+fn an_agent_cant_write_into_or_take_over_another_agents_chat() {
+    let mut f = Fixture::new(&[]);
+    let mine = f.chat();
+    f.turn(&mine, "echo mine");
+    let before = f.hub.transcript(&mine).unwrap().entries.len();
+
+    // Another profile's agent process writes into, and asks permission in, a chat it didn't start.
+    let other = f.add_profile("Other", &[]);
+    let dir = f.dir.to_string_lossy().into_owned();
+    let theirs = tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Folder(dir.clone()), &other)).unwrap().session_id;
+    let t = f.turn(&theirs, &format!("spoof {mine}"));
+    assert_eq!(last_agent_text(&t), "spoof: cancelled", "its permission request is answered cancelled, unseen");
+    let t = f.hub.transcript(&mine).unwrap();
+    assert_eq!(t.entries.len(), before, "nothing reached the other chat: {:#?}", t.entries);
+    assert!(!t.entries.iter().any(|e| matches!(e, Entry::Permission { .. } | Entry::Tool { .. })));
+
+    // …nor take it over by answering `session/new` with its id.
+    let thief = f.add_profile("Thief", &[("YAAH_AGENT_SESSION_ID", &mine)]);
+    let err = tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Folder(dir), &thief)).unwrap_err();
+    assert!(err.contains("already has"), "{err}");
+    let t = f.hub.transcript(&mine).unwrap();
+    assert_eq!((t.info.account_id.as_str(), t.entries.len()), (ACCOUNT, before), "the chat is still the first agent's");
+    assert_eq!(last_agent_text(&f.turn(&mine, "echo still mine")), "echo: echo still mine");
+    f.restart();
+    assert_eq!(f.hub.transcript(&mine).unwrap().entries.len(), before + 2, "its saved transcript wasn't overwritten");
 }

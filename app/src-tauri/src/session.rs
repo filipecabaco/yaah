@@ -693,14 +693,29 @@ impl Hub {
             stop_reason: None,
             commands: vec![],
         };
-        if let Some(slot) = self.ui_tokens.lock().unwrap().get_mut(&ui_token) {
-            *slot = Some(session_id.clone());
-        }
         let mut session = Session::new(info.clone(), vec![], self.store.as_ref().map(|d| d.join(file_name(&session_id))));
         session.brief = brief;
         session.attached = Some(agent.generation);
-        self.shared.save(&session);
-        self.shared.sessions.lock().unwrap().insert(session_id, session);
+        let taken = {
+            // An agent may only start new chats: an id yaah already has is another chat
+            // (perhaps another agent's), which this one would take over and overwrite.
+            let mut sessions = self.shared.sessions.lock().unwrap();
+            let taken = sessions.contains_key(&session_id);
+            if !taken {
+                self.shared.save(&session);
+                sessions.insert(session_id.clone(), session);
+            }
+            taken
+        };
+        let mut tokens = self.ui_tokens.lock().unwrap();
+        if taken {
+            tokens.remove(&ui_token);
+            return Err(format!("the agent started a chat with the id of one yaah already has ({session_id}); refused"));
+        }
+        if let Some(slot) = tokens.get_mut(&ui_token) {
+            *slot = Some(session_id);
+        }
+        drop(tokens);
         self.shared.emit_info(&info);
         Ok(info)
     }
@@ -720,7 +735,8 @@ impl Hub {
         }]);
         if agent.claude {
             // Claude Code: rendering into the chat shouldn't need a permission prompt each time.
-            params["_meta"] = json!({ "claudeCode": { "options": { "allowedTools": [format!("mcp__{}", ui_mcp::SERVER_NAME)] } } });
+            // Only the UI tools, by name: `source_read` (databases, Docker logs) still asks.
+            params["_meta"] = json!({ "claudeCode": { "options": { "allowedTools": ui_mcp::allowed_tools() } } });
         }
     }
 
@@ -1016,17 +1032,25 @@ impl Drop for Hub {
     }
 }
 
+/// Messages from agent process `generation`. It only speaks for the chats
+/// attached to it: one process (another profile's agent, say) can't write into
+/// or ask permission in a chat it didn't start or load.
 fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &Responder) {
     match msg {
         Incoming::Notification { method, params } if method == "session/update" => {
             let Some(sid) = params.get("sessionId").and_then(Value::as_str) else { return };
-            let _ = shared.with(sid, |s| apply_update(shared, s, &params["update"]));
+            let _ = shared.with(sid, |s| {
+                // While `session/load` replays, the chat isn't attached yet; replays are ignored anyway.
+                if s.attached == Some(generation) {
+                    apply_update(shared, s, &params["update"]);
+                }
+            });
         }
         Incoming::Notification { .. } => {}
         Incoming::Request { id, method, mut params } if method == "session/request_permission" => {
             let sid = params.get("sessionId").and_then(Value::as_str).unwrap_or_default().to_owned();
             let mut sessions = shared.sessions.lock().unwrap();
-            let Some(s) = sessions.get_mut(&sid) else {
+            let Some(s) = sessions.get_mut(&sid).filter(|s| s.attached == Some(generation)) else {
                 responder.ok(id, outcome(None));
                 return;
             };

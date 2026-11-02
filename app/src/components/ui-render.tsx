@@ -3,7 +3,7 @@
 // arrive already expanded by Rust into `$component` nodes, so this only knows
 // primitives. It runs no agent code; everything here is data mapped onto
 // shadcn, and every prop is read from `unknown` through lib/narrow.
-import { Component, lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { ArrowDownRight, ArrowRight, ArrowUpRight, ChevronRight, ExternalLink, RotateCw } from "lucide-react";
 import { Markdown, SafeImage } from "@/components/markdown";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
@@ -455,29 +455,91 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
   }
 }
 
-/** `draft` puts text in the composer; `prompt` sends it as the next message; `href` opens a web page. */
+const sameText = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * `draft` puts text in the composer; `prompt` sends it as the next message; `href` opens a web page.
+ * A `prompt` that isn't just the label asks first, showing the exact text: the
+ * library is shared across chats, so a button labelled "Details" could
+ * otherwise send anything as the user's message.
+ */
 function UiButton({ p }: { p: Obj }) {
   const chat = useChat();
   const [error, setError] = useState<unknown>(null);
+  const [confirming, setConfirming] = useState(false);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const confirmId = useId();
   const draft = optText(p.draft);
   const prompt = optText(p.prompt);
   const href = show(p.href);
+  const label = show(p.label);
+  const asks = !draft && !!prompt && !sameText(prompt, label);
+  const canSend = !!chat && !chat.busy;
   const send = (text: string) => {
     if (!chat) return;
     setError(null);
     api.sendPrompt(chat.sessionId, text).catch(setError);
   };
+  const cancel = () => {
+    setConfirming(false);
+    trigger.current?.focus();
+  };
+  const confirm = () => {
+    if (!prompt || !canSend) return;
+    setConfirming(false);
+    send(prompt);
+  };
+  const click = () => {
+    if (draft) draftIntoComposer({ text: draft });
+    else if (asks) setConfirming((c) => !c);
+    else if (prompt) send(prompt);
+    else openExternal(href);
+  };
   return (
     <div className="flex flex-col gap-1 self-start">
       <Button
+        ref={trigger}
         size="sm"
+        className="self-start"
         variant={variant(p.variant, "default")}
-        disabled={draft ? false : prompt ? !chat || chat.busy : !isWebUrl(href)}
-        title={draft ? "Puts this in your message box to edit" : prompt ? `Sends: ${prompt}` : href}
-        onClick={() => (draft ? draftIntoComposer({ text: draft }) : prompt ? send(prompt) : openExternal(href))}
+        disabled={draft ? false : prompt ? !canSend : !isWebUrl(href)}
+        title={
+          draft ? "Puts this in your message box to edit" : asks ? "Shows the message it sends before sending" : prompt ? `Sends: ${prompt}` : href
+        }
+        aria-expanded={asks ? confirming : undefined}
+        aria-controls={asks && confirming ? confirmId : undefined}
+        onClick={click}
       >
-        {show(p.label)}
+        {label}
       </Button>
+      {asks && confirming && (
+        <div
+          id={confirmId}
+          role="group"
+          aria-label="Send this message?"
+          className="flex max-w-md flex-col gap-2 rounded-md border bg-muted/40 p-2 text-xs"
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              e.preventDefault();
+              cancel();
+            } else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement && e.target.dataset.action === "cancel")) {
+              e.preventDefault();
+              confirm();
+            }
+          }}
+        >
+          <span className="text-muted-foreground">Sends this as your message:</span>
+          <p className="max-h-40 overflow-auto rounded-sm bg-background px-2 py-1 font-mono break-words whitespace-pre-wrap">{prompt}</p>
+          <div className="flex gap-2">
+            <Button size="xs" autoFocus disabled={!canSend} onClick={confirm}>
+              Send
+            </Button>
+            <Button size="xs" variant="ghost" data-action="cancel" onClick={cancel}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
       <ErrorText error={error} />
     </div>
   );
@@ -511,17 +573,39 @@ function frameable(src: string): boolean {
 }
 
 /**
+ * yaah's own preview server: `http://127.0.0.1:<port>/preview/<hex id>/…`,
+ * serving a local file the agent rendered (see `preview_url` in ui_mcp.rs).
+ * Checked on the parsed URL, so `..` segments and userinfo can't fake it.
+ */
+function isLocalPreview(src: string): boolean {
+  if (!isWebUrl(src)) return false;
+  const url = new URL(src);
+  return url.protocol === "http:" && url.hostname === "127.0.0.1" && url.port !== "" && /^\/preview\/[0-9a-f]+\//.test(url.pathname);
+}
+
+/** The scheme and host of a URL, for showing where a page would load from. */
+const originOf = (src: string) => (isWebUrl(src) ? new URL(src).origin : src);
+
+/**
  * A live page in a browser-style frame. Only http(s) pages load: local pages
  * are served by yaah on 127.0.0.1 (a different origin from the app), so the
  * page gets its own storage but no way into the app. `allow-same-origin`
  * with `allow-scripts` is only safe because the frame is never the app's own
  * origin; no `allow-top-navigation` and no `allow-popups`, so it can't
  * navigate the app or open windows ("Open in browser" does that).
+ *
+ * Any page other than yaah's own preview waits for a click: an agent could put
+ * a secret in the URL, and framing it on render would send it with no one
+ * looking. The click covers this exact URL for as long as this entry is on
+ * screen; a new `src` from the agent asks again.
  */
 function BrowserFrame({ src, title, height }: { src: string; title?: string; height: number }) {
   const [reloads, setReloads] = useState(0);
+  const [allowed, setAllowed] = useState<string | null>(null);
   const ok = frameable(src);
-  const shown = ok ? src.replace(/^https?:\/\/127\.0\.0\.1:\d+\/preview\/[0-9a-f]+\//, "local · ") : src;
+  const preview = ok && isLocalPreview(src);
+  const loaded = ok && (preview || allowed === src);
+  const shown = preview ? src.replace(/^https?:\/\/127\.0\.0\.1:\d+\/preview\/[0-9a-f]+\//, "local · ") : src;
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
       <div className="flex items-center gap-2 border-b bg-muted/50 px-3 py-1.5">
@@ -536,14 +620,14 @@ function BrowserFrame({ src, title, height }: { src: string; title?: string; hei
         >
           {title ? `${title} — ${shown}` : shown}
         </span>
-        <Button variant="ghost" size="icon-xs" title="Reload" aria-label="Reload" disabled={!ok} onClick={() => setReloads((n) => n + 1)}>
+        <Button variant="ghost" size="icon-xs" title="Reload" aria-label="Reload" disabled={!loaded} onClick={() => setReloads((n) => n + 1)}>
           <RotateCw />
         </Button>
         <Button variant="ghost" size="icon-xs" title="Open in browser" aria-label="Open in browser" disabled={!ok} onClick={() => openExternal(src)}>
           <ExternalLink />
         </Button>
       </div>
-      {ok ? (
+      {loaded ? (
         <iframe
           key={reloads}
           src={src}
@@ -554,6 +638,16 @@ function BrowserFrame({ src, title, height }: { src: string; title?: string; hei
           referrerPolicy="no-referrer"
           allow="clipboard-write"
         />
+      ) : ok ? (
+        <div className="flex flex-col items-start gap-2 p-4 text-sm">
+          <p className="text-muted-foreground">
+            This page loads from <span className="font-medium text-foreground">{originOf(src)}</span>. Nothing is fetched until you load it.
+          </p>
+          <code className="max-h-24 w-full overflow-auto rounded-md bg-muted px-2 py-1 font-mono text-xs break-all">{src}</code>
+          <Button size="sm" variant="outline" aria-label={`Load page from ${originOf(src)}`} onClick={() => setAllowed(src)}>
+            Load page
+          </Button>
+        </div>
       ) : (
         <p className="p-4 text-xs text-muted-foreground">Can't preview “{src.slice(0, 80)}”.</p>
       )}

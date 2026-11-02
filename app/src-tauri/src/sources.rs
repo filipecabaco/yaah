@@ -577,7 +577,10 @@ async fn add(store: &JsonFile, name: &str, url: &str) -> Result<ConnectionInfo, 
         return Err("connection names use letters, digits, - and _".into());
     }
     let c = Connection { name: name.to_owned(), url: url.trim().to_owned() };
-    postgres_query(&c, "select 1", 1).await.map_err(|e| format!("couldn't connect: {e}"))?;
+    let client = open(&c).await.map_err(|e| format!("couldn't connect: {e}"))?;
+    // Always asked afresh here: a role that changed since the last check is caught when it's saved.
+    check_role(&client).await?;
+    trusted_roles().lock().unwrap_or_else(PoisonError::into_inner).insert(c.url.clone(), Instant::now());
     store.update(|f: &mut ConnectionFile| {
         f.connections.retain(|x| x.name != c.name);
         f.connections.push(c.clone());
@@ -609,7 +612,7 @@ fn tls() -> Result<postgres_native_tls::MakeTlsConnector, String> {
     TLS.get_or_init(|| native_tls::TlsConnector::builder().build().map(postgres_native_tls::MakeTlsConnector::new).map_err(|e| e.to_string())).clone()
 }
 
-async fn connect(c: &Connection) -> Result<tokio_postgres::Client, String> {
+async fn open(c: &Connection) -> Result<tokio_postgres::Client, String> {
     let (client, conn) = tokio::time::timeout(Duration::from_secs(10), tokio_postgres::connect(&c.url, tls()?))
         .await
         .map_err(|_| "timed out connecting".to_owned())?
@@ -618,6 +621,58 @@ async fn connect(c: &Connection) -> Result<tokio_postgres::Client, String> {
         let _ = conn.await;
     });
     Ok(client)
+}
+
+/// A connection for agent or UI SQL: only as a role [`check_role`] accepts.
+async fn connect(c: &Connection) -> Result<tokio_postgres::Client, String> {
+    let client = open(c).await?;
+    let fresh = trusted_roles().lock().unwrap_or_else(PoisonError::into_inner).get(&c.url).is_some_and(|at| at.elapsed() < ROLE_CHECK_TTL);
+    if !fresh {
+        check_role(&client).await?;
+        trusted_roles().lock().unwrap_or_else(PoisonError::into_inner).insert(c.url.clone(), Instant::now());
+    }
+    Ok(client)
+}
+
+/// How long a role that passed [`check_role`] is trusted before it's asked again,
+/// so live views polling every second don't pay for the check each time.
+const ROLE_CHECK_TTL: Duration = Duration::from_secs(60);
+
+/// Connection URLs whose role passed [`check_role`], and when.
+fn trusted_roles() -> &'static Mutex<HashMap<String, Instant>> {
+    static TRUSTED: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+    TRUSTED.get_or_init(Mutex::default)
+}
+
+/// Roles a connection may not have, directly or through membership. A READ ONLY
+/// transaction doesn't stop them: superusers and these predefined roles can read
+/// and write the server's files (`pg_read_file`, `COPY … TO`), run programs, or
+/// end other sessions (`pg_terminate_backend`).
+const POWERFUL_ROLES: &[&str] = &["pg_read_server_files", "pg_write_server_files", "pg_execute_server_program", "pg_signal_backend"];
+
+/// What to tell the user when the connection's role is refused.
+const READ_ONLY_ROLE_HINT: &str = "yaah only connects as a read-only role: create one with     `CREATE ROLE yaah_ro LOGIN PASSWORD '…'; GRANT pg_read_all_data TO yaah_ro;` (PostgreSQL 14+;     on older versions GRANT SELECT on the tables instead) and use it in the connection URL";
+
+/// Refuse a connection whose role (or any role it can become) is a superuser or
+/// holds one of [`POWERFUL_ROLES`].
+async fn check_role(client: &tokio_postgres::Client) -> Result<(), String> {
+    let sql = format!(
+        "select current_user::text, coalesce(array_agg(distinct case when p.rolsuper then 'superuser' else p.rolname::text end), '{{}}') \
+         from pg_roles u join pg_roles p on pg_has_role(u.oid, p.oid, 'member') \
+         where u.rolname in (current_user, session_user) and (p.rolsuper or p.rolname in ({}))",
+        POWERFUL_ROLES.iter().map(|r| format!("'{r}'")).collect::<Vec<_>>().join(", ")
+    );
+    let row =
+        client.query_one(&sql, &[]).await.map_err(|e| format!("couldn't check the connection's role ({}); {READ_ONLY_ROLE_HINT}", db_error(&e)))?;
+    let (user, mut powers): (String, Vec<String>) = (row.get(0), row.get(1));
+    if powers.is_empty() {
+        return Ok(());
+    }
+    powers.sort_unstable();
+    Err(format!(
+        "the role `{user}` can't be used: it has {} (a read-only transaction doesn't stop those reading the server's files, running programs or ending sessions). {READ_ONLY_ROLE_HINT}",
+        powers.join(", ")
+    ))
 }
 
 /// Skip `/* … */` (nested, as Postgres allows) after its opening `/*`.
@@ -851,20 +906,64 @@ mod tests {
 }
 
 /// Against a real database: the demo container (`yaah-pg-demo` on 127.0.0.1:54329)
-/// or `YAAH_PG_TEST_URL`. Skipped when neither answers. More in `tests/data_postgres.rs`.
+/// or `YAAH_PG_TEST_URL` (a superuser URL). yaah runs as `yaah_ro`, a read-only
+/// role the tests create there. Skipped when neither answers. More in `tests/data_postgres.rs`.
 #[cfg(test)]
 mod postgres_tests {
     use super::*;
 
+    fn admin_url() -> String {
+        std::env::var("YAAH_PG_TEST_URL").unwrap_or_else(|_| "postgres://postgres:yaahdemo@127.0.0.1:54329/shop".into())
+    }
+
+    /// Create `yaah_ro` (once, whoever gets there first) and return its URL.
+    async fn read_only_url(admin: &str) -> Result<String, String> {
+        const SETUP: &str = "do $$ begin if not exists (select from pg_roles where rolname = 'yaah_ro') then \
+            create role yaah_ro login password 'yaahro'; end if; end $$; grant pg_read_all_data to yaah_ro";
+        let (client, conn) = tokio_postgres::connect(admin, tokio_postgres::NoTls).await.map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn(conn);
+        // Other test processes may be creating it at the same moment.
+        for attempt in 0.. {
+            match client.batch_execute(SETUP).await {
+                Ok(()) => break,
+                Err(_) if attempt < 3 => tokio::time::sleep(Duration::from_millis(50)).await,
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        let mut url = reqwest::Url::parse(admin).map_err(|e| e.to_string())?;
+        url.set_username("yaah_ro").and_then(|()| url.set_password(Some("yaahro"))).map_err(|()| "not a URL with a user".to_owned())?;
+        Ok(url.into())
+    }
+
     fn demo() -> Option<Connection> {
-        let url = std::env::var("YAAH_PG_TEST_URL").unwrap_or_else(|_| "postgres://postgres:yaahdemo@127.0.0.1:54329/shop".into());
-        let c = Connection { name: "demo".into(), url };
-        match tauri::async_runtime::block_on(postgres_query(&c, "select 1", 1)) {
-            Ok(_) => Some(c),
+        let url = tauri::async_runtime::block_on(read_only_url(&admin_url()));
+        let c = url.map(|url| Connection { name: "demo".into(), url });
+        match c.and_then(|c| tauri::async_runtime::block_on(postgres_query(&c, "select 1", 1)).map(|_| c)) {
+            Ok(c) => Some(c),
             Err(e) => {
                 eprintln!("skipped: no Postgres to test against ({e})");
                 None
             }
+        }
+    }
+
+    #[test]
+    fn superusers_are_refused_before_any_sql_runs() {
+        let Some(_) = demo() else { return };
+        let admin = Connection { name: "admin".into(), url: admin_url() };
+        let e = tauri::async_runtime::block_on(postgres_query(&admin, "select pg_read_file('/etc/hostname')", 1)).unwrap_err();
+        assert!(e.contains("superuser") && e.contains("CREATE ROLE yaah_ro") && e.contains("pg_read_all_data"), "{e}");
+        let store = JsonFile::new(std::env::temp_dir().join(format!("yaah-pg-{}", crate::session::random_token())).join("c.json"), true);
+        assert!(tauri::async_runtime::block_on(add(&store, "admin", &admin.url)).unwrap_err().contains("superuser"));
+        assert!(infos(&store).is_empty(), "a refused connection isn't saved");
+    }
+
+    #[test]
+    fn the_read_only_role_cant_reach_the_servers_files() {
+        let Some(c) = demo() else { return };
+        for sql in ["select pg_read_file('/etc/hostname')", "select * from pg_ls_dir('.')", "select pg_stat_file('postgresql.conf')"] {
+            let e = tauri::async_runtime::block_on(query_within(&c, sql, 10, 5_000)).unwrap_err();
+            assert!(e.contains("permission denied"), "{sql}: {e}");
         }
     }
 

@@ -238,22 +238,56 @@ mod tests {
 }
 
 /// Whether a login method may set `name` for the login process. The method comes from
-/// the agent, so it can't change which programs run or what gets loaded into them.
+/// the agent, so it may only configure the agent's own login, never change which
+/// programs run, what gets loaded into them, where they fetch from or whom they
+/// trust (`PATH`, `NODE_OPTIONS`, `NPM_CONFIG_*`, `HTTPS_PROXY`, `SSL_CERT_FILE`,
+/// `GIT_*`, `DYLD_*`…). Hence an allowlist: the agents' own prefixes and a few
+/// terminal settings. claude-agent-acp's terminal logins set no variables at all.
 fn agent_may_set(name: &str) -> bool {
-    const BLOCKED: &[&str] =
-        &["PATH", "NODE_OPTIONS", "NODE_PATH", "PYTHONPATH", "PYTHONSTARTUP", "RUBYOPT", "PERL5OPT", "BASH_ENV", "ENV", "SHELL", "HOME"];
-    let upper = name.to_ascii_uppercase();
-    !(BLOCKED.contains(&upper.as_str()) || upper.starts_with("DYLD_") || upper.starts_with("LD_"))
+    const PREFIXES: &[&str] = &["CLAUDE_", "ANTHROPIC_", "GEMINI_", "LC_"];
+    const NAMES: &[&str] = &["FORCE_COLOR", "NO_COLOR", "TERM", "LANG"];
+    // Case matters: on Unix `npm_config_x` and `NPM_CONFIG_X` are different
+    // variables, and lower-case ones are read too.
+    NAMES.contains(&name) || PREFIXES.iter().any(|p| name.len() > p.len() && name.starts_with(p))
 }
 
 #[cfg(test)]
 mod env_tests {
     #[test]
-    fn agents_cant_redirect_programs_through_login_env() {
-        for blocked in ["PATH", "path", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "NODE_OPTIONS", "BASH_ENV", "HOME"] {
+    fn agents_only_set_their_own_login_variables() {
+        for blocked in [
+            "PATH",
+            "path",
+            "DYLD_INSERT_LIBRARIES",
+            "LD_PRELOAD",
+            "NODE_OPTIONS",
+            "NODE_EXTRA_CA_CERTS",
+            "NPM_CONFIG_REGISTRY",
+            "npm_config_registry",
+            "HTTPS_PROXY",
+            "https_proxy",
+            "SSL_CERT_FILE",
+            "GIT_SSH_COMMAND",
+            "BASH_ENV",
+            "HOME",
+            "claude_config_dir",
+            "CLAUDE_",
+            "TERMINFO",
+            "LANGUAGE_X",
+        ] {
             assert!(!super::agent_may_set(blocked), "{blocked}");
         }
-        for ok in ["CLAUDE_CONFIG_DIR", "ANTHROPIC_BASE_URL", "FORCE_COLOR"] {
+        for ok in [
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "GEMINI_API_KEY",
+            "FORCE_COLOR",
+            "NO_COLOR",
+            "TERM",
+            "LANG",
+            "LC_ALL",
+        ] {
             assert!(super::agent_may_set(ok), "{ok}");
         }
     }
