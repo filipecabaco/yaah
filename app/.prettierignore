@@ -1,0 +1,12 @@
+dist
+coverage
+src-tauri
+pnpm-lock.yaml
+# Stock shadcn components stay as shadcn ships them.
+src/components/ui
+# Recorded and generated data.
+src/dev/fixtures
+src/lib/themes.json
+src/ui-primitives.json
+# Editor hook caches.
+.impeccable

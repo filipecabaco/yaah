@@ -1,0 +1,136 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "system-monitor",
+  "description": "This machine, live: CPU, memory, load and swap, a CPU/memory chart over the last few minutes, disk usage and the busiest processes, refreshed every 2s by the app with no agent turn. Use when asked how the machine is doing, what is eating CPU or memory, or to watch load while something runs.",
+  "props": {
+    "type": "object",
+    "properties": {}
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "system"
+      },
+      "every": 2000,
+      "history": 90
+    },
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "{{data.host}}",
+          "description": "{{data.cores.length}} cores · {{data.memTotalGb}} GB memory"
+        },
+        "children": [
+          {
+            "type": "grid",
+            "props": {
+              "columns": 4
+            },
+            "children": [
+              {
+                "type": "stat",
+                "props": {
+                  "label": "CPU",
+                  "value": "{{data.cpu}}%"
+                }
+              },
+              {
+                "type": "stat",
+                "props": {
+                  "label": "Memory",
+                  "value": "{{data.memPct}}%",
+                  "hint": "{{data.memUsedGb}} of {{data.memTotalGb}} GB"
+                }
+              },
+              {
+                "type": "stat",
+                "props": {
+                  "label": "Load (1m)",
+                  "value": "{{data.load1}}",
+                  "hint": "5m {{data.load5}} · 15m {{data.load15}}"
+                }
+              },
+              {
+                "type": "stat",
+                "props": {
+                  "label": "Swap",
+                  "value": "{{data.swapUsedGb}} GB"
+                }
+              }
+            ]
+          },
+          {
+            "type": "chart",
+            "props": {
+              "kind": "line",
+              "data": "{{history}}",
+              "x": "t",
+              "series": [
+                {
+                  "key": "cpu",
+                  "label": "CPU"
+                },
+                {
+                  "key": "memPct",
+                  "label": "Memory"
+                }
+              ],
+              "unit": "%",
+              "height": 180
+            }
+          },
+          {
+            "each": "data.disks",
+            "as": "disk",
+            "key": "mount",
+            "children": [
+              {
+                "type": "progress",
+                "props": {
+                  "value": "{{disk.pct}}",
+                  "label": "Disk {{disk.mount}} · {{disk.usedGb}} of {{disk.totalGb}} GB"
+                }
+              }
+            ]
+          },
+          {
+            "type": "table",
+            "props": {
+              "columns": [
+                {
+                  "key": "name",
+                  "label": "Process"
+                },
+                {
+                  "key": "pid",
+                  "label": "PID",
+                  "align": "right"
+                },
+                {
+                  "key": "cpu",
+                  "label": "CPU %",
+                  "align": "right"
+                },
+                {
+                  "key": "memGb",
+                  "label": "Memory GB",
+                  "align": "right"
+                }
+              ],
+              "rows": "{{data.processes}}"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "This machine",
+      "props": {}
+    }
+  ]
+}

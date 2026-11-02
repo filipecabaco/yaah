@@ -1,0 +1,854 @@
+{
+ "system": {
+  "cores": [
+   0,
+   0,
+   0,
+   0,
+   0,
+   0,
+   5,
+   9.5,
+   14.3,
+   0,
+   0,
+   4.8,
+   42.9,
+   47.6,
+   38.1,
+   40.9,
+   38.1,
+   60
+  ],
+  "cpu": 16.7,
+  "disks": [
+   {
+    "mount": "/",
+    "pct": 70,
+    "totalGb": 926.3,
+    "usedGb": 648.4
+   }
+  ],
+  "host": "dev-mac.local",
+  "load1": 3.33,
+  "load15": 3.49,
+  "load5": 2.7,
+  "memPct": 59.1,
+  "memTotalGb": 48,
+  "memUsedGb": 28.36,
+  "processes": [
+   {
+    "cpu": 100.9,
+    "memGb": 1.2,
+    "name": "node",
+    "pid": 33599
+   },
+   {
+    "cpu": 8.5,
+    "memGb": 0.62,
+    "name": "plugin-container",
+    "pid": 54722
+   },
+   {
+    "cpu": 6.1,
+    "memGb": 0.29,
+    "name": "plugin-container",
+    "pid": 70261
+   },
+   {
+    "cpu": 3.7,
+    "memGb": 0.01,
+    "name": "source_read",
+    "pid": 13527
+   },
+   {
+    "cpu": 1.8,
+    "memGb": 0.07,
+    "name": "Activity Monitor",
+    "pid": 5293
+   },
+   {
+    "cpu": 1.5,
+    "memGb": 0.03,
+    "name": "esbuild-darwin-arm64",
+    "pid": 87610
+   },
+   {
+    "cpu": 1.5,
+    "memGb": 0.21,
+    "name": "ghostty",
+    "pid": 2051
+   },
+   {
+    "cpu": 0.9,
+    "memGb": 0.84,
+    "name": "claude",
+    "pid": 89478
+   }
+  ],
+  "swapUsedGb": 2.85,
+  "uptimeSecs": 548299
+ },
+ "docker.containers": [
+  {
+   "created": "2026-11-01 19:06:45 +0000 WET",
+   "id": "309cb25235ac",
+   "image": "nginx:alpine",
+   "name": "yaah-demo-web",
+   "ports": "127.0.0.1:58080->80/tcp",
+   "state": "running",
+   "status": "Up 12 seconds"
+  },
+  {
+   "created": "2026-11-01 19:06:41 +0000 WET",
+   "id": "336fa8019e9e",
+   "image": "redis:7-alpine",
+   "name": "yaah-demo-cache",
+   "ports": "6379/tcp",
+   "state": "running",
+   "status": "Up 16 seconds"
+  },
+  {
+   "created": "2026-11-01 18:47:04 +0000 WET",
+   "id": "23476853975b",
+   "image": "postgres:17-alpine",
+   "name": "yaah-pg-demo",
+   "ports": "127.0.0.1:54329->5432/tcp",
+   "state": "running",
+   "status": "Up 19 minutes"
+  }
+ ],
+ "docker.stats": [
+  {
+   "blockIO": "3.42MB / 0B",
+   "cpu": 0,
+   "memPct": 0.04,
+   "memUsage": "12.1MiB / 27.43GiB",
+   "name": "yaah-demo-web",
+   "netIO": "6.06kB / 10.4kB",
+   "pids": "16"
+  },
+  {
+   "blockIO": "0B / 0B",
+   "cpu": 0.52,
+   "memPct": 0.02,
+   "memUsage": "5.848MiB / 27.43GiB",
+   "name": "yaah-demo-cache",
+   "netIO": "998B / 126B",
+   "pids": "6"
+  },
+  {
+   "blockIO": "160MB / 62MB",
+   "cpu": 0,
+   "memPct": 0.09,
+   "memUsage": "25.08MiB / 27.43GiB",
+   "name": "yaah-pg-demo",
+   "netIO": "26.9kB / 29.9kB",
+   "pids": "6"
+  }
+ ],
+ "docker.logs": {
+  "container": "yaah-demo-web",
+  "lines": 45,
+  "text": "2026-11-01T19:06:45.324258735Z /docker-entrypoint.sh: /docker-entrypoint.d/ is not empty, will attempt to perform configuration\n2026-11-01T19:06:45.324350861Z /docker-entrypoint.sh: Looking for shell scripts in /docker-entrypoint.d/\n2026-11-01T19:06:45.324668237Z /docker-entrypoint.sh: Launching /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh\n2026-11-01T19:06:45.325512867Z 10-listen-on-ipv6-by-default.sh: info: Getting the checksum of /etc/nginx/conf.d/default.conf\n2026-11-01T19:06:45.329238595Z 10-listen-on-ipv6-by-default.sh: info: Enabled listen on IPv6 in /etc/nginx/conf.d/default.conf\n2026-11-01T19:06:45.329324388Z /docker-entrypoint.sh: Sourcing /docker-entrypoint.d/15-local-resolvers.envsh\n2026-11-01T19:06:45.329328554Z /docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh\n2026-11-01T19:06:45.330189517Z /docker-entrypoint.sh: Launching /docker-entrypoint.d/30-tune-worker-processes.sh\n2026-11-01T19:06:45.330535061Z /docker-entrypoint.sh: Configuration complete; ready for start up\n2026-11-01T19:06:56.782524510Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET / HTTP/1.1\" 200 896 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.794199740Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET /missing HTTP/1.1\" 404 153 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.802541827Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET / HTTP/1.1\" 200 896 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.811165374Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET /missing HTTP/1.1\" 404 153 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.819722254Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET / HTTP/1.1\" 200 896 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.827658797Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET /missing HTTP/1.1\" 404 153 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.835628632Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET / HTTP/1.1\" 200 896 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.843693843Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET /missing HTTP/1.1\" 404 153 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.852103222Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET / HTTP/1.1\" 200 896 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:56.860206683Z 192.168.215.1 - - [01/Nov/2026:19:06:56 +0000] \"GET /missing HTTP/1.1\" 404 153 \"-\" \"curl/8.7.1\" \"-\"\n2026-11-01T19:06:45.332805823Z 2026/11/01 19:06:45 [notice] 1#1: using the \"epoll\" event method\n2026-11-01T19:06:45.332810573Z 2026/11/01 19:06:45 [notice] 1#1: nginx/1.31.8\n2026-11-01T19:06:45.332811865Z 2026/11/01 19:06:45 [notice] 1#1: built by gcc 15.2.0 (Alpine 15.2.0) \n2026-11-01T19:06:45.332813073Z 2026/11/01 19:06:45 [notice] 1#1: OS: Linux 7.2.12-orbstack-00394-gbecdd6130068\n2026-11-01T19:06:45.332813865Z 2026/11/01 19:06:45 [notice] 1#1: getrlimit(RLIMIT_NOFILE): 20480:1048576\n2026-11-01T19:06:45.332847698Z 2026/11/01 19:06:45 [notice] 1#1: start worker processes\n2026-11-01T19:06:45.332971407Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 29\n2026-11-01T19:06:45.332972991Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 30\n2026-11-01T19:06:45.332976032Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 31\n2026-11-01T19:06:45.333028408Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 32\n2026-11-01T19:06:45.333129033Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 33\n2026-11-01T19:06:45.333131158Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 34\n2026-11-01T19:06:45.333220034Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 35\n2026-11-01T19:06:45.333434743Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 36\n2026-11-01T19:06:45.333439285Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 37\n2026-11-01T19:06:45.333463077Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 38\n2026-11-01T19:06:45.333544577Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 39\n2026-11-01T19:06:45.333599786Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 40\n2026-11-01T19:06:45.333684328Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 41\n2026-11-01T19:06:45.333814579Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 42\n2026-11-01T19:06:45.333853704Z 2026/11/01 19:06:45 [notice] 1#1: start worker process 43\n2026-11-01T19:06:56.794199824Z 2026/11/01 19:06:56 [error] 30#30: *2 open() \"/usr/share/nginx/html/missing\" failed (2: No such file or directory), client: 192.168.215.1, server: localhost, request: \"GET /missing HTTP/1.1\", host: \"127.0.0.1:58080\"\n2026-11-01T19:06:56.811146166Z 2026/11/01 19:06:56 [error] 34#34: *4 open() \"/usr/share/nginx/html/missing\" failed (2: No such file or directory), client: 192.168.215.1, server: localhost, request: \"GET /missing HTTP/1.1\", host: \"127.0.0.1:58080\"\n2026-11-01T19:06:56.827714381Z 2026/11/01 19:06:56 [error] 31#31: *6 open() \"/usr/share/nginx/html/missing\" failed (2: No such file or directory), client: 192.168.215.1, server: localhost, request: \"GET /missing HTTP/1.1\", host: \"127.0.0.1:58080\"\n2026-11-01T19:06:56.843730301Z 2026/11/01 19:06:56 [error] 37#37: *8 open() \"/usr/share/nginx/html/missing\" failed (2: No such file or directory), client: 192.168.215.1, server: localhost, request: \"GET /missing HTTP/1.1\", host: \"127.0.0.1:58080\"\n2026-11-01T19:06:56.860182682Z 2026/11/01 19:06:56 [error] 38#38: *10 open() \"/usr/share/nginx/html/missing\" failed (2: No such file or directory), client: 192.168.215.1, server: localhost, request: \"GET /missing HTTP/1.1\", host: \"127.0.0.1:58080\""
+ },
+ "postgres.schema": {
+  "connection": "shop",
+  "tables": [
+   {
+    "columns": [
+     {
+      "name": "id",
+      "nullable": false,
+      "type": "integer"
+     },
+     {
+      "name": "name",
+      "nullable": false,
+      "type": "text"
+     },
+     {
+      "name": "country",
+      "nullable": false,
+      "type": "text"
+     },
+     {
+      "name": "plan",
+      "nullable": false,
+      "type": "text"
+     },
+     {
+      "name": "signed_up",
+      "nullable": false,
+      "type": "date"
+     }
+    ],
+    "schema": "public",
+    "table": "customers"
+   },
+   {
+    "columns": [
+     {
+      "name": "id",
+      "nullable": false,
+      "type": "integer"
+     },
+     {
+      "name": "customer_id",
+      "nullable": true,
+      "type": "integer"
+     },
+     {
+      "name": "product_id",
+      "nullable": true,
+      "type": "integer"
+     },
+     {
+      "name": "quantity",
+      "nullable": false,
+      "type": "integer"
+     },
+     {
+      "name": "created_at",
+      "nullable": false,
+      "type": "timestamp with time zone"
+     }
+    ],
+    "schema": "public",
+    "table": "orders"
+   },
+   {
+    "columns": [
+     {
+      "name": "id",
+      "nullable": false,
+      "type": "integer"
+     },
+     {
+      "name": "name",
+      "nullable": false,
+      "type": "text"
+     },
+     {
+      "name": "category",
+      "nullable": false,
+      "type": "text"
+     },
+     {
+      "name": "price_cents",
+      "nullable": false,
+      "type": "integer"
+     }
+    ],
+    "schema": "public",
+    "table": "products"
+   }
+  ]
+ },
+ "postgres.query": {
+  "select p.category, round(sum(o.quantity * p.price_cents) / 100.0, 2)::float as revenue from orders o join products p on p.id = o.product_id group by 1 order by 2 desc": {
+   "columns": [
+    "category",
+    "revenue"
+   ],
+   "connection": "shop",
+   "rows": [
+    {
+     "category": "service",
+     "revenue": 850500
+    },
+    {
+     "category": "hardware",
+     "revenue": 292949
+    },
+    {
+     "category": "subscription",
+     "revenue": 49920
+    }
+   ],
+   "truncated": false
+  },
+  "select p.category, round(sum(o.quantity * p.price_cents) / 100.0, 2) as revenue, count(*) as orders\nfrom orders o\njoin products p on p.id = o.product_id\ngroup by p.category\norder by revenue desc": {
+   "columns": [
+    "category",
+    "revenue",
+    "orders"
+   ],
+   "connection": "shop",
+   "rows": [
+    {
+     "category": "service",
+     "orders": 500,
+     "revenue": 850500
+    },
+    {
+     "category": "hardware",
+     "orders": 1000,
+     "revenue": 292949
+    },
+    {
+     "category": "subscription",
+     "orders": 500,
+     "revenue": 49920
+    }
+   ],
+   "truncated": false
+  },
+  "select c.name, count(*) as orders, sum(o.quantity * p.price_cents) / 100.0 as spent\nfrom orders o\njoin customers c on c.id = o.customer_id\njoin products p on p.id = o.product_id\ngroup by c.name\norder by spent desc\nlimit 10": {
+   "columns": [
+    "name",
+    "orders",
+    "spent"
+   ],
+   "connection": "shop",
+   "rows": [
+    {
+     "name": "Customer 22",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 206",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 158",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 294",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 382",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 70",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 62",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 198",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 326",
+     "orders": 5,
+     "spent": 13200
+    },
+    {
+     "name": "Customer 374",
+     "orders": 5,
+     "spent": 13200
+    }
+   ],
+   "truncated": false
+  }
+ },
+ "github.pr": {
+  "additions": 393,
+  "author": "seangeo",
+  "base": "seangeoghegan/real-1279-send-snapshot-heartbeats-and-the-goodbye",
+  "body": "## What kind of change does this PR introduce?\n\nSome refactoring to Tracker:\n\n1.  Move the state logic out of Rollcall.Tracker into Rollcall.Tracker.State. \n2. Remove handle_cast, which isn't needed anymore. \n3. Reorder the functions in Tracker. \n\nNo new behaviour, just reorganisation.",
+  "changedFiles": 7,
+  "checks": [
+   {
+    "mark": "✓",
+    "name": "CodeQL / Analyze (actions)",
+    "state": "pass",
+    "tone": "success",
+    "url": "https://github.com/supabase/realtime/actions/runs/41520014956/job/125533310598"
+   },
+   {
+    "mark": "✓",
+    "name": "Packaging / docker_x86_build",
+    "state": "pass",
+    "tone": "success",
+    "url": "https://github.com/supabase/realtime/actions/runs/41520020018/job/125533322790"
+   },
+   {
+    "mark": "✓",
+    "name": "Rollcall Tests / Tests & Lint",
+    "state": "pass",
+    "tone": "success",
+    "url": "https://github.com/supabase/realtime/actions/runs/41520019788/job/125533321396"
+   },
+   {
+    "mark": "✓",
+    "name": "Semantic title",
+    "state": "pass",
+    "tone": "success",
+    "url": "https://github.com/supabase/realtime/actions/runs/41520020157/job/125533326147"
+   },
+   {
+    "mark": "✓",
+    "name": "CodeQL / Analyze (javascript-typescript)",
+    "state": "pass",
+    "tone": "success",
+    "url": "https://github.com/supabase/realtime/actions/runs/41520014956/job/125533310840"
+   },
+   {
+    "mark": "✓",
+    "name": "Packaging / docker_arm_build",
+    "state": "pass",
+    "tone": "success",
+    "url": "https://github.com/supabase/realtime/actions/runs/41520020018/job/125533322837"
+   },
+   {
+    "mark": "✓",
+    "name": "Packaging / Nix portable build",
+    "state": "pass",
+    "tone": "success",
+    "url": "https://github.com/supabase/realtime/actions/runs/41520020018/job/125533322346"
+   },
+   {
+    "mark": "✓",
+    "name": "CodeQL",
+    "state": "pass",
+    "tone": "success",
+    "url": "https://github.com/supabase/realtime/runs/125533590944"
+   }
+  ],
+  "checksSummary": {
+   "fail": 0,
+   "pass": 8,
+   "pending": 0,
+   "skipped": 0,
+   "text": "8 passed",
+   "tone": "success"
+  },
+  "comments": [],
+  "createdAt": "2026-11-02T06:29:36Z",
+  "deletions": 197,
+  "draft": false,
+  "files": [
+   {
+    "additions": 68,
+    "deletions": 192,
+    "path": "rollcall/lib/rollcall/tracker.ex"
+   },
+   {
+    "additions": 146,
+    "deletions": 0,
+    "path": "rollcall/lib/rollcall/tracker/state.ex"
+   },
+   {
+    "additions": 143,
+    "deletions": 0,
+    "path": "rollcall/test/rollcall/tracker/state_test.exs"
+   },
+   {
+    "additions": 5,
+    "deletions": 3,
+    "path": "rollcall/test/rollcall/tracker_peers_test.exs"
+   },
+   {
+    "additions": 2,
+    "deletions": 1,
+    "path": "rollcall/test/support/network_helpers.ex"
+   },
+   {
+    "additions": 23,
+    "deletions": 0,
+    "path": "rollcall/test/support/pass_through_transport.ex"
+   },
+   {
+    "additions": 6,
+    "deletions": 1,
+    "path": "rollcall/test/support/tracker_helpers.ex"
+   }
+  ],
+  "head": "refactor/rollcall-tracker",
+  "labels": [],
+  "mergeable": "MERGEABLE",
+  "number": 2476,
+  "review": "review_required",
+  "reviewLabel": "Review required",
+  "reviews": [],
+  "state": "open",
+  "stateLabel": "Open",
+  "title": "refactor(rollcall): extract Tracker.State and reorder Tracker",
+  "updatedAt": "2026-11-02T20:31:43Z",
+  "url": "https://github.com/supabase/realtime/pull/2476"
+ },
+ "github.pr.diff": {
+  "bytes": 27126,
+  "number": 2476,
+  "repo": "supabase/realtime",
+  "text": "diff --git a/rollcall/lib/rollcall/tracker.ex b/rollcall/lib/rollcall/tracker.ex\nindex 81e7dc386..593b27230 100644\n--- a/rollcall/lib/rollcall/tracker.ex\n+++ b/rollcall/lib/rollcall/tracker.ex\n@@ -143,6 +143,7 @@ defmodule Rollcall.Tracker do\n   alias Rollcall.Tracker.Changes\n   alias Rollcall.Tracker.Messages\n   alias Rollcall.Tracker.Peer\n+  alias Rollcall.Tracker.State\n \n   @max_retries 3\n   @default_grace_period :timer.seconds(5)\n@@ -156,6 +157,14 @@ defmodule Rollcall.Tracker do\n   # before it replies.\n   @gone [:noproc, :normal, :shutdown]\n \n+  @type transport :: {module(), keyword()}\n+\n+  @type init_options :: [\n+          silence_threshold: pos_integer(),\n+          transport: transport(),\n+          heartbeat_period: pos_integer() | :manual\n+        ]\n+\n   @doc \"\"\"\n   Tracks an entry in the tracker for `scope`, and returns the ref of the entry.\n \n@@ -185,6 +194,13 @@ defmodule Rollcall.Tracker do\n       call_or_start(scope, message, retries - 1)\n   end\n \n+  defp start(scope) do\n+    case DynamicSupervisor.start_child(Rollcall.TrackerSupervisor, {__MODULE__, scope}) do\n+      {:ok, _pid} -> :ok\n+      {:error, {:already_started, _pid}} -> :ok\n+    end\n+  end\n+\n   @doc \"\"\"\n   Removes the entry of `pid` for `key` in `partition` from the tracker for\n   `scope`.\n@@ -209,16 +225,6 @@ defmodule Rollcall.Tracker do\n     :exit, {reason, _} when reason in @gone -> default\n   end\n \n-  @inspectable_keys [:incarnation, :scope, :version, :local, :peers]\n-\n-  @type inspected_state :: %{\n-          scope: Rollcall.scope(),\n-          version: non_neg_integer(),\n-          incarnation: integer(),\n-          local: Local.t(),\n-          peers: %{node() => Peer.t()}\n-        }\n-\n   @doc \"\"\"\n   Returns the state of the tracker for `scope`, or `nil` when no tracker runs.\n \n@@ -231,7 +237,7 @@ defmodule Rollcall.Tracker do\n \n   The function does not start a tracker. Use it in tests and for debugging.\n   \"\"\"\n-  @spec get_state(Rollcall.scope()) :: inspected_state() | nil\n+  @spec get_state(Rollcall.scope()) :: State.view() | nil\n   def get_state(scope) do\n     call_if_running(scope, :get_state, nil)\n   end\n@@ -250,13 +256,6 @@ defmodule Rollcall.Tracker do\n     |> Enum.map(fn {scope, _} -> scope end)\n   end\n \n-  defp start(scope) do\n-    case DynamicSupervisor.start_child(Rollcall.TrackerSupervisor, {__MODULE__, scope}) do\n-      {:ok, _pid} -> :ok\n-      {:error, {:already_started, _pid}} -> :ok\n-    end\n-  end\n-\n   @doc \"\"\"\n   Starts the tracker for `scope` and registers it in `Rollcall.Registry`.\n \n@@ -300,104 +299,6 @@ defmodule Rollcall.Tracker do\n     {:via, Registry, {Rollcall.Registry, scope}}\n   end\n \n-  defmodule State do\n-    @moduledoc \"\"\"\n-    The state of a tracker process.\n-\n-    `local` holds the entries that processes on this node track. `version`\n-    counts the changes to `local`. `incarnation` is the monotonic time at which\n-    the tracker started. `sent` holds the `local` set and the `version` at the last\n-    heartbeat. The struct has no `sent` field yet.\n-\n-    The `incarnation` and the `version` form the stamp of a message. A peer\n-    compares stamps to order messages that arrive in any order. A tracker that\n-    restarts gets a newer incarnation, so its peers replace its old entries.\n-\n-    Monotonic time orders the incarnations of one VM only. A peer keeps one\n-    record for each node name, so a node that restarts under a new name gets a\n-    new record, and no order between VMs is needed.\n-\n-    This design assumes that a node restart does not reuse a node name. A new VM\n-    that reuses a name can start with a lower incarnation. The peers then treat\n-    its messages as stale. A stale message still resets the silent count, so the\n-    silence threshold never purges the old record, and the old entries stay, under\n-    a very specific time drift that goes backwards during a node restart.\n-\n-    `peers` maps each peer node to its `Rollcall.Tracker.Peer`. The view of the\n-    tracker is `local` plus the replica of each peer. `silence_threshold` is the\n-    number of ticks without a message after which the tracker deletes a peer\n-    record.\n-\n-    `monitors` maps each process that has an entry to its monitor. `empty_grace`\n-    and `empty_timer` control the stop of a tracker that holds no entry.\n-    \"\"\"\n-\n-    alias Rollcall.Tracker.Local\n-    alias Rollcall.Tracker.Peer\n-\n-    # `local` has no default. A default runs `Local.new/0` at compile time, and\n-    # the struct would then hold a literal value of the opaque type `Local.t()`.\n-    @enforce_keys [\n-      :scope,\n-      :incarnation,\n-      :empty_grace,\n-      :local,\n-      :silence_threshold,\n-      :transport_module,\n-      :transport_state,\n-      :heartbeat_period\n-    ]\n-\n-    defstruct [\n-      :scope,\n-      :incarnation,\n-      :empty_grace,\n-      :local,\n-      :silence_threshold,\n-      :transport_module,\n-      :transport_state,\n-      :heartbeat_period,\n-      empty_timer: nil,\n-      version: 0,\n-      monitors: %{},\n-      peers: %{}\n-    ]\n-\n-    @type t :: %__MODULE__{\n-            scope: Rollcall.scope(),\n-            incarnation: integer(),\n-            empty_grace: non_neg_integer(),\n-            empty_timer: reference() | nil,\n-            heartbeat_period: pos_integer() | :manual,\n-            local: Local.t(),\n-            version: non_neg_integer(),\n-            monitors: %{pid() => reference()},\n-            peers: %{node() => Peer.t()},\n-            silence_threshold: pos_integer(),\n-            transport_module: module(),\n-            transport_state: any()\n-          }\n-\n-    @spec bump_version(t()) :: t()\n-    def bump_version(%__MODULE__{version: version} = state) do\n-      %{state | version: version + 1}\n-    end\n-\n-    @spec current_stamp(t()) :: Messages.stamp()\n-\n-    def current_stamp(%__MODULE__{incarnation: incarnation, version: version}) do\n-      Messages.stamp(incarnation, version)\n-    end\n-  end\n-\n-  @type transport :: {module(), keyword()}\n-\n-  @type init_options :: [\n-          silence_threshold: pos_integer(),\n-          transport: transport(),\n-          heartbeat_period: pos_integer() | :manual\n-        ]\n-\n   @impl true\n   @spec init({Rollcall.scope(), keyword()}) :: {:ok, State.t()}\n   def init({scope, opts}) do\n@@ -438,9 +339,9 @@ defmodule Rollcall.Tracker do\n \n   @impl true\n   @spec handle_call(call_message(), GenServer.from(), State.t()) ::\n-          {:reply, {:ok, Rollcall.ref()} | :ok | inspected_state(), State.t()}\n+          {:reply, {:ok, Rollcall.ref()} | :ok | State.view(), State.t()}\n   def handle_call(:get_state, _from, state) do\n-    {:reply, Map.take(state, @inspectable_keys), state}\n+    {:reply, State.inspect_view(state), state}\n   end\n \n   def handle_call({:track, pid, partition, key, meta}, _from, state) do\n@@ -450,7 +351,7 @@ defmodule Rollcall.Tracker do\n \n     state =\n       state\n-      |> apply_changes(local, changes)\n+      |> State.apply_changes(local, changes)\n       |> cancel_empty_timer()\n       |> watch_pid(pid)\n \n@@ -476,7 +377,7 @@ defmodule Rollcall.Tracker do\n \n     state =\n       state\n-      |> apply_changes(local, changes)\n+      |> State.apply_changes(local, changes)\n       |> maybe_unwatch(pid)\n       |> start_empty_timer()\n \n@@ -497,63 +398,6 @@ defmodule Rollcall.Tracker do\n     {:reply, :ok, state}\n   end\n \n-  @impl true\n-  @spec handle_cast({:deliver, Rollcall.scope(), Messages.t()}, State.t()) :: {:noreply, State.t()}\n-  def handle_cast({:deliver, scope, msg}, %State{scope: scope} = state) do\n-    node = node(Messages.origin(msg))\n-    {:noreply, deliver_message(state, node, Map.get(state.peers, node), msg)}\n-  end\n-\n-  # The sender writes the scope from its own state, so a mismatch means that the\n-  # transport misrouted the message. A crash would let a bug in the transport\n-  # take down this scope.\n-  def handle_cast({:deliver, message_scope, msg}, %State{} = state) do\n-    {:noreply, drop_message(state, :wrong_scope, message_scope, msg)}\n-  end\n-\n-  # The transport does not send a message to its own node. The clause makes a\n-  # tracker safe when it does.\n-  defp deliver_message(state, node, _peer, msg) when node == node() do\n-    drop_message(state, :local_origin, state.scope, msg)\n-  end\n-\n-  # A request carries no state, so a request from an unknown node creates no\n-  # record.\n-  defp deliver_message(state, _node, nil, {:request, _origin}), do: state\n-\n-  defp deliver_message(state, node, nil, msg) do\n-    {peer, changes} = Peer.new(msg)\n-    put_peer(state, node, peer, changes)\n-  end\n-\n-  defp deliver_message(state, node, %Peer{} = peer, msg) do\n-    {peer, changes} = Peer.apply(peer, msg)\n-    put_peer(state, node, peer, changes)\n-  end\n-\n-  defp drop_message(state, reason, message_scope, msg) do\n-    tp(:rollcall_tracker_message_dropped, %{\n-      scope: state.scope,\n-      message_scope: message_scope,\n-      node: node(Messages.origin(msg)),\n-      reason: reason\n-    })\n-\n-    state\n-  end\n-\n-  defp put_peer(state, node, peer, changes) do\n-    tp(:rollcall_tracker_peer_message, %{\n-      scope: state.scope,\n-      node: node,\n-      joins: Changes.join_refs(changes),\n-      leaves: Changes.leave_refs(changes),\n-      behind: Peer.behind?(peer)\n-    })\n-\n-    %{state | peers: Map.put(state.peers, node, peer)}\n-  end\n-\n   @impl true\n   @spec handle_info(term(), State.t()) :: {:noreply, State.t()} | {:stop, :normal, State.t()}\n   def handle_info({:timeout, ref, :empty_timeout}, %{empty_timer: ref} = state) do\n@@ -567,7 +411,7 @@ defmodule Rollcall.Tracker do\n \n     state =\n       state\n-      |> apply_changes(local, changes)\n+      |> State.apply_changes(local, changes)\n       |> remove_monitor(pid)\n       |> start_empty_timer()\n \n@@ -593,10 +437,13 @@ defmodule Rollcall.Tracker do\n     case state.transport_module.unwrap(state.transport_state, msg) do\n       {:ok, scope, msg} when scope == state.scope ->\n         origin = node(Messages.origin(msg))\n-        new_state = deliver_message(state, origin, Map.get(state.peers, origin), msg)\n+        new_state = deliver_message(state, origin, State.peer(state, origin), msg)\n \n         {:noreply, new_state}\n \n+      # The sender writes the scope from its own state, so a mismatch means that the\n+      # transport misrouted the message. A crash would let a bug in the transport\n+      # take down this scope.\n       {:ok, scope, msg} ->\n         {:noreply, drop_message(state, :wrong_scope, scope, msg)}\n \n@@ -611,8 +458,8 @@ defmodule Rollcall.Tracker do\n     #\n     # We need to bump the version on a goodbye to make sure any peer holding our current\n     # state applies the goodbye.\n-    goodbye_version = state.version + 1\n-    stamp = Messages.stamp(state.incarnation, goodbye_version)\n+    stamp = State.goodbye_stamp(state)\n+    {:stamp, _incarnation, goodbye_version} = stamp\n     snapshot = Messages.snapshot(self(), stamp, [])\n \n     :ok = state.transport_module.heartbeat(state.transport_state, snapshot)\n@@ -620,10 +467,47 @@ defmodule Rollcall.Tracker do\n     tp(:rollcall_tracker_goodbye_sent, %{scope: state.scope, origin: self(), version: goodbye_version})\n   end\n \n-  defp apply_changes(state, local, changes) do\n+  # The transport does not send a message to its own node. The clause makes a\n+  # tracker safe when it does.\n+  defp deliver_message(state, node, _peer, msg) when node == node() do\n+    drop_message(state, :local_origin, state.scope, msg)\n+  end\n+\n+  # A request carries no state, so a request from an unknown node creates no\n+  # record.\n+  defp deliver_message(state, _node, nil, {:request, _origin}), do: state\n+\n+  defp deliver_message(state, node, nil, msg) do\n+    {peer, changes} = Peer.new(msg)\n+    put_peer(state, node, peer, changes)\n+  end\n+\n+  defp deliver_message(state, node, %Peer{} = peer, msg) do\n+    {peer, changes} = Peer.apply(peer, msg)\n+    put_peer(state, node, peer, changes)\n+  end\n+\n+  defp drop_message(state, reason, message_scope, msg) do\n+    tp(:rollcall_tracker_message_dropped, %{\n+      scope: state.scope,\n+      message_scope: message_scope,\n+      node: node(Messages.origin(msg)),\n+      reason: reason\n+    })\n+\n     state\n-    |> Map.put(:local, local)\n-    |> bump_version(changes)\n+  end\n+\n+  defp put_peer(state, node, peer, changes) do\n+    tp(:rollcall_tracker_peer_message, %{\n+      scope: state.scope,\n+      node: node,\n+      joins: Changes.join_refs(changes),\n+      leaves: Changes.leave_refs(changes),\n+      behind: Peer.behind?(peer)\n+    })\n+\n+    State.put_peer(state, node, peer)\n   end\n \n   defp tick_and_purge_peers(%State{} = state) do\n@@ -695,14 +579,6 @@ defmodule Rollcall.Tracker do\n     %{state | empty_timer: nil}\n   end\n \n-  defp bump_version(state, changes) do\n-    if Changes.empty?(changes) do\n-      state\n-    else\n-      State.bump_version(state)\n-    end\n-  end\n-\n   # Handles watching pids to update tracker state when a process ends\n   #\n   # We use monitor here because initially we don't want a tracker going down\ndiff --git a/rollcall/lib/rollcall/tracker/state.ex b/rollcall/lib/rollcall/tracker/state.ex\nnew file mode 100644\nindex 000000000..ed15ff77f\n--- /dev/null\n+++ b/rollcall/lib/rollcall/tracker/state.ex\n@@ -0,0 +1,146 @@\n+defmodule Rollcall.Tracker.State do\n+  @moduledoc \"\"\"\n+  The state of a tracker process.\n+\n+  `local` holds the entries that processes on this node track. `version`\n+  counts the changes to `local`. `incarnation` is the monotonic time at which\n+  the tracker started. `sent` holds the `local` set and the `version` at the last\n+  heartbeat. The struct has no `sent` field yet.\n+\n+  The `incarnation` and the `version` form the stamp of a message. A peer\n+  compares stamps to order messages that arrive in any order. A tracker that\n+  restarts gets a newer incarnation, so its peers replace its old entries.\n+\n+  Monotonic time orders the incarnations of one VM only. A peer keeps one\n+  record for each node name, so a node that restarts under a new name gets a\n+  new record, and no order between VMs is needed.\n+\n+  This design assumes that a node restart does not reuse a node name. A new VM\n+  that reuses a name can start with a lower incarnation. The peers then treat\n+  its messages as stale. A stale message still resets the silent count, so the\n+  silence threshold never purges the old record, and the old entries stay, under\n+  a very specific time drift that goes backwards during a node restart.\n+\n+  `peers` maps each peer node to its `Rollcall.Tracker.Peer`. The view of the\n+  tracker is `local` plus the replica of each peer. `silence_threshold` is the\n+  number of ticks without a message after which the tracker deletes a peer\n+  record.\n+\n+  `monitors` maps each process that has an entry to its monitor. `empty_grace`\n+  and `empty_timer` control the stop of a tracker that holds no entry.\n+  \"\"\"\n+\n+  alias Rollcall.Tracker.Changes\n+  alias Rollcall.Tracker.Local\n+  alias Rollcall.Tracker.Messages\n+  alias Rollcall.Tracker.Peer\n+\n+  # `local` has no default. A default runs `Local.new/0` at compile time, and\n+  # the struct would then hold a literal value of the opaque type `Local.t()`.\n+  @enforce_keys [\n+    :scope,\n+    :incarnation,\n+    :empty_grace,\n+    :local,\n+    :silence_threshold,\n+    :transport_module,\n+    :transport_state,\n+    :heartbeat_period\n+  ]\n+\n+  defstruct [\n+    :scope,\n+    :incarnation,\n+    :empty_grace,\n+    :local,\n+    :silence_threshold,\n+    :transport_module,\n+    :transport_state,\n+    :heartbeat_period,\n+    empty_timer: nil,\n+    version: 0,\n+    monitors: %{},\n+    peers: %{}\n+  ]\n+\n+  @type t :: %__MODULE__{\n+          scope: Rollcall.scope(),\n+          incarnation: integer(),\n+          empty_grace: non_neg_integer(),\n+          empty_timer: reference() | nil,\n+          heartbeat_period: pos_integer() | :manual,\n+          local: Local.t(),\n+          version: non_neg_integer(),\n+          monitors: %{pid() => reference()},\n+          peers: %{node() => Peer.t()},\n+          silence_threshold: pos_integer(),\n+          transport_module: module(),\n+          transport_state: any()\n+        }\n+\n+  @doc \"\"\"\n+  Sets `local`. The version increases by one when `changes` is not empty.\n+  \"\"\"\n+  @spec apply_changes(t(), Local.t(), Changes.t()) :: t()\n+  def apply_changes(%__MODULE__{} = state, local, changes) do\n+    state = %{state | local: local}\n+\n+    if Changes.empty?(changes) do\n+      state\n+    else\n+      bump_version(state)\n+    end\n+  end\n+\n+  @spec bump_version(t()) :: t()\n+  defp bump_version(%__MODULE__{version: version} = state) do\n+    %{state | version: version + 1}\n+  end\n+\n+  @spec current_stamp(t()) :: Messages.stamp()\n+  def current_stamp(%__MODULE__{incarnation: incarnation, version: version}) do\n+    Messages.stamp(incarnation, version)\n+  end\n+\n+  @inspectable_keys [:incarnation, :scope, :version, :local, :peers]\n+\n+  @typedoc \"The fields of the state that have a meaning outside the process.\"\n+  @type view :: %{\n+          scope: Rollcall.scope(),\n+          version: non_neg_integer(),\n+          incarnation: integer(),\n+          local: Local.t(),\n+          peers: %{node() => Peer.t()}\n+        }\n+\n+  @doc \"\"\"\n+  Returns the fields of the state that have a meaning outside the process.\n+\n+  The timer, the monitors and the transport stay private, so a change to them\n+  does not break a caller.\n+  \"\"\"\n+  @spec inspect_view(t()) :: view()\n+  def inspect_view(%__MODULE__{} = state) do\n+    Map.take(state, @inspectable_keys)\n+  end\n+\n+  @doc \"Returns the record of the peer on `node`, or `nil` when no message came from that node.\"\n+  @spec peer(t(), node()) :: Peer.t() | nil\n+  def peer(%__MODULE__{peers: peers}, node) do\n+    Map.get(peers, node)\n+  end\n+\n+  @doc \"Sets the record of the peer on `node`.\"\n+  @spec put_peer(t(), node(), Peer.t()) :: t()\n+  def put_peer(%__MODULE__{peers: peers} = state, node, %Peer{} = peer) do\n+    %{state | peers: Map.put(peers, node, peer)}\n+  end\n+\n+  @doc \"\"\"\n+  Returns the stamp of the goodbye: the incarnation and the version plus one.\n+  \"\"\"\n+  @spec goodbye_stamp(t()) :: Messages.stamp()\n+  def goodbye_stamp(%__MODULE__{incarnation: incarnation, version: version}) do\n+    Messages.stamp(incarnation, version + 1)\n+  end\n+end\ndiff --git a/rollcall/test/rollcall/tracker/state_test.exs b/rollcall/test/rollcall/tracker/state_test.exs\nnew file mode 100644\nindex 000000000..ae436d48f\n--- /dev/null\n+++ b/rollcall/test/rollcall/tracker/state_test.exs\n@@ -0,0 +1,143 @@\n+defmodule Rollcall.Tracker.StateTest do\n+  use ExUnit.Case, async: true\n+\n+  alias Rollcall.Tracker.Changes\n+  alias Rollcall.Tracker.Entry\n+  alias Rollcall.Tracker.Local\n+  alias Rollcall.Tracker.Peer\n+  alias Rollcall.Tracker.State\n+\n+  @incarnation 1_000\n+\n+  setup do\n+    state = %State{\n+      scope: \"scope\",\n+      incarnation: @incarnation,\n+      empty_grace: 5_000,\n+      local: Local.new(),\n+      silence_threshold: 10,\n+      heartbeat_period: :manual,\n+      transport_module: Rollcall.Transport.Null,\n+      transport_state: nil\n+    }\n+\n+    %{state: state}\n+  end\n+\n+  describe \"apply_changes/3\" do\n+    test \"sets local and increases the version when the changes are not empty\", %{state: state} do\n+      {changes, local} = Local.track(state.local, self(), \"partition\", \"key\", %{}, make_ref())\n+\n+      state = State.apply_changes(state, local, changes)\n+\n+      assert state.local == local\n+      assert state.version == 1\n+    end\n+\n+    test \"increases the version by one for each change\", %{state: state} do\n+      {changes_1, local_1} = Local.track(state.local, self(), \"partition\", \"key_1\", %{}, make_ref())\n+      {changes_2, local_2} = Local.track(local_1, self(), \"partition\", \"key_2\", %{}, make_ref())\n+\n+      state =\n+        state\n+        |> State.apply_changes(local_1, changes_1)\n+        |> State.apply_changes(local_2, changes_2)\n+\n+      assert state.version == 2\n+    end\n+\n+    test \"sets local and keeps the version when the changes are empty\", %{state: state} do\n+      {_changes, local} = Local.track(state.local, self(), \"partition\", \"key\", %{}, make_ref())\n+\n+      state = State.apply_changes(state, local, Changes.new())\n+\n+      assert state.local == local\n+      assert state.version == 0\n+    end\n+\n+    test \"counts a change that only has leaves\", %{state: state} do\n+      entry = Entry.new(self(), \"partition\", \"key\", %{}, make_ref())\n+\n+      state = State.apply_changes(state, state.local, Changes.new([], [entry]))\n+\n+      assert state.version == 1\n+    end\n+  end\n+\n+  describe \"peer/2 and put_peer/3\" do\n+    test \"peer/2 returns nil for a node that sent no message\", %{state: state} do\n+      assert State.peer(state, :a@host) == nil\n+    end\n+\n+    test \"peer/2 returns the record that put_peer/3 set\", %{state: state} do\n+      peer = %Peer{silent_ticks: 2}\n+\n+      state = State.put_peer(state, :a@host, peer)\n+\n+      assert State.peer(state, :a@host) == peer\n+    end\n+\n+    test \"put_peer/3 replaces the record of the node\", %{state: state} do\n+      state =\n+        state\n+        |> State.put_peer(:a@host, %Peer{silent_ticks: 2})\n+        |> State.put_peer(:a@host, %Peer{silent_ticks: 0})\n+\n+      assert State.peer(state, :a@host) == %Peer{silent_ticks: 0}\n+    end\n+\n+    test \"put_peer/3 keeps the records of the other nodes\", %{state: state} do\n+      state =\n+        state\n+        |> State.put_peer(:a@host, %Peer{silent_ticks: 1})\n+        |> State.put_peer(:b@host, %Peer{silent_ticks: 2})\n+\n+      assert State.peer(state, :a@host) == %Peer{silent_ticks: 1}\n+      assert State.peer(state, :b@host) == %Peer{silent_ticks: 2}\n+    end\n+\n+    test \"put_peer/3 does not change the other fields\", %{state: state} do\n+      assert %{State.put_peer(state, :a@host, %Peer{}) | peers: %{}} == state\n+    end\n+  end\n+\n+  describe \"inspect_view/1\" do\n+    test \"returns the fields that have a meaning outside the process\", %{state: state} do\n+      peer = %Peer{silent_ticks: 2}\n+      state = %{state | version: 3} |> State.put_peer(:a@host, peer)\n+\n+      assert State.inspect_view(state) == %{\n+               scope: \"scope\",\n+               version: 3,\n+               incarnation: @incarnation,\n+               local: state.local,\n+               peers: %{a@host: peer}\n+             }\n+    end\n+\n+    test \"leaves out the timer, the monitors and the transport\", %{state: state} do\n+      view = State.inspect_view(state)\n+\n+      refute Map.has_key?(view, :empty_timer)\n+      refute Map.has_key?(view, :monitors)\n+      refute Map.has_key?(view, :transport_module)\n+      refute Map.has_key?(view, :transport_state)\n+    end\n+  end\n+\n+  describe \"current_stamp/1\" do\n+    test \"has the incarnation and the version\", %{state: state} do\n+      assert State.current_stamp(%{state | version: 4}) == {:stamp, @incarnation, 4}\n+    end\n+  end\n+\n+  describe \"goodbye_stamp/1\" do\n+    test \"has the incarnation and the version plus one\", %{state: state} do\n+      assert State.goodbye_stamp(%{state | version: 4}) == {:stamp, @incarnation, 5}\n+    end\n+\n+    test \"is newer than the current stamp at version 0\", %{state: state} do\n+      assert State.goodbye_stamp(state) == {:stamp, @incarnation, 1}\n+    end\n+  end\n+end\ndiff --git a/rollcall/test/rollcall/tracker_peers_test.exs b/rollcall/test/rollcall/tracker_peers_test.exs\nindex f3d2c370a..053d9fcb3 100644\n--- a/rollcall/test/rollcall/tracker_peers_test.exs\n+++ b/rollcall/test/rollcall/tracker_peers_test.exs\n@@ -16,8 +16,10 @@ defmodule Rollcall.TrackerPeersTest do\n   # record. A request does not. A tick counts a quiet period for each record,\n   # and a record that reaches the threshold is deleted.\n   #\n-  # The tests send `{:deliver, message}` and `:tick` to the tracker, and wait\n-  # for the tracker to handle them. The origins are pids on fake nodes.\n+  # The tests send `{:deliver, scope, message}` and `:tick` to the tracker, and\n+  # wait for the tracker to handle them. The tracker uses\n+  # `Rollcall.Transport.PassThrough`, which unwraps the delivery as it is. The\n+  # origins are pids on fake nodes.\n \n   @node_a :a@host\n   @node_b :b@host\n@@ -437,7 +439,7 @@ defmodule Rollcall.TrackerPeersTest do\n   end\n \n   defp deliver(tracker, scope, message) do\n-    GenServer.cast(tracker, {:deliver, scope, message})\n+    send(tracker, {:deliver, scope, message})\n     sync(tracker)\n   end\n \ndiff --git a/rollcall/test/support/network_helpers.ex b/rollcall/test/support/network_helpers.ex\nindex c57294566..dc3b5416e 100644\n--- a/rollcall/test/support/network_helpers.ex\n+++ b/rollcall/test/support/network_helpers.ex\n@@ -15,6 +15,7 @@ defmodule Rollcall.NetworkHelpers do\n   import ExUnit.Assertions\n \n   alias Rollcall.Tracker\n+  alias Rollcall.Tracker.State\n   alias Rollcall.Transport.InMemory\n   alias Rollcall.Transport.InMemory.Network\n \n@@ -86,7 +87,7 @@ defmodule Rollcall.NetworkHelpers do\n   end\n \n   @doc \"Returns the state of `tracker`, in the shape of `Rollcall.Tracker.get_state/1`.\"\n-  @spec tracker_state(pid()) :: Tracker.inspected_state()\n+  @spec tracker_state(pid()) :: State.view()\n   def tracker_state(tracker), do: GenServer.call(tracker, :get_state)\n \n   @doc \"Returns the peer record of `tracker` for `node`, or `nil`.\"\ndiff --git a/rollcall/test/support/pass_through_transport.ex b/rollcall/test/support/pass_through_transport.ex\nnew file mode 100644\nindex 000000000..737148881\n--- /dev/null\n+++ b/rollcall/test/support/pass_through_transport.ex\n@@ -0,0 +1,23 @@\n+defmodule Rollcall.Transport.PassThrough do\n+  @moduledoc \"\"\"\n+  A transport for tests that need to choose the origin of each message.\n+\n+  A test sends `{:deliver, scope, message}` to the tracker. `unwrap/2` returns\n+  the scope and the message as they are, so the origin stays the pid that the\n+  test chose. `Rollcall.Transport.InMemory` rewrites the origin.\n+\n+  The tracker sends no message through this transport.\n+  \"\"\"\n+\n+  @behaviour Rollcall.Transport\n+\n+  @impl true\n+  def init(scope, _opts), do: {:ok, scope}\n+\n+  @impl true\n+  def heartbeat(_scope, _message), do: :ok\n+\n+  @impl true\n+  def unwrap(_scope, {:deliver, scope, message}), do: {:ok, scope, message}\n+  def unwrap(_scope, _raw), do: :ignore\n+end\ndiff --git a/rollcall/test/support/tracker_helpers.ex b/rollcall/test/support/tracker_helpers.ex\nindex 98c9bd13a..432756ec7 100644\n--- a/rollcall/test/support/tracker_helpers.ex\n+++ b/rollcall/test/support/tracker_helpers.ex\n@@ -10,12 +10,17 @@ defmodule Rollcall.TrackerHelpers do\n   The heartbeat timer is off. The tests that use this function send each tick\n   and count the ticks, so a timer tick would change the count.\n \n+  The tracker uses `Rollcall.Transport.PassThrough`. A test delivers a message\n+  with `send(tracker, {:deliver, scope, message})`.\n+\n   This function is the only place that passes the init parameter.\n   \"\"\"\n   @spec start_tracker(Rollcall.scope(), pos_integer()) :: pid()\n   def start_tracker(scope, silence_threshold) do\n     ExUnit.Callbacks.start_supervised!(\n-      {Rollcall.Tracker, {scope, silence_threshold: silence_threshold, heartbeat_period: :manual}}\n+      {Rollcall.Tracker,\n+       {scope,\n+        silence_threshold: silence_threshold, heartbeat_period: :manual, transport: {Rollcall.Transport.PassThrough, []}}}\n     )\n   end\n \n",
+  "truncated": false
+ },
+ "github.prs": [
+  {
+   "author": "leandrocp",
+   "branch": "docs-agents-realtime-protocol",
+   "checks": "7 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2480,
+   "review": "approved",
+   "title": "docs: point agents to the realtime protocol guide",
+   "updatedAt": "2026-11-02T18:21:56Z",
+   "url": "https://github.com/supabase/realtime/pull/2480"
+  },
+  {
+   "author": "seangeo",
+   "branch": "refactor/rollcall-tracker",
+   "checks": "8 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2476,
+   "review": "review required",
+   "title": "refactor(rollcall): extract Tracker.State and reorder Tracker",
+   "updatedAt": "2026-11-02T20:31:43Z",
+   "url": "https://github.com/supabase/realtime/pull/2476"
+  },
+  {
+   "author": "app/dependabot",
+   "branch": "dependabot/hex/req-0.7.5",
+   "checks": "52 passed, 2 skipped",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2475,
+   "review": "review required",
+   "title": "fix(deps): bump req from 0.7.4 to 0.7.5",
+   "updatedAt": "2026-11-02T06:33:11Z",
+   "url": "https://github.com/supabase/realtime/pull/2475"
+  },
+  {
+   "author": "seangeo",
+   "branch": "seangeoghegan/real-1279-send-snapshot-heartbeats-and-the-goodbye",
+   "checks": "8 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2474,
+   "review": "review required",
+   "title": "chore(rollcall): send snapshot heartbeats and the goodbye",
+   "updatedAt": "2026-11-02T20:31:42Z",
+   "url": "https://github.com/supabase/realtime/pull/2474"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/broadcast-sender-idle-counter",
+   "checks": "1 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2466,
+   "review": "review required",
+   "title": "fix(broadcast): restart event sampling for send-only channels",
+   "updatedAt": "2026-10-30T02:20:15Z",
+   "url": "https://github.com/supabase/realtime/pull/2466"
+  },
+  {
+   "author": "leandrocp",
+   "branch": "e2e-broadcast-persistence",
+   "checks": "7 failed, 44 passed, 1 skipped",
+   "checksTone": "danger",
+   "draft": false,
+   "number": 2463,
+   "review": "approved",
+   "title": "chore(e2e): add broadcast persistence tests",
+   "updatedAt": "2026-11-02T17:05:50Z",
+   "url": "https://github.com/supabase/realtime/pull/2463"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/presence-fallback-event-count",
+   "checks": "1 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2462,
+   "review": "review required",
+   "title": "fix(presence): count authorized fallback diffs",
+   "updatedAt": "2026-10-29T15:01:08Z",
+   "url": "https://github.com/supabase/realtime/pull/2462"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/cdc-publication-refresh-inflight",
+   "checks": "1 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2460,
+   "review": "review required",
+   "title": "fix(cdc): retry pending subscriptions after publication refresh",
+   "updatedAt": "2026-10-29T14:39:05Z",
+   "url": "https://github.com/supabase/realtime/pull/2460"
+  },
+  {
+   "author": "leandrocp",
+   "branch": "feat/wait-migrations-before-pg-changes",
+   "checks": "57 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2458,
+   "review": "review required",
+   "title": "fix: wait for tenant migrations before creating postgres changes subscriptions",
+   "updatedAt": "2026-11-02T17:15:13Z",
+   "url": "https://github.com/supabase/realtime/pull/2458"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/poller-preserve-retry-streak",
+   "checks": "1 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2451,
+   "review": "review required",
+   "title": "fix(cdc): preserve polling retries through slot preparation",
+   "updatedAt": "2026-10-28T15:53:19Z",
+   "url": "https://github.com/supabase/realtime/pull/2451"
+  },
+  {
+   "author": "disksing",
+   "branch": "task118-subscription-40001-retry",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2447,
+   "review": "review required",
+   "title": "fix(realtime): retry subscription transaction conflicts",
+   "updatedAt": "2026-10-29T01:13:27Z",
+   "url": "https://github.com/supabase/realtime/pull/2447"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/broadcast-region-join-cache",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2442,
+   "review": "review required",
+   "title": "fix(pubsub): include newly joined regions before reconciliation",
+   "updatedAt": "2026-10-28T03:01:33Z",
+   "url": "https://github.com/supabase/realtime/pull/2442"
+  },
+  {
+   "author": "jvoegele",
+   "branch": "jvoegele/real-1121-http-broadcast-outcomes",
+   "checks": "49 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2428,
+   "review": "review required",
+   "title": "feat: record broadcast request outcomes over HTTP",
+   "updatedAt": "2026-10-29T22:13:20Z",
+   "url": "https://github.com/supabase/realtime/pull/2428"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/broadcast-cors-preflight",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2423,
+   "review": "review required",
+   "title": "fix: answer CORS preflight requests for the broadcast API",
+   "updatedAt": "2026-10-26T03:25:01Z",
+   "url": "https://github.com/supabase/realtime/pull/2423"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/poller-dispatch-metric",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2422,
+   "review": "review required",
+   "title": "fix: emit realtime_replication_poller_changes_dispatch when the poller broadcasts rows",
+   "updatedAt": "2026-10-27T20:51:46Z",
+   "url": "https://github.com/supabase/realtime/pull/2422"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/decimal-exp-expired-token",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2421,
+   "review": "review required",
+   "title": "fix: report expired tokens with a decimal exp claim as expired",
+   "updatedAt": "2026-10-26T03:25:05Z",
+   "url": "https://github.com/supabase/realtime/pull/2421"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/presence-state-down-node",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2419,
+   "review": "review required",
+   "title": "fix: omit members of disconnected nodes from presence_state",
+   "updatedAt": "2026-10-25T02:51:29Z",
+   "url": "https://github.com/supabase/realtime/pull/2419"
+  },
+  {
+   "author": "kabochya",
+   "branch": "plin/failover-integration-test",
+   "checks": "48 passed, 1 skipped",
+   "checksTone": "success",
+   "draft": true,
+   "number": 2411,
+   "review": "review required",
+   "title": "test(failover): add failover integration tests against a dedicated Multigres cluster",
+   "updatedAt": "2026-10-21T15:50:06Z",
+   "url": "https://github.com/supabase/realtime/pull/2411"
+  },
+  {
+   "author": "kabochya",
+   "branch": "plin/failover-harness",
+   "checks": "1 failed, 39 passed",
+   "checksTone": "danger",
+   "draft": true,
+   "number": 2407,
+   "review": "review required",
+   "title": "test(failover): add a harness for Realtime behaviour across a primary failover",
+   "updatedAt": "2026-10-19T21:20:27Z",
+   "url": "https://github.com/supabase/realtime/pull/2407"
+  },
+  {
+   "author": "just-some-random-pal",
+   "branch": "fix/cast-preserves-typmod",
+   "checks": "1 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2395,
+   "review": "review required",
+   "title": "fix: keep char(n) and bit(n) values intact in Postgres Changes",
+   "updatedAt": "2026-10-30T15:17:37Z",
+   "url": "https://github.com/supabase/realtime/pull/2395"
+  },
+  {
+   "author": "mandar1045",
+   "branch": "fix/send-non-object-payloads",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2390,
+   "review": "review required",
+   "title": "fix: let realtime.send() broadcast payloads that aren't JSON objects",
+   "updatedAt": "2026-10-28T02:20:00Z",
+   "url": "https://github.com/supabase/realtime/pull/2390"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/tenant-quota-cache-counter-order",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2381,
+   "review": "review required",
+   "title": "fix: apply tenant quotas before restarting local rate counters",
+   "updatedAt": "2026-10-10T19:06:27Z",
+   "url": "https://github.com/supabase/realtime/pull/2381"
+  },
+  {
+   "author": "Snehil-Shah",
+   "branch": "rescan-perf",
+   "checks": "52 passed, 1 skipped",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2376,
+   "review": "review required",
+   "title": "perf: avoid quadratic re-scan of visible subscriptions in apply_rls",
+   "updatedAt": "2026-10-28T15:58:57Z",
+   "url": "https://github.com/supabase/realtime/pull/2376"
+  },
+  {
+   "author": "hsusul",
+   "branch": "fix/propagate-partition-creation-errors",
+   "checks": "41 passed",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2367,
+   "review": "review required",
+   "title": "fix: propagate messages partition creation failures",
+   "updatedAt": "2026-10-07T20:15:59Z",
+   "url": "https://github.com/supabase/realtime/pull/2367"
+  },
+  {
+   "author": "mandar1045",
+   "branch": "fix/filter-on-raw-wal-values",
+   "checks": "51 passed, 1 skipped",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2362,
+   "review": "review required",
+   "title": "fix: evaluate postgres_changes filters against the raw wal2json values",
+   "updatedAt": "2026-10-22T02:47:16Z",
+   "url": "https://github.com/supabase/realtime/pull/2362"
+  },
+  {
+   "author": "jvoegele",
+   "branch": "jasonvoegele/real-1121-create-broadcast-error-rate-slo",
+   "checks": "44 passed, 1 skipped",
+   "checksTone": "success",
+   "draft": true,
+   "number": 2346,
+   "review": "changes requested",
+   "title": "feat: record broadcast ingress results for the Broadcast error-rate SLO",
+   "updatedAt": "2026-10-07T19:27:52Z",
+   "url": "https://github.com/supabase/realtime/pull/2346"
+  },
+  {
+   "author": "virgildotcodes",
+   "branch": "fix/skip-write-authorization-for-bypassrls-roles",
+   "checks": "41 passed, 1 skipped",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2340,
+   "review": "review required",
+   "title": "fix: skip the write authorization probe for roles that bypass RLS",
+   "updatedAt": "2026-10-05T10:03:24Z",
+   "url": "https://github.com/supabase/realtime/pull/2340"
+  },
+  {
+   "author": "app/dependabot",
+   "branch": "dependabot/hex/phoenix_html-4.3.0",
+   "checks": "37 failed, 9 passed, 4 skipped",
+   "checksTone": "danger",
+   "draft": false,
+   "number": 2334,
+   "review": "review required",
+   "title": "fix(deps): bump phoenix_html from 3.3.4 to 4.3.0",
+   "updatedAt": "2026-10-06T16:28:38Z",
+   "url": "https://github.com/supabase/realtime/pull/2334"
+  },
+  {
+   "author": "sushrut1058",
+   "branch": "fix/guard-nil-tenant-from-cache",
+   "checks": "no checks",
+   "checksTone": "success",
+   "draft": false,
+   "number": 2331,
+   "review": "review required",
+   "title": "fix: handle a missing tenant in broadcast and presence paths",
+   "updatedAt": "2026-10-07T11:06:38Z",
+   "url": "https://github.com/supabase/realtime/pull/2331"
+  },
+  {
+   "author": "sushrut1058",
+   "branch": "fix/replication-slot-teardown-handle-unreachable-db",
+   "checks": "1 skipped",
+   "checksTone": "success",
+   "draft": true,
+   "number": 2329,
+   "review": "review required",
+   "title": "fix: handle unreachable tenant database in replication_slot_teardown",
+   "updatedAt": "2026-10-04T11:27:36Z",
+   "url": "https://github.com/supabase/realtime/pull/2329"
+  }
+ ]
+}

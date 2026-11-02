@@ -1,0 +1,218 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "linear-issue",
+  "description": "A Linear issue, live from the user's Linear connection: id and title, state, priority, labels, assignee, estimate and due date, the description, sub-issue progress, linked PRs and links, and comments. Refreshes every minute. Use when talking about a ticket instead of pasting it.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "Issue identifier, e.g. \"ENG-142\"."
+      }
+    },
+    "required": [
+      "id"
+    ]
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "linear.issue",
+        "id": "{{id}}"
+      },
+      "every": 60000,
+      "as": "issue"
+    },
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "{{issue.id}} · {{issue.title}}",
+          "description": "{{issue.team}} · {{issue.cycle}} · {{issue.project}}"
+        },
+        "children": [
+          {
+            "type": "stack",
+            "props": {
+              "direction": "row",
+              "gap": "sm",
+              "align": "center",
+              "wrap": true
+            },
+            "children": [
+              {
+                "type": "badge",
+                "props": {
+                  "text": "{{issue.state}}",
+                  "variant": "default"
+                }
+              },
+              {
+                "type": "badge",
+                "props": {
+                  "text": "{{issue.priority}}",
+                  "variant": "{{issue.priorityVariant}}"
+                }
+              },
+              {
+                "each": "issue.labels",
+                "as": "label",
+                "children": [
+                  {
+                    "type": "badge",
+                    "props": {
+                      "text": "{{label}}",
+                      "variant": "outline"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "props": {
+                  "text": "{{issue.assignee}}",
+                  "tone": "muted",
+                  "size": "sm"
+                }
+              },
+              {
+                "if": "issue.estimate",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "· {{issue.estimate}} points",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "if": "issue.due",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "· due {{issue.due}}",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "link",
+                "props": {
+                  "text": "Open in Linear",
+                  "href": "{{issue.url}}"
+                }
+              }
+            ]
+          },
+          {
+            "if": "issue.description",
+            "children": [
+              {
+                "type": "markdown",
+                "props": {
+                  "text": "{{issue.description}}"
+                }
+              }
+            ]
+          },
+          {
+            "if": "issue.subIssues",
+            "children": [
+              {
+                "type": "progress",
+                "props": {
+                  "value": "{{issue.subDone}}",
+                  "max": "{{issue.subTotal}}",
+                  "label": "Sub-issues · {{issue.subDone}} of {{issue.subTotal}} done"
+                }
+              },
+              {
+                "each": "issue.subIssues",
+                "as": "sub",
+                "key": "id",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "{{sub.id}}  {{sub.title}} · {{sub.state}}",
+                      "size": "sm",
+                      "mono": false
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "if": "issue.links",
+            "children": [
+              {
+                "each": "issue.links",
+                "as": "l",
+                "children": [
+                  {
+                    "type": "link",
+                    "props": {
+                      "text": "{{l.title}}",
+                      "href": "{{l.url}}"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "if": "issue.comments",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "Activity ({{issue.comments.length}})",
+                  "open": true
+                },
+                "children": [
+                  {
+                    "each": "issue.comments",
+                    "as": "c",
+                    "children": [
+                      {
+                        "type": "text",
+                        "props": {
+                          "text": "{{c.author}}",
+                          "size": "sm",
+                          "weight": "medium"
+                        }
+                      },
+                      {
+                        "type": "markdown",
+                        "props": {
+                          "text": "{{c.body}}"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "An issue",
+      "props": {
+        "id": "ENG-142"
+      }
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "linear-board",
+  "description": "A Linear team's board: the active cycle's issues (or open issues when there is no cycle) in columns by workflow state, each card with id, title, priority and assignee. Refreshes every 2 minutes. Use to show where work stands.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "team": {
+        "type": "string",
+        "description": "Team key, e.g. \"ENG\"."
+      }
+    },
+    "required": [
+      "team"
+    ]
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "linear.board",
+        "team": "{{team}}"
+      },
+      "every": 120000,
+      "as": "board"
+    },
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "{{board.team}} · {{board.cycle}}",
+          "description": "Board, by status"
+        },
+        "children": [
+          {
+            "type": "grid",
+            "props": {
+              "columns": "{{board.columnCount}}",
+              "gap": "md"
+            },
+            "children": [
+              {
+                "each": "board.columns",
+                "as": "col",
+                "key": "state",
+                "children": [
+                  {
+                    "type": "stack",
+                    "props": {
+                      "gap": "sm"
+                    },
+                    "children": [
+                      {
+                        "type": "text",
+                        "props": {
+                          "text": "{{col.state}} · {{col.count}}",
+                          "size": "sm",
+                          "weight": "semibold",
+                          "tone": "muted"
+                        }
+                      },
+                      {
+                        "each": "col.issues",
+                        "as": "i",
+                        "key": "id",
+                        "children": [
+                          {
+                            "type": "card",
+                            "children": [
+                              {
+                                "type": "text",
+                                "props": {
+                                  "text": "{{i.id}}",
+                                  "size": "xs",
+                                  "tone": "muted",
+                                  "mono": true
+                                }
+                              },
+                              {
+                                "type": "text",
+                                "props": {
+                                  "text": "{{i.title}}",
+                                  "size": "sm",
+                                  "weight": "medium"
+                                }
+                              },
+                              {
+                                "type": "stack",
+                                "props": {
+                                  "direction": "row",
+                                  "gap": "sm",
+                                  "align": "center"
+                                },
+                                "children": [
+                                  {
+                                    "type": "badge",
+                                    "props": {
+                                      "text": "{{i.priority}}",
+                                      "variant": "{{i.priorityVariant}}"
+                                    }
+                                  },
+                                  {
+                                    "type": "text",
+                                    "props": {
+                                      "text": "{{i.assignee}}",
+                                      "size": "xs",
+                                      "tone": "muted"
+                                    }
+                                  }
+                                ]
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "A team's board",
+      "props": {
+        "team": "ENG"
+      }
+    }
+  ]
+}

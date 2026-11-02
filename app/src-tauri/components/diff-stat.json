@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "diff-stat",
+  "description": "How big a change is, per file: additions and deletions as bars, largest first, with totals. Pass what git diff --stat, git show --stat or git log --stat -1 printed. Use to give the shape of a change before (or instead of) the full diff.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "Output with --stat."
+      },
+      "title": {
+        "type": "string",
+        "description": "Card title, e.g. what was run for."
+      },
+      "command": {
+        "type": "string",
+        "description": "The command, shown under the title."
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "{{command}}"
+    },
+    "children": [
+      {
+        "type": "diffstat",
+        "props": {
+          "text": "{{text}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "A feature branch",
+      "props": {
+        "text": " src/billing.rs              | 42 +++++++++++++++++++++-------\n src/billing/partial.rs      | 88 ++++++++++++++++++++++++++++++++++++++++++++\n src/api/orders.rs           | 17 ++++++------\n tests/billing_test.rs       | 61 ++++++++++++++++++++++++++++++++\n assets/logo.png             | Bin 0 -> 4211 bytes\n 5 files changed, 186 insertions(+), 22 deletions(-)\n",
+        "title": "feat/refunds vs main",
+        "command": "git diff --stat main...feat/refunds"
+      }
+    }
+  ]
+}

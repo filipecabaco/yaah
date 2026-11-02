@@ -1,0 +1,6 @@
+{
+  // Node scripts (`pnpm themes`). They import the app's own TypeScript, so they share its settings.
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "lib": ["ES2023"], "types": ["node"] },
+  "include": ["*.ts"]
+}

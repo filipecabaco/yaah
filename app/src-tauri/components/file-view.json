@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "file-view",
+  "description": "A file for reading, sized to its content: short files inline; long ones with line numbers, search and wrap; Markdown rendered, CSV/TSV as a sortable table and JSON as a tree (each with a raw toggle). Pass what cat, head or sed -n printed and the `path`. Use whenever you show a file's contents.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "The file's text."
+      },
+      "path": {
+        "type": "string",
+        "description": "Its path; picks the view."
+      },
+      "start": {
+        "type": "number",
+        "description": "First line's number (for sed -n 40,80p)."
+      },
+      "highlight": {
+        "type": "array",
+        "description": "Line numbers to mark; the view scrolls to the first."
+      },
+      "find": {
+        "type": "string",
+        "description": "Text to find: every line with it is marked and the view scrolls to the first."
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "tree": {
+    "type": "textfile",
+    "props": {
+      "text": "{{text}}",
+      "path": "{{path}}",
+      "start": "{{start}}",
+      "highlight": "{{highlight}}",
+      "find": "{{find}}"
+    }
+  },
+  "examples": [
+    {
+      "title": "A source file with lines marked",
+      "props": {
+        "text": "use crate::store::Store;\n\n    // line 3: compute refund\n    // line 4: write ledger entry\n    // line 5: emit event\n    // line 6: validate input\n    // line 7: load order\n    // line 8: compute refund\n    // line 9: write ledger entry\n    // line 10: emit event\n    // line 11: validate input\n    // line 12: load order\n    // line 13: compute refund\n    // line 14: write ledger entry\n    // line 15: emit event\n    // line 16: validate input\n    // line 17: load order\n    // line 18: compute refund\n    // line 19: write ledger entry\n    // line 20: emit event\n    // line 21: validate input\n    // line 22: load order\n    // line 23: compute refund\n    // line 24: write ledger entry\n    // line 25: emit event\n    // line 26: validate input\n    // line 27: load order\n    // line 28: compute refund\n    // line 29: write ledger entry\n    // line 30: emit event\n    // line 31: validate input\n    // line 32: load order\n    // line 33: compute refund\n    // line 34: write ledger entry\n    // line 35: emit event\n    // line 36: validate input\n    // line 37: load order\n    // line 38: compute refund\n    // line 39: write ledger entry\n    // line 40: emit event\n    // line 41: validate input\n    // line 42: load order\n    // line 43: compute refund\n    // line 44: write ledger entry\n    // line 45: emit event\n    // line 46: validate input\n    // line 47: load order\n    // line 48: compute refund\n    // line 49: write ledger entry\n    // line 50: emit event\n    // line 51: validate input\n    // line 52: load order\n    // line 53: compute refund\n    // line 54: write ledger entry\n    // line 55: emit event\n    // line 56: validate input\n    // line 57: load order\n    // line 58: compute refund\n    // line 59: write ledger entry\n    // line 60: emit event",
+        "path": "src/billing/refund.rs",
+        "highlight": [
+          3,
+          4
+        ]
+      }
+    },
+    {
+      "title": "Finding a call",
+      "props": {
+        "text": "use crate::store::Store;\n\n    // line 3: compute refund\n    // line 4: write ledger entry\n    // line 5: emit event\n    // line 6: validate input\n    // line 7: load order\n    // line 8: compute refund\n    // line 9: write ledger entry\n    // line 10: emit event\n    // line 11: validate input\n    // line 12: load order\n    // line 13: compute refund\n    // line 14: write ledger entry\n    // line 15: emit event\n    // line 16: validate input\n    // line 17: load order\n    // line 18: compute refund\n    // line 19: write ledger entry\n    // line 20: emit event\n    // line 21: validate input\n    // line 22: load order\n    // line 23: compute refund\n    // line 24: write ledger entry\n    // line 25: emit event\n    // line 26: validate input\n    // line 27: load order\n    // line 28: compute refund\n    // line 29: write ledger entry\n    // line 30: emit event\n    // line 31: validate input\n    // line 32: load order\n    // line 33: compute refund\n    // line 34: write ledger entry\n    // line 35: emit event\n    // line 36: validate input\n    // line 37: load order\n    // line 38: compute refund\n    // line 39: write ledger entry\n    // line 40: emit event\n    // line 41: validate input\n    // line 42: load order\n    // line 43: compute refund\n    // line 44: write ledger entry\n    // line 45: emit event\n    // line 46: validate input\n    // line 47: load order\n    // line 48: compute refund\n    // line 49: write ledger entry\n    // line 50: emit event\n    // line 51: validate input\n    // line 52: load order\n    // line 53: compute refund\n    // line 54: write ledger entry\n    // line 55: emit event\n    // line 56: validate input\n    // line 57: load order\n    // line 58: compute refund\n    // line 59: write ledger entry\n    // line 60: emit event",
+        "path": "src/billing/refund.rs",
+        "find": "ledger"
+      }
+    },
+    {
+      "title": "A CSV",
+      "props": {
+        "text": "region,orders,revenue\nNorth,412,18230.50\nSouth,298,12004.10\nEast,377,16112.00\nWest,201,8820.75\n",
+        "path": "reports/regions.csv"
+      }
+    },
+    {
+      "title": "A short config",
+      "props": {
+        "text": "[server]\nport = 4000\nlog = \"info\"\n",
+        "path": "config/dev.toml"
+      }
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "linear-cycle",
+  "description": "A Linear team's active cycle: points done, scope added, issues, days left, a completion bar and a scope-vs-completed chart over the cycle's days. Refreshes every 5 minutes. Use for 'how is the cycle going'.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "team": {
+        "type": "string",
+        "description": "Team key, e.g. \"ENG\"."
+      }
+    },
+    "required": [
+      "team"
+    ]
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "linear.cycle",
+        "team": "{{team}}"
+      },
+      "every": 300000,
+      "as": "cycle"
+    },
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "{{cycle.team}} · {{cycle.name}}",
+          "description": "{{cycle.starts}} – {{cycle.ends}} · {{cycle.daysLeft}} days left"
+        },
+        "children": [
+          {
+            "type": "grid",
+            "props": {
+              "columns": 4
+            },
+            "children": [
+              {
+                "type": "stat",
+                "props": {
+                  "label": "Done",
+                  "value": "{{cycle.completed}} pts",
+                  "hint": "of {{cycle.scope}} in scope"
+                }
+              },
+              {
+                "type": "stat",
+                "props": {
+                  "label": "Scope added",
+                  "value": "+{{cycle.scopeAdded}} pts",
+                  "hint": "since the start"
+                }
+              },
+              {
+                "type": "stat",
+                "props": {
+                  "label": "Issues",
+                  "value": "{{cycle.issuesDone}} / {{cycle.issues}}",
+                  "hint": "done"
+                }
+              },
+              {
+                "type": "stat",
+                "props": {
+                  "label": "Days left",
+                  "value": "{{cycle.daysLeft}}"
+                }
+              }
+            ]
+          },
+          {
+            "type": "progress",
+            "props": {
+              "value": "{{cycle.progressPct}}",
+              "label": "Completed"
+            }
+          },
+          {
+            "type": "chart",
+            "props": {
+              "kind": "line",
+              "data": "{{cycle.history}}",
+              "x": "day",
+              "series": [
+                {
+                  "key": "scope",
+                  "label": "Scope"
+                },
+                {
+                  "key": "completed",
+                  "label": "Completed"
+                }
+              ],
+              "unit": " pts",
+              "height": 200
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "A team's cycle",
+      "props": {
+        "team": "ENG"
+      }
+    }
+  ]
+}

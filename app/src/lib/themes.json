@@ -1,0 +1,1107 @@
+[
+ {
+  "id": "shiki:andromeeda",
+  "label": "Andromeeda",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(35 38 46)",
+   "surface": "rgb(44 47 54)",
+   "border": "rgb(67 68 77)",
+   "fg": "rgb(213 206 217)",
+   "muted": "rgb(127 123 130)",
+   "accent": "rgb(59 121 199)",
+   "addFg": "rgb(150 224 114)",
+   "removeFg": "rgb(238 93 67)",
+   "selection": "rgb(61 67 82)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:aurora-x",
+  "label": "Aurora X",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(7 9 15)",
+   "surface": "rgb(17 19 25)",
+   "border": "rgb(24 29 45)",
+   "fg": "rgb(112 132 187)",
+   "muted": "rgb(89 107 159)",
+   "accent": "rgb(134 165 255)",
+   "addFg": "rgb(99 209 136)",
+   "removeFg": "rgb(221 80 116)",
+   "selection": "rgb(38 46 71)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:ayu-dark",
+  "label": "Ayu Dark",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(16 20 28)",
+   "surface": "rgb(13 16 23)",
+   "border": "rgb(48 50 56)",
+   "fg": "rgb(191 189 182)",
+   "muted": "rgb(90 99 120)",
+   "accent": "rgb(230 180 80)",
+   "addFg": "rgb(112 191 86)",
+   "removeFg": "rgb(242 109 120)",
+   "selection": "rgb(25 49 85)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:ayu-light",
+  "label": "Ayu Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(252 252 252)",
+   "surface": "rgb(248 249 250)",
+   "border": "rgb(230 230 231)",
+   "fg": "rgb(92 97 102)",
+   "muted": "rgb(130 142 159)",
+   "accent": "rgb(163 122 204)",
+   "addFg": "rgb(91 162 57)",
+   "removeFg": "rgb(216 98 111)",
+   "selection": "rgb(215 228 246)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:ayu-mirage",
+  "label": "Ayu Mirage",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(36 41 54)",
+   "surface": "rgb(31 36 48)",
+   "border": "rgb(66 70 79)",
+   "fg": "rgb(204 202 194)",
+   "muted": "rgb(112 122 140)",
+   "accent": "rgb(255 204 102)",
+   "addFg": "rgb(135 217 108)",
+   "removeFg": "rgb(242 121 131)",
+   "selection": "rgb(43 71 104)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:catppuccin-frappe",
+  "label": "Catppuccin Frappé",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(48 52 70)",
+   "surface": "rgb(41 44 60)",
+   "border": "rgb(98 104 128)",
+   "fg": "rgb(198 208 245)",
+   "muted": "rgb(138 146 175)",
+   "accent": "rgb(140 170 238)",
+   "addFg": "rgb(166 209 137)",
+   "removeFg": "rgb(231 130 132)",
+   "selection": "rgb(73 78 99)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:catppuccin-latte",
+  "label": "Catppuccin Latte",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(239 241 245)",
+   "surface": "rgb(230 233 239)",
+   "border": "rgb(172 176 190)",
+   "fg": "rgb(76 79 105)",
+   "muted": "rgb(130 132 148)",
+   "accent": "rgb(30 102 245)",
+   "addFg": "rgb(59 147 40)",
+   "removeFg": "rgb(210 15 57)",
+   "selection": "rgb(204 207 215)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:catppuccin-macchiato",
+  "label": "Catppuccin Macchiato",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(36 39 58)",
+   "surface": "rgb(30 32 48)",
+   "border": "rgb(91 96 120)",
+   "fg": "rgb(202 211 245)",
+   "muted": "rgb(136 142 170)",
+   "accent": "rgb(138 173 244)",
+   "addFg": "rgb(166 218 149)",
+   "removeFg": "rgb(237 135 150)",
+   "selection": "rgb(64 68 89)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:catppuccin-mocha",
+  "label": "Catppuccin Mocha",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(30 30 46)",
+   "surface": "rgb(24 24 37)",
+   "border": "rgb(88 91 112)",
+   "fg": "rgb(205 214 244)",
+   "muted": "rgb(135 140 165)",
+   "accent": "rgb(137 180 250)",
+   "addFg": "rgb(166 227 161)",
+   "removeFg": "rgb(243 139 168)",
+   "selection": "rgb(59 61 79)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:dark-plus",
+  "label": "Dark Plus",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(30 30 30)",
+   "surface": "rgb(39 39 39)",
+   "border": "rgb(48 48 49)",
+   "fg": "rgb(212 212 212)",
+   "muted": "rgb(139 139 139)",
+   "accent": "rgb(0 122 204)",
+   "addFg": "rgb(74 222 128)",
+   "removeFg": "rgb(248 113 113)",
+   "selection": "rgb(20 62 91)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:dracula",
+  "label": "Dracula Theme",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(40 42 54)",
+   "surface": "rgb(33 34 44)",
+   "border": "rgb(189 147 249)",
+   "fg": "rgb(248 248 242)",
+   "muted": "rgb(98 114 164)",
+   "accent": "rgb(139 233 253)",
+   "addFg": "rgb(80 250 123)",
+   "removeFg": "rgb(255 85 85)",
+   "selection": "rgb(68 71 90)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:dracula-soft",
+  "label": "Dracula Theme Soft",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(40 42 54)",
+   "surface": "rgb(38 38 38)",
+   "border": "rgb(191 158 238)",
+   "fg": "rgb(246 246 244)",
+   "muted": "rgb(123 127 139)",
+   "accent": "rgb(151 225 241)",
+   "addFg": "rgb(98 232 132)",
+   "removeFg": "rgb(238 102 102)",
+   "selection": "rgb(68 71 90)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:everforest-dark",
+  "label": "Everforest Dark",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(45 53 59)",
+   "surface": "rgb(53 61 67)",
+   "border": "rgb(75 79 79)",
+   "fg": "rgb(211 198 170)",
+   "muted": "rgb(133 146 137)",
+   "accent": "rgb(167 192 128)",
+   "addFg": "rgb(122 140 102)",
+   "removeFg": "rgb(230 126 128)",
+   "selection": "rgb(65 75 81)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:everforest-light",
+  "label": "Everforest Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(253 246 227)",
+   "surface": "rgb(243 236 218)",
+   "border": "rgb(230 226 211)",
+   "fg": "rgb(92 106 114)",
+   "muted": "rgb(124 134 122)",
+   "accent": "rgb(58 148 197)",
+   "addFg": "rgb(132 139 61)",
+   "removeFg": "rgb(248 85 82)",
+   "selection": "rgb(239 233 213)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:github-dark",
+  "label": "GitHub Dark",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(36 41 46)",
+   "surface": "rgb(31 36 40)",
+   "border": "rgb(70 75 79)",
+   "fg": "rgb(225 228 232)",
+   "muted": "rgb(149 157 165)",
+   "accent": "rgb(121 184 255)",
+   "addFg": "rgb(52 208 88)",
+   "removeFg": "rgb(234 74 90)",
+   "selection": "rgb(40 69 102)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:github-dark-default",
+  "label": "GitHub Dark Default",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(13 17 23)",
+   "surface": "rgb(1 4 9)",
+   "border": "rgb(48 54 61)",
+   "fg": "rgb(230 237 243)",
+   "muted": "rgb(125 133 144)",
+   "accent": "rgb(47 129 247)",
+   "addFg": "rgb(63 185 80)",
+   "removeFg": "rgb(248 81 73)",
+   "selection": "rgb(25 56 101)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:github-dark-dimmed",
+  "label": "GitHub Dark Dimmed",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(34 39 46)",
+   "surface": "rgb(28 33 40)",
+   "border": "rgb(68 76 86)",
+   "fg": "rgb(173 186 199)",
+   "muted": "rgb(118 131 144)",
+   "accent": "rgb(83 155 245)",
+   "addFg": "rgb(87 171 90)",
+   "removeFg": "rgb(229 83 75)",
+   "selection": "rgb(51 80 116)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:github-dark-high-contrast",
+  "label": "GitHub Dark High Contrast",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(10 12 16)",
+   "surface": "rgb(1 4 9)",
+   "border": "rgb(122 130 142)",
+   "fg": "rgb(240 243 246)",
+   "muted": "rgb(148 151 154)",
+   "accent": "rgb(113 183 255)",
+   "addFg": "rgb(38 205 77)",
+   "removeFg": "rgb(255 106 105)",
+   "selection": "rgb(255 255 255)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:github-light",
+  "label": "GitHub Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(255 255 255)",
+   "surface": "rgb(246 248 250)",
+   "border": "rgb(225 228 232)",
+   "fg": "rgb(36 41 46)",
+   "muted": "rgb(106 115 125)",
+   "accent": "rgb(3 102 214)",
+   "addFg": "rgb(40 167 69)",
+   "removeFg": "rgb(215 58 73)",
+   "selection": "rgb(218 233 249)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:github-light-default",
+  "label": "GitHub Light Default",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(255 255 255)",
+   "surface": "rgb(246 248 250)",
+   "border": "rgb(208 215 222)",
+   "fg": "rgb(31 35 40)",
+   "muted": "rgb(101 109 118)",
+   "accent": "rgb(9 105 218)",
+   "addFg": "rgb(26 127 55)",
+   "removeFg": "rgb(207 34 46)",
+   "selection": "rgb(169 203 242)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:github-light-high-contrast",
+  "label": "GitHub Light High Contrast",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(255 255 255)",
+   "surface": "rgb(245 245 245)",
+   "border": "rgb(32 37 44)",
+   "fg": "rgb(14 17 22)",
+   "muted": "rgb(110 112 115)",
+   "accent": "rgb(3 73 180)",
+   "addFg": "rgb(5 93 32)",
+   "removeFg": "rgb(160 17 31)",
+   "selection": "rgb(14 17 22)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:gruvbox-dark-hard",
+  "label": "Gruvbox Dark Hard",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(29 32 33)",
+   "surface": "rgb(38 41 42)",
+   "border": "rgb(60 56 54)",
+   "fg": "rgb(235 219 178)",
+   "muted": "rgb(168 153 132)",
+   "accent": "rgb(131 165 152)",
+   "addFg": "rgb(235 219 178)",
+   "removeFg": "rgb(251 73 52)",
+   "selection": "rgb(48 63 51)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:gruvbox-dark-medium",
+  "label": "Gruvbox Dark Medium",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(40 40 40)",
+   "surface": "rgb(49 49 49)",
+   "border": "rgb(60 56 54)",
+   "fg": "rgb(235 219 178)",
+   "muted": "rgb(168 153 132)",
+   "accent": "rgb(131 165 152)",
+   "addFg": "rgb(235 219 178)",
+   "removeFg": "rgb(251 73 52)",
+   "selection": "rgb(56 69 57)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:gruvbox-dark-soft",
+  "label": "Gruvbox Dark Soft",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(50 48 47)",
+   "surface": "rgb(58 56 55)",
+   "border": "rgb(83 79 71)",
+   "fg": "rgb(235 219 178)",
+   "muted": "rgb(168 153 132)",
+   "accent": "rgb(131 165 152)",
+   "addFg": "rgb(235 219 178)",
+   "removeFg": "rgb(251 73 52)",
+   "selection": "rgb(64 75 62)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:gruvbox-light-hard",
+  "label": "Gruvbox Light Hard",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(249 245 215)",
+   "surface": "rgb(239 235 206)",
+   "border": "rgb(223 219 192)",
+   "fg": "rgb(60 56 54)",
+   "muted": "rgb(124 111 100)",
+   "accent": "rgb(7 102 120)",
+   "addFg": "rgb(60 56 54)",
+   "removeFg": "rgb(204 36 29)",
+   "selection": "rgb(213 223 188)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:gruvbox-light-medium",
+  "label": "Gruvbox Light Medium",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(251 241 199)",
+   "surface": "rgb(241 231 191)",
+   "border": "rgb(224 215 179)",
+   "fg": "rgb(60 56 54)",
+   "muted": "rgb(124 111 100)",
+   "accent": "rgb(7 102 120)",
+   "addFg": "rgb(60 56 54)",
+   "removeFg": "rgb(204 36 29)",
+   "selection": "rgb(214 220 176)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:gruvbox-light-soft",
+  "label": "Gruvbox Light Soft",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(242 229 188)",
+   "surface": "rgb(232 220 180)",
+   "border": "rgb(217 205 169)",
+   "fg": "rgb(60 56 54)",
+   "muted": "rgb(124 111 100)",
+   "accent": "rgb(7 102 120)",
+   "addFg": "rgb(60 56 54)",
+   "removeFg": "rgb(204 36 29)",
+   "selection": "rgb(207 211 167)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:horizon",
+  "label": "Horizon",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(28 30 38)",
+   "surface": "rgb(37 39 47)",
+   "border": "rgb(61 63 70)",
+   "fg": "rgb(213 216 218)",
+   "muted": "rgb(118 119 123)",
+   "accent": "rgb(233 83 120)",
+   "addFg": "rgb(36 160 117)",
+   "removeFg": "rgb(244 62 92)",
+   "selection": "rgb(41 43 55)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:horizon-bright",
+  "label": "Horizon Bright",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(253 240 237)",
+   "surface": "rgb(243 230 228)",
+   "border": "rgb(218 207 206)",
+   "fg": "rgb(6 6 12)",
+   "muted": "rgb(139 132 131)",
+   "accent": "rgb(232 74 114)",
+   "addFg": "rgb(69 144 114)",
+   "removeFg": "rgb(244 62 92)",
+   "selection": "rgb(251 221 213)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:houston",
+  "label": "Houston",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(23 25 30)",
+   "surface": "rgb(35 38 45)",
+   "border": "rgb(62 64 69)",
+   "fg": "rgb(238 240 249)",
+   "muted": "rgb(133 139 152)",
+   "accent": "rgb(84 185 255)",
+   "addFg": "rgb(75 243 200)",
+   "removeFg": "rgb(244 88 126)",
+   "selection": "rgb(63 43 76)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:kanagawa-dragon",
+  "label": "Kanagawa Dragon",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(24 22 22)",
+   "surface": "rgb(33 31 31)",
+   "border": "rgb(55 54 54)",
+   "fg": "rgb(197 201 197)",
+   "muted": "rgb(128 129 127)",
+   "accent": "rgb(106 149 137)",
+   "addFg": "rgb(138 154 123)",
+   "removeFg": "rgb(196 116 110)",
+   "selection": "rgb(34 50 73)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:kanagawa-lotus",
+  "label": "Kanagawa Lotus",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(242 236 188)",
+   "surface": "rgb(232 227 180)",
+   "border": "rgb(213 206 163)",
+   "fg": "rgb(84 84 100)",
+   "muted": "rgb(124 122 114)",
+   "accent": "rgb(94 133 122)",
+   "addFg": "rgb(111 137 78)",
+   "removeFg": "rgb(200 64 83)",
+   "selection": "rgb(199 215 224)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:kanagawa-wave",
+  "label": "Kanagawa Wave",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(31 31 40)",
+   "surface": "rgb(40 40 49)",
+   "border": "rgb(65 64 66)",
+   "fg": "rgb(220 215 186)",
+   "muted": "rgb(144 141 128)",
+   "accent": "rgb(106 149 137)",
+   "addFg": "rgb(118 148 106)",
+   "removeFg": "rgb(195 64 67)",
+   "selection": "rgb(34 50 73)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:laserwave",
+  "label": "LaserWave",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(39 33 46)",
+   "surface": "rgb(48 42 54)",
+   "border": "rgb(78 73 84)",
+   "fg": "rgb(255 255 255)",
+   "muted": "rgb(169 166 171)",
+   "accent": "rgb(235 100 185)",
+   "addFg": "rgb(116 223 196)",
+   "removeFg": "rgb(179 129 197)",
+   "selection": "rgb(69 43 67)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:light-plus",
+  "label": "Light Plus",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(255 255 255)",
+   "surface": "rgb(245 245 245)",
+   "border": "rgb(212 212 212)",
+   "fg": "rgb(0 0 0)",
+   "muted": "rgb(102 102 102)",
+   "accent": "rgb(0 122 204)",
+   "addFg": "rgb(22 134 58)",
+   "removeFg": "rgb(215 58 73)",
+   "selection": "rgb(166 208 237)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:material-theme",
+  "label": "Material Theme",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(38 50 56)",
+   "surface": "rgb(47 58 64)",
+   "border": "rgb(74 87 92)",
+   "fg": "rgb(238 255 255)",
+   "muted": "rgb(108 134 146)",
+   "accent": "rgb(128 203 196)",
+   "addFg": "rgb(195 232 141)",
+   "removeFg": "rgb(240 113 120)",
+   "selection": "rgb(49 69 74)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:material-theme-darker",
+  "label": "Material Theme Darker",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(33 33 33)",
+   "surface": "rgb(42 42 42)",
+   "border": "rgb(70 73 73)",
+   "fg": "rgb(238 255 255)",
+   "muted": "rgb(120 120 120)",
+   "accent": "rgb(128 203 196)",
+   "addFg": "rgb(195 232 141)",
+   "removeFg": "rgb(240 113 120)",
+   "selection": "rgb(53 53 53)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:material-theme-lighter",
+  "label": "Material Theme Lighter",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(250 250 250)",
+   "surface": "rgb(240 240 240)",
+   "border": "rgb(229 232 232)",
+   "fg": "rgb(94 109 114)",
+   "muted": "rgb(117 138 149)",
+   "accent": "rgb(97 130 184)",
+   "addFg": "rgb(122 155 75)",
+   "removeFg": "rgb(229 57 53)",
+   "selection": "rgb(219 238 236)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:material-theme-ocean",
+  "label": "Material Theme Ocean",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(15 17 26)",
+   "surface": "rgb(25 27 35)",
+   "border": "rgb(46 48 60)",
+   "fg": "rgb(186 190 216)",
+   "muted": "rgb(111 113 123)",
+   "accent": "rgb(128 203 196)",
+   "addFg": "rgb(195 232 141)",
+   "removeFg": "rgb(240 113 120)",
+   "selection": "rgb(46 51 74)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:material-theme-palenight",
+  "label": "Material Theme Palenight",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(41 45 62)",
+   "surface": "rgb(50 53 70)",
+   "border": "rgb(67 71 90)",
+   "fg": "rgb(186 190 216)",
+   "muted": "rgb(124 128 144)",
+   "accent": "rgb(128 203 196)",
+   "addFg": "rgb(195 232 141)",
+   "removeFg": "rgb(240 113 120)",
+   "selection": "rgb(64 70 99)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:min-dark",
+  "label": "Min Dark",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(31 31 31)",
+   "surface": "rgb(26 26 26)",
+   "border": "rgb(50 50 50)",
+   "fg": "rgb(136 136 136)",
+   "muted": "rgb(114 114 114)",
+   "accent": "rgb(204 204 204)",
+   "addFg": "rgb(74 222 128)",
+   "removeFg": "rgb(248 113 113)",
+   "selection": "rgb(92 92 92)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:min-light",
+  "label": "Min Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(255 255 255)",
+   "surface": "rgb(245 245 245)",
+   "border": "rgb(224 224 224)",
+   "fg": "rgb(33 33 33)",
+   "muted": "rgb(134 134 134)",
+   "accent": "rgb(0 0 0)",
+   "addFg": "rgb(92 159 0)",
+   "removeFg": "rgb(211 47 47)",
+   "selection": "rgb(166 166 166)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:monokai",
+  "label": "Monokai",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(39 40 34)",
+   "surface": "rgb(30 31 28)",
+   "border": "rgb(65 67 57)",
+   "fg": "rgb(248 248 242)",
+   "muted": "rgb(144 144 138)",
+   "accent": "rgb(117 113 94)",
+   "addFg": "rgb(134 180 43)",
+   "removeFg": "rgb(249 38 114)",
+   "selection": "rgb(87 90 90)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:night-owl",
+  "label": "Night Owl",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(1 22 39)",
+   "surface": "rgb(11 31 48)",
+   "border": "rgb(95 126 151)",
+   "fg": "rgb(214 222 235)",
+   "muted": "rgb(95 126 151)",
+   "accent": "rgb(130 170 255)",
+   "addFg": "rgb(34 218 110)",
+   "removeFg": "rgb(239 83 80)",
+   "selection": "rgb(29 59 83)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:night-owl-light",
+  "label": "Night Owl Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(251 251 251)",
+   "surface": "rgb(241 241 241)",
+   "border": "rgb(217 217 217)",
+   "fg": "rgb(64 63 83)",
+   "muted": "rgb(139 138 150)",
+   "accent": "rgb(64 63 83)",
+   "addFg": "rgb(8 145 106)",
+   "removeFg": "rgb(222 61 59)",
+   "selection": "rgb(224 224 224)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:nord",
+  "label": "Nord",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(46 52 64)",
+   "surface": "rgb(54 60 72)",
+   "border": "rgb(77 83 94)",
+   "fg": "rgb(216 222 233)",
+   "muted": "rgb(148 154 165)",
+   "accent": "rgb(136 192 208)",
+   "addFg": "rgb(163 190 140)",
+   "removeFg": "rgb(191 97 106)",
+   "selection": "rgb(63 71 88)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:one-dark-pro",
+  "label": "One Dark Pro",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(40 44 52)",
+   "surface": "rgb(33 37 43)",
+   "border": "rgb(62 68 82)",
+   "fg": "rgb(171 178 191)",
+   "muted": "rgb(119 124 135)",
+   "accent": "rgb(97 175 239)",
+   "addFg": "rgb(140 194 101)",
+   "removeFg": "rgb(224 85 97)",
+   "selection": "rgb(64 72 89)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:one-light",
+  "label": "One Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(250 250 250)",
+   "surface": "rgb(240 240 240)",
+   "border": "rgb(219 219 220)",
+   "fg": "rgb(56 58 66)",
+   "muted": "rgb(132 132 134)",
+   "accent": "rgb(82 111 255)",
+   "addFg": "rgb(22 134 58)",
+   "removeFg": "rgb(215 58 73)",
+   "selection": "rgb(229 229 230)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:plastic",
+  "label": "Plastic",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(33 37 43)",
+   "surface": "rgb(24 26 31)",
+   "border": "rgb(57 62 70)",
+   "fg": "rgb(169 178 195)",
+   "muted": "rgb(108 114 125)",
+   "accent": "rgb(224 108 117)",
+   "addFg": "rgb(152 195 121)",
+   "removeFg": "rgb(224 108 117)",
+   "selection": "rgb(60 65 73)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:poimandres",
+  "label": "Poimandres",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(27 30 40)",
+   "surface": "rgb(36 39 49)",
+   "border": "rgb(52 56 70)",
+   "fg": "rgb(166 172 205)",
+   "muted": "rgb(125 130 156)",
+   "accent": "rgb(173 215 255)",
+   "addFg": "rgb(95 179 161)",
+   "removeFg": "rgb(208 103 157)",
+   "selection": "rgb(39 44 60)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:red",
+  "label": "Red",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(57 0 0)",
+   "surface": "rgb(51 0 0)",
+   "border": "rgb(97 20 20)",
+   "fg": "rgb(248 248 248)",
+   "muted": "rgb(170 78 78)",
+   "accent": "rgb(255 208 170)",
+   "addFg": "rgb(74 222 128)",
+   "removeFg": "rgb(248 113 113)",
+   "selection": "rgb(117 0 0)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:rose-pine",
+  "label": "Rosé Pine",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(25 23 36)",
+   "surface": "rgb(34 32 45)",
+   "border": "rgb(61 59 73)",
+   "fg": "rgb(224 222 244)",
+   "muted": "rgb(144 140 170)",
+   "accent": "rgb(196 167 231)",
+   "addFg": "rgb(156 207 216)",
+   "removeFg": "rgb(144 140 170)",
+   "selection": "rgb(42 40 56)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:rose-pine-dawn",
+  "label": "Rosé Pine Dawn",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(250 244 237)",
+   "surface": "rgb(240 234 228)",
+   "border": "rgb(227 221 221)",
+   "fg": "rgb(87 82 121)",
+   "muted": "rgb(121 117 147)",
+   "accent": "rgb(144 122 169)",
+   "addFg": "rgb(86 148 159)",
+   "removeFg": "rgb(121 117 147)",
+   "selection": "rgb(239 233 229)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:rose-pine-moon",
+  "label": "Rosé Pine Moon",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(35 33 54)",
+   "surface": "rgb(44 42 62)",
+   "border": "rgb(69 67 88)",
+   "fg": "rgb(224 222 244)",
+   "muted": "rgb(144 140 170)",
+   "accent": "rgb(196 167 231)",
+   "addFg": "rgb(156 207 216)",
+   "removeFg": "rgb(144 140 170)",
+   "selection": "rgb(49 47 69)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:slack-dark",
+  "label": "Slack Dark",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(34 34 34)",
+   "surface": "rgb(43 43 43)",
+   "border": "rgb(69 69 69)",
+   "fg": "rgb(230 230 230)",
+   "muted": "rgb(152 152 152)",
+   "accent": "rgb(0 119 181)",
+   "addFg": "rgb(236 178 46)",
+   "removeFg": "rgb(255 255 255)",
+   "selection": "rgb(22 64 85)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:slack-ochin",
+  "label": "Slack Ochin",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(255 255 255)",
+   "surface": "rgb(245 245 245)",
+   "border": "rgb(45 62 76)",
+   "fg": "rgb(0 0 0)",
+   "muted": "rgb(104 104 104)",
+   "accent": "rgb(71 86 99)",
+   "addFg": "rgb(184 139 36)",
+   "removeFg": "rgb(229 57 53)",
+   "selection": "rgb(174 212 251)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:snazzy-light",
+  "label": "Snazzy Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(250 251 252)",
+   "surface": "rgb(240 241 242)",
+   "border": "rgb(222 223 224)",
+   "fg": "rgb(86 88 105)",
+   "muted": "rgb(130 131 138)",
+   "accent": "rgb(41 161 81)",
+   "addFg": "rgb(41 160 81)",
+   "removeFg": "rgb(235 85 80)",
+   "selection": "rgb(223 241 230)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:solarized-dark",
+  "label": "Solarized Dark",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(0 43 54)",
+   "surface": "rgb(0 33 43)",
+   "border": "rgb(24 62 71)",
+   "fg": "rgb(131 148 150)",
+   "muted": "rgb(93 118 123)",
+   "accent": "rgb(4 122 166)",
+   "addFg": "rgb(133 153 0)",
+   "removeFg": "rgb(220 50 47)",
+   "selection": "rgb(39 70 66)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:solarized-light",
+  "label": "Solarized Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(253 246 227)",
+   "surface": "rgb(243 236 218)",
+   "border": "rgb(221 214 193)",
+   "fg": "rgb(86 104 111)",
+   "muted": "rgb(121 130 127)",
+   "accent": "rgb(38 139 210)",
+   "addFg": "rgb(88 110 117)",
+   "removeFg": "rgb(220 50 47)",
+   "selection": "rgb(238 232 213)",
+   "dark": false
+  }
+ },
+ {
+  "id": "shiki:synthwave-84",
+  "label": "Synthwave '84",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(38 35 53)",
+   "surface": "rgb(36 27 47)",
+   "border": "rgb(73 84 149)",
+   "fg": "rgb(255 255 255)",
+   "muted": "rgb(136 134 144)",
+   "accent": "rgb(249 126 114)",
+   "addFg": "rgb(99 200 158)",
+   "removeFg": "rgb(254 68 80)",
+   "selection": "rgb(65 63 78)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:tokyo-night",
+  "label": "Tokyo Night",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(26 27 38)",
+   "surface": "rgb(22 22 30)",
+   "border": "rgb(52 54 70)",
+   "fg": "rgb(169 177 214)",
+   "muted": "rgb(120 124 153)",
+   "accent": "rgb(97 131 187)",
+   "addFg": "rgb(68 157 171)",
+   "removeFg": "rgb(247 118 142)",
+   "selection": "rgb(43 47 65)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:vesper",
+  "label": "Vesper",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(16 16 16)",
+   "surface": "rgb(26 26 26)",
+   "border": "rgb(59 59 59)",
+   "fg": "rgb(255 255 255)",
+   "muted": "rgb(107 107 107)",
+   "accent": "rgb(255 199 153)",
+   "addFg": "rgb(74 222 128)",
+   "removeFg": "rgb(248 113 113)",
+   "selection": "rgb(51 51 51)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:vitesse-black",
+  "label": "Vitesse Black",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(0 0 0)",
+   "surface": "rgb(10 10 10)",
+   "border": "rgb(32 31 29)",
+   "fg": "rgb(175 172 162)",
+   "muted": "rgb(125 124 120)",
+   "accent": "rgb(77 147 117)",
+   "addFg": "rgb(77 147 117)",
+   "removeFg": "rgb(203 118 118)",
+   "selection": "rgb(22 22 22)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:vitesse-dark",
+  "label": "Vitesse Dark",
+  "dark": true,
+  "palette": {
+   "canvas": "rgb(18 18 18)",
+   "surface": "rgb(27 27 27)",
+   "border": "rgb(52 51 49)",
+   "fg": "rgb(206 202 190)",
+   "muted": "rgb(133 132 128)",
+   "accent": "rgb(77 147 117)",
+   "addFg": "rgb(77 147 117)",
+   "removeFg": "rgb(203 118 118)",
+   "selection": "rgb(39 39 39)",
+   "dark": true
+  }
+ },
+ {
+  "id": "shiki:vitesse-light",
+  "label": "Vitesse Light",
+  "dark": false,
+  "palette": {
+   "canvas": "rgb(255 255 255)",
+   "surface": "rgb(245 245 245)",
+   "border": "rgb(227 227 227)",
+   "fg": "rgb(57 58 52)",
+   "muted": "rgb(132 132 129)",
+   "accent": "rgb(28 107 72)",
+   "addFg": "rgb(30 117 79)",
+   "removeFg": "rgb(171 89 89)",
+   "selection": "rgb(234 234 234)",
+   "dark": false
+  }
+ }
+]

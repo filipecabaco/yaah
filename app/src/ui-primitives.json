@@ -1,0 +1,1007 @@
+{
+  "about": "Base components for agent-built UI. Rust validates trees against this file (src-tauri/src/ui_library.rs) and React renders them (src/components/ui-render.tsx). Keep the two in step when adding one. Each primitive lists the libraries it is built on in `uses`; a component's libraries are the union over the primitives it contains.",
+  "primitives": {
+    "stack": {
+      "description": "Lays children out in a row or column.",
+      "children": true,
+      "props": {
+        "direction": {
+          "type": "string",
+          "enum": [
+            "row",
+            "column"
+          ],
+          "description": "Default column."
+        },
+        "gap": {
+          "type": "string",
+          "enum": [
+            "none",
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        "align": {
+          "type": "string",
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ]
+        },
+        "justify": {
+          "type": "string",
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "between"
+          ]
+        },
+        "wrap": {
+          "type": "boolean"
+        }
+      }
+    },
+    "grid": {
+      "description": "Equal-width columns that wrap onto rows.",
+      "children": true,
+      "props": {
+        "columns": {
+          "type": "number",
+          "description": "Exactly this many columns, 1-6. Default 2."
+        },
+        "gap": {
+          "type": "string",
+          "enum": [
+            "sm",
+            "md",
+            "lg"
+          ]
+        }
+      }
+    },
+    "card": {
+      "description": "A bordered panel with an optional title and description.",
+      "children": true,
+      "props": {
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "heading": {
+      "description": "A section heading.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true
+        },
+        "level": {
+          "type": "number",
+          "description": "1-3. Default 2."
+        }
+      }
+    },
+    "text": {
+      "description": "A line or paragraph of plain text.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "default",
+            "muted",
+            "success",
+            "warning",
+            "danger"
+          ]
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "xs",
+            "sm",
+            "md",
+            "lg"
+          ]
+        },
+        "weight": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "medium",
+            "semibold"
+          ]
+        },
+        "mono": {
+          "type": "boolean"
+        }
+      }
+    },
+    "markdown": {
+      "description": "Markdown text (GitHub flavoured).",
+      "uses": [
+        "react-markdown",
+        "remark-gfm"
+      ],
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "code": {
+      "description": "A block of code or command output.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true
+        },
+        "language": {
+          "type": "string"
+        }
+      }
+    },
+    "badge": {
+      "description": "A short label, e.g. a status.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "default",
+            "secondary",
+            "outline",
+            "destructive"
+          ]
+        }
+      }
+    },
+    "stat": {
+      "description": "A headline number with a label and optional change.",
+      "children": false,
+      "props": {
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "value": {
+          "type": "string",
+          "required": true
+        },
+        "delta": {
+          "type": "string"
+        },
+        "trend": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down",
+            "flat"
+          ]
+        },
+        "hint": {
+          "type": "string"
+        }
+      }
+    },
+    "progress": {
+      "description": "A progress bar.",
+      "children": false,
+      "props": {
+        "value": {
+          "type": "number",
+          "required": true
+        },
+        "max": {
+          "type": "number",
+          "description": "Default 100."
+        },
+        "label": {
+          "type": "string"
+        }
+      }
+    },
+    "alert": {
+      "description": "A highlighted message.",
+      "children": false,
+      "props": {
+        "title": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "required": true
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "info",
+            "success",
+            "warning",
+            "danger"
+          ]
+        }
+      }
+    },
+    "chart": {
+      "description": "A bar, line or area chart over one x field and up to 5 series on a single y axis (never two y scales; put measures of different scale in separate charts). Always shows a legend for 2+ series and lets the user flip to a table of the data. More than 5 series: keep the biggest and fold the rest into an \"Other\" series.",
+      "uses": [
+        "recharts"
+      ],
+      "children": false,
+      "props": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "bar",
+            "line",
+            "area"
+          ],
+          "required": true
+        },
+        "data": {
+          "type": "array",
+          "required": true,
+          "description": "Rows, e.g. [{ month: \"Jan\", api: 120, web: 80 }]."
+        },
+        "x": {
+          "type": "string",
+          "required": true,
+          "description": "Field of each row used for the x axis."
+        },
+        "series": {
+          "type": "array",
+          "required": true,
+          "description": "[{ key, label }] — fields plotted as series, in a fixed order."
+        },
+        "stacked": {
+          "type": "boolean",
+          "description": "Stack bars/areas."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Suffix for values, e.g. \"ms\" or \"%\"."
+        },
+        "height": {
+          "type": "number",
+          "description": "Pixels. Default 240."
+        }
+      }
+    },
+    "diagram": {
+      "description": "A Mermaid diagram: sequence, flowchart (architecture, network, service maps, data flows), entity-relationship, state, class, gantt. `text` is Mermaid source. Themed with the app (light and dark), sanitised, no click handlers.",
+      "uses": [
+        "mermaid"
+      ],
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true,
+          "description": "Mermaid source, e.g. \"sequenceDiagram\\n  App->>Agent: prompt\"."
+        }
+      }
+    },
+    "map": {
+      "description": "An interactive map (OpenStreetMap tiles) with labelled markers. Fits all markers unless center/zoom are given.",
+      "uses": [
+        "leaflet",
+        "react-leaflet"
+      ],
+      "children": false,
+      "props": {
+        "markers": {
+          "type": "array",
+          "required": true,
+          "description": "[{ lat, lng, label, detail?, tone?: 'default'|'success'|'warning'|'danger' }]"
+        },
+        "center": {
+          "type": "array",
+          "description": "[lat, lng]"
+        },
+        "zoom": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number",
+          "description": "Pixels. Default 320."
+        }
+      }
+    },
+    "timer": {
+      "description": "A live clock that ticks in the app without you re-rendering: a countdown `until` a time (e.g. a cron's next run) or elapsed time `since` one (e.g. a sub-agent that is running). Times are ISO 8601 or epoch milliseconds.",
+      "children": false,
+      "props": {
+        "until": {
+          "type": "any",
+          "description": "Count down to this time."
+        },
+        "since": {
+          "type": "any",
+          "description": "Count up from this time."
+        },
+        "label": {
+          "type": "string"
+        },
+        "done": {
+          "type": "string",
+          "description": "Shown when a countdown reaches zero. Without it, the timer shows \"overdue 3m 12s\" and keeps counting, in a danger colour."
+        }
+      }
+    },
+    "live": {
+      "description": "Keeps its children fed with data the app reads itself (see `sources`), refreshed every `every` ms without you re-rendering. Children bind the latest result as {{data}} (or the name in `as`), and with `history: N` the last N samples as {{history}}: [{ t: \"14:03:21\", …the numeric fields of each sample }] for charts over time. Shows when it last updated, and errors in place.",
+      "children": true,
+      "props": {
+        "source": {
+          "type": "object",
+          "required": true,
+          "description": "A source, e.g. { kind: \"system\" } or { kind: \"postgres.query\", connection: \"shop\", sql: \"select …\" }."
+        },
+        "every": {
+          "type": "number",
+          "description": "Refresh interval in ms (minimum 1000). Omit to read once (with a refresh button)."
+        },
+        "history": {
+          "type": "number",
+          "description": "Keep this many samples as {{history}} (max 600)."
+        },
+        "as": {
+          "type": "string",
+          "description": "Name to bind the latest result to. Default \"data\"."
+        }
+      }
+    },
+    "form": {
+      "description": "Collects the user's input. Put inputs (textfield, choice, select, slider, rank, toggle) and any layout inside; it adds the submit button. Values stay in the app while the user edits (no message per click). On submit the form locks and shows the answer: with ui_ask the values come straight back to you as JSON; with ui_render they arrive as the user's next message.",
+      "children": true,
+      "props": {
+        "submitLabel": {
+          "type": "string",
+          "description": "Default \"Send\"."
+        },
+        "description": {
+          "type": "string"
+        }
+      }
+    },
+    "textfield": {
+      "description": "A text answer. `multiline` for longer text (e.g. a reply the user edits before it is sent).",
+      "children": false,
+      "props": {
+        "name": {
+          "type": "string",
+          "required": true,
+          "description": "Key of this value in the answer."
+        },
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "placeholder": {
+          "type": "string"
+        },
+        "default": {
+          "type": "string"
+        },
+        "multiline": {
+          "type": "boolean"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "choice": {
+      "description": "Pick one option (or several with `multiple`), shown as selectable cards with optional descriptions. Give `correct` (a value or list) for a quiz: once answered, right and wrong picks are marked and `explanation` is shown.",
+      "children": false,
+      "props": {
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "options": {
+          "type": "array",
+          "required": true,
+          "description": "[{ value, label, description? }]"
+        },
+        "multiple": {
+          "type": "boolean"
+        },
+        "default": {
+          "type": "any"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "correct": {
+          "type": "any"
+        },
+        "explanation": {
+          "type": "string"
+        }
+      }
+    },
+    "select": {
+      "description": "Pick one from a dropdown, for longer option lists.",
+      "children": false,
+      "props": {
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "options": {
+          "type": "array",
+          "required": true,
+          "description": "[{ value, label }]"
+        },
+        "default": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean"
+        }
+      }
+    },
+    "slider": {
+      "description": "A number in a range (budget, effort, confidence, priority).",
+      "children": false,
+      "props": {
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "min": {
+          "type": "number",
+          "required": true
+        },
+        "max": {
+          "type": "number",
+          "required": true
+        },
+        "step": {
+          "type": "number"
+        },
+        "default": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        }
+      }
+    },
+    "rank": {
+      "description": "Order items by priority (drag or use the arrows). The answer is the list of values, first = most important.",
+      "children": false,
+      "props": {
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "items": {
+          "type": "array",
+          "required": true,
+          "description": "[{ value, label, description? }]"
+        }
+      }
+    },
+    "toggle": {
+      "description": "A yes/no switch.",
+      "children": false,
+      "props": {
+        "name": {
+          "type": "string",
+          "required": true
+        },
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "description": {
+          "type": "string"
+        },
+        "default": {
+          "type": "boolean"
+        }
+      }
+    },
+    "table": {
+      "description": "Rows of data under column headers. Cells are strings or numbers. Columns sort when clicked; tables over 8 rows get a filter box, so pass all the rows rather than a sample.",
+      "uses": [
+        "@tanstack/react-table"
+      ],
+      "children": false,
+      "props": {
+        "columns": {
+          "type": "array",
+          "required": true,
+          "description": "[{ key, label, align?: 'left'|'right' }]"
+        },
+        "rows": {
+          "type": "array",
+          "required": true,
+          "description": "Objects keyed by column key."
+        },
+        "empty": {
+          "type": "string",
+          "description": "Shown when there are no rows."
+        },
+        "find": {
+          "type": "string",
+          "description": "Fill the filter box: shows only rows containing this, so you can point the user at specific rows. Update it in place (same ui_render id) to point elsewhere."
+        }
+      }
+    },
+    "kv": {
+      "description": "Label/value pairs, e.g. details of one item.",
+      "children": false,
+      "props": {
+        "items": {
+          "type": "array",
+          "required": true,
+          "description": "[{ label, value }]"
+        }
+      }
+    },
+    "list": {
+      "description": "A bulleted or numbered list of strings.",
+      "children": false,
+      "props": {
+        "items": {
+          "type": "array",
+          "required": true
+        },
+        "ordered": {
+          "type": "boolean"
+        }
+      }
+    },
+    "separator": {
+      "description": "A horizontal rule.",
+      "children": false,
+      "props": {}
+    },
+    "diff": {
+      "description": "A file change shown as removed/added lines.",
+      "uses": [
+        "yaah diff viewer"
+      ],
+      "children": false,
+      "props": {
+        "path": {
+          "type": "string",
+          "required": true
+        },
+        "oldText": {
+          "type": "string"
+        },
+        "newText": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "link": {
+      "description": "Opens a URL in the browser.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true
+        },
+        "href": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "button": {
+      "description": "A button. `prompt` sends that text to you (the agent) as the user's next message; `draft` puts text in the user's message box for them to edit and send; `href` opens a URL. Give exactly one.",
+      "children": false,
+      "props": {
+        "label": {
+          "type": "string",
+          "required": true
+        },
+        "variant": {
+          "type": "string",
+          "enum": [
+            "default",
+            "secondary",
+            "outline",
+            "ghost",
+            "destructive"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "draft": {
+          "type": "string"
+        },
+        "href": {
+          "type": "string"
+        }
+      }
+    },
+    "collapsible": {
+      "description": "A section the user can expand.",
+      "children": true,
+      "props": {
+        "title": {
+          "type": "string",
+          "required": true
+        },
+        "open": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tabs": {
+      "description": "Tabbed sections. Children must be `tab` nodes.",
+      "children": true,
+      "props": {}
+    },
+    "tab": {
+      "description": "One tab inside `tabs`.",
+      "children": true,
+      "props": {
+        "label": {
+          "type": "string",
+          "required": true
+        }
+      }
+    },
+    "image": {
+      "description": "An image, e.g. a screenshot. `src` is an https: or data: URL, or the absolute path of an image file (png, jpg, gif, webp, svg) inside this chat's folders or the system temp folder.",
+      "children": false,
+      "props": {
+        "src": {
+          "type": "string",
+          "required": true
+        },
+        "alt": {
+          "type": "string"
+        },
+        "width": {
+          "type": "number"
+        }
+      }
+    },
+    "browser": {
+      "description": "A live, interactive preview of a web page in a browser frame. `src` is an http(s) URL (e.g. a dev server on localhost) or the absolute path of a self-contained .html file inside this chat's folders. The page runs sandboxed.",
+      "children": false,
+      "props": {
+        "src": {
+          "type": "string",
+          "required": true
+        },
+        "title": {
+          "type": "string"
+        },
+        "height": {
+          "type": "number",
+          "description": "Pixels. Default 420."
+        }
+      }
+    },
+    "patch": {
+      "description": "A unified diff, e.g. the output of `git diff`, shown per file with hunks and added/removed lines.",
+      "uses": [
+        "yaah diff viewer"
+      ],
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true
+        },
+        "title": {
+          "type": "string"
+        }
+      }
+    },
+    "tests": {
+      "description": "Test results in green and red: counts, a pass/fail bar, failures first with their messages, passing tests folded away. Give the test command's raw output as `text` (cargo test, pytest -v, go test -v, jest, vitest, node --test, TAP, mix test, rspec); it is parsed here, so pass it as printed. Or give structured `results`.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "Raw output of the test run."
+        },
+        "results": {
+          "type": "array",
+          "description": "Instead of text: [{ name, status: \"pass\"|\"fail\"|\"skip\", file?, duration? (ms), message? }]."
+        },
+        "title": {
+          "type": "string",
+          "description": "e.g. \"cargo test\"."
+        },
+        "find": {
+          "type": "string",
+          "description": "Fill the filter (fuzzy on test name and file): shows the matching tests, e.g. the ones you just fixed."
+        }
+      }
+    },
+    "filetree": {
+      "description": "A folder tree you can fold, with file counts per folder. `text` is what `tree` printed (`tree -F` marks folders reliably), or give `paths` (from find, git ls-files, rg --files). Big trees open two levels deep.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "Output of `tree`."
+        },
+        "paths": {
+          "type": "array",
+          "description": "Instead of text: file paths, one per item."
+        },
+        "open": {
+          "type": "number",
+          "description": "Levels open at first. Default: all for small trees, 2 for big ones."
+        },
+        "find": {
+          "type": "string",
+          "description": "Fill the search (fuzzy on names; on the path when it has a \"/\"): opens the folders down to the matches, hides the rest and marks them. Use it to show where something lives, e.g. \"refund\" or \"src/billing/refund.rs\"."
+        }
+      }
+    },
+    "json": {
+      "description": "JSON with syntax colours, folding and sizes. `text` is JSON as printed by jq, curl or a file (several documents in a row show as a list); or pass `value`. Large values open two levels deep.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "JSON text."
+        },
+        "value": {
+          "type": "any",
+          "description": "Instead of text: any JSON value."
+        },
+        "open": {
+          "type": "number",
+          "description": "Levels open at first."
+        },
+        "find": {
+          "type": "string",
+          "description": "Fill the search: a key, a value, or a path like \"customer.email\" or \"items.0.sku\"; opens down to each match and marks it."
+        }
+      }
+    },
+    "textfile": {
+      "description": "A file or long text for reading: what `cat`, `head` or `sed -n` printed. Fits the size: short text sits inline; longer text gets line numbers, a scroll box and search. `highlight` lines or a `find` scroll the view to them. With a `path`, Markdown renders (raw toggle), CSV/TSV shows as a table and JSON as `json`.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "The text.",
+          "required": true
+        },
+        "path": {
+          "type": "string",
+          "description": "File path or name; picks the view and is shown as the title."
+        },
+        "start": {
+          "type": "number",
+          "description": "Number of the first line, e.g. 40 for `sed -n 40,80p`. Default 1."
+        },
+        "highlight": {
+          "type": "array",
+          "description": "Line numbers to mark."
+        },
+        "follow": {
+          "type": "boolean",
+          "description": "Keep the view scrolled to the last line as the text grows (logs)."
+        },
+        "find": {
+          "type": "string",
+          "description": "Fill Find: marks every line containing it and scrolls to the first; the user steps through with Enter. Use with `highlight` to point at code."
+        }
+      }
+    },
+    "wordcount": {
+      "description": "What `wc` printed, as a breakdown: totals, and a bar per file for the main count. Pass `columns` when not the default lines/words/bytes, e.g. [\"lines\"] for `wc -l`.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "Output of `wc`.",
+          "required": true
+        },
+        "columns": {
+          "type": "array",
+          "description": "Which counts each row holds, in order: \"lines\", \"words\", \"bytes\", \"chars\". Default [\"lines\",\"words\",\"bytes\"]; a single number per row means lines."
+        }
+      }
+    },
+    "gitgraph": {
+      "description": "Git history as a graph: a colour per lane, refs (HEAD, branches, remotes, tags) as badges, then hash, subject, and author and date when present. `text` is what `git log --graph --oneline --decorate` printed (add --all for every branch; add --format=\"%h%d %s (%an, %ar)\" for author and date).",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "Output of git log --graph.",
+          "required": true
+        }
+      }
+    },
+    "gitstatus": {
+      "description": "`git status` grouped: branch with ahead/behind, then conflicts, staged, unstaged and untracked files with a badge per change. `text` is what `git status --porcelain=v1 -b` printed (best), or plain `git status`.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "Output of git status.",
+          "required": true
+        }
+      }
+    },
+    "diffstat": {
+      "description": "`git diff --stat` (or `git show --stat`, `git log --stat` for one commit) as a bar of additions and deletions per file, largest first.",
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "description": "Output with --stat.",
+          "required": true
+        }
+      }
+    },
+    "sql": {
+      "description": "A SQL editor the user runs: syntax highlighting, completion of the connection's table and column names, ⌘↵ to run, results as a sortable table, a history of runs, and \"Send to chat\" to bring a query and its result back to you. Runs read-only (READ ONLY transaction, 15s timeout, row limit) on a saved connection. Give `sql` to start from; render again with the same id and new `sql` to rewrite it.",
+      "uses": [
+        "codemirror",
+        "@codemirror/lang-sql"
+      ],
+      "children": false,
+      "props": {
+        "connection": {
+          "type": "string",
+          "description": "A connection name from ui_catalog `connections`; the user can switch."
+        },
+        "sql": {
+          "type": "string",
+          "description": "The query to start from."
+        },
+        "limit": {
+          "type": "number",
+          "description": "Row limit, default 1000, max 10000."
+        },
+        "title": {
+          "type": "string",
+          "description": "What the query is for."
+        }
+      }
+    }
+  },
+  "syntax": {
+    "node": "A node is a string (text), or { type, props?, children? } where type is a primitive or a library component name, or a control node.",
+    "bindings": "Any string inside props or text can contain {{path}} to insert a value from the component's props (e.g. {{user.name}}, {{items.0}}). A string that is exactly \"{{path}}\" passes the value through unchanged, so arrays and numbers keep their type.",
+    "each": "{ each: \"path.to.array\", as: \"item\", index?: \"i\", key?: \"id\", children: [nodes] } repeats children once per element, with {{item}} and {{i}} bound. Give `key` (a field of each item) whenever the list can change or reorder between renders, so open sections and other UI state stay with their item.",
+    "if": "{ if: \"path\", children: [nodes], else?: [nodes] } renders children when the value is truthy (non-empty string/array, true, non-zero).",
+    "components": "Using a library component as a node passes its props: { type: \"deploy-status\", props: { env: \"{{env}}\" } }."
+  },
+  "sources": {
+    "about": "Data the app reads itself. Use with a `live` node (and source_read to look first). GitHub and Linear sources use the connections the user made in Settings → Integrations (read-only; you never see a token). Database sources take a `connection` name from ui_catalog `connections`; credentials never reach you.",
+    "kinds": {
+      "system": {
+        "params": {},
+        "returns": "{ host, uptimeSecs, cpu (%), cores: [%], memUsedGb, memTotalGb, memPct, swapUsedGb, load1, load5, load15, disks: [{ mount, totalGb, usedGb, pct }], processes: [{ pid, name, cpu, memGb }] (top 8 by CPU) }"
+      },
+      "docker.containers": {
+        "params": {},
+        "returns": "[{ id, name, image, state (running|exited|…), status, ports, created }]"
+      },
+      "docker.stats": {
+        "params": {
+          "container": "optional name"
+        },
+        "returns": "[{ name, cpu (%), memPct, memUsage, netIO, blockIO, pids }] (running containers)"
+      },
+      "docker.logs": {
+        "params": {
+          "container": "name (required)",
+          "tail": "lines, default 200"
+        },
+        "returns": "{ container, lines, text }"
+      },
+      "postgres.schema": {
+        "params": {
+          "connection": "name (required)"
+        },
+        "returns": "{ connection, tables: [{ schema, table, columns: [{ name, type, nullable }] }] }"
+      },
+      "postgres.query": {
+        "params": {
+          "connection": "name (required)",
+          "sql": "a query (required)",
+          "limit": "rows, default 1000, max 10000"
+        },
+        "returns": "{ connection, columns: [names in order], rows: [{ column: value }], truncated } — runs in a READ ONLY transaction with a 15s timeout"
+      },
+      "github.pr": {
+        "params": {
+          "repo": "\"owner/name\" (required)",
+          "number": "PR number (required)"
+        },
+        "returns": "{ number, title, url, body, state, stateLabel, draft, author, head, base, additions, deletions, changedFiles, review, reviewLabel, labels: [names], checks: [{ name, state: pass|fail|pending|skipped, tone, mark, url }] (failures first), checksSummary: { pass, fail, pending, skipped, text, tone }, reviews: [{ author, state, body, at }], comments: [{ author, body, at }], files: [{ path, additions, deletions }] }"
+      },
+      "github.pr.diff": {
+        "params": {
+          "repo": "\"owner/name\" (required)",
+          "number": "PR number (required)"
+        },
+        "returns": "{ repo, number, text (unified diff, for `patch`), bytes, truncated }"
+      },
+      "github.prs": {
+        "params": {
+          "repo": "\"owner/name\" (required)",
+          "state": "open (default) | closed | merged | all",
+          "limit": "default 30, max 100"
+        },
+        "returns": "[{ number, title, url, author, branch, draft, review, checks (summary text), checksTone, updatedAt }]"
+      },
+      "linear.issue": {
+        "params": {
+          "id": "issue identifier, e.g. \"ENG-142\" (required)"
+        },
+        "returns": "{ id, title, url, description, state, stateType, priority, priorityVariant (for badge), estimate, due, assignee, creator, team, teamKey, cycle, project, labels: [names], subIssues: [{ id, title, state, done }], subDone, subTotal, links: [{ title, url }], comments: [{ author, body, at }] }"
+      },
+      "linear.issues": {
+        "params": {
+          "team": "team key, e.g. \"ENG\"",
+          "assignee": "\"me\" for the user's own",
+          "state": "open (default) | all",
+          "limit": "default 50, max 250"
+        },
+        "returns": "[{ id, title, url, state, stateType, priority, priorityVariant, estimate, assignee, updatedAt }]"
+      },
+      "linear.board": {
+        "params": {
+          "team": "team key (required)"
+        },
+        "returns": "{ team, teamKey, cycle, columnCount, columns: [{ state, type, count, issues: [rows as linear.issues] }] } — the active cycle's issues by workflow state (open issues when there is no cycle)"
+      },
+      "linear.cycle": {
+        "params": {
+          "team": "team key (required)"
+        },
+        "returns": "{ team, number, name, starts, ends, daysLeft, progressPct, scope, completed, scopeAdded, issues, issuesDone, history: [{ day, scope, completed }] } — the active cycle"
+      }
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "pr-list",
+  "description": "A repository's pull requests, live through the user's GitHub connection: number, title, author, branch, review decision and a checks summary, sortable and filterable, refreshed every 2 minutes. Use to show what is open (or merged) in a repo; fill `find` to point at some.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "repo": {
+        "type": "string",
+        "description": "\"owner/name\"."
+      },
+      "state": {
+        "type": "string",
+        "description": "open (default), closed, merged or all."
+      },
+      "find": {
+        "type": "string",
+        "description": "Fill the filter to point at PRs."
+      }
+    },
+    "required": [
+      "repo"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "Pull requests",
+      "description": "{{repo}}"
+    },
+    "children": [
+      {
+        "type": "live",
+        "props": {
+          "source": {
+            "kind": "github.prs",
+            "repo": "{{repo}}",
+            "state": "{{state}}"
+          },
+          "every": 120000,
+          "as": "prs"
+        },
+        "children": [
+          {
+            "type": "table",
+            "props": {
+              "columns": [
+                {
+                  "key": "number",
+                  "label": "#",
+                  "align": "right"
+                },
+                {
+                  "key": "title",
+                  "label": "Title"
+                },
+                {
+                  "key": "review",
+                  "label": "Review"
+                },
+                {
+                  "key": "checks",
+                  "label": "Checks"
+                },
+                {
+                  "key": "author",
+                  "label": "Author"
+                }
+              ],
+              "rows": "{{prs}}",
+              "empty": "No pull requests.",
+              "find": "{{find}}"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "Open PRs",
+      "props": {
+        "repo": "supabase/realtime"
+      }
+    }
+  ]
+}

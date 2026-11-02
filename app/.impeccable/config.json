@@ -1,0 +1,15 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "side-tab",
+        "value": "*",
+        "files": ["src/index.css"],
+        "createdAt": "2026-11-01T15:29:22.810Z",
+        "reason": "Claude: flagged rule is the markdown blockquote style in agent output (2px neutral var(--border) rule), the conventional quote rendering, not a coloured card accent"
+      }
+    ]
+  }
+}

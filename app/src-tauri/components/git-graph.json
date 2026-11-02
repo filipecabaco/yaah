@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "git-graph",
+  "description": "Git history as a graph: a colour per lane, HEAD/branches/remotes/tags as badges, then hash, subject, author and date. Pass what `git log --graph --oneline --decorate` printed; add --all for every branch and --format=\"%h%d %s (%an, %ar)\" for author and date. Use to show branching, merges and where branches stand.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "Output of git log --graph."
+      },
+      "title": {
+        "type": "string",
+        "description": "Card title, e.g. what was run for."
+      },
+      "command": {
+        "type": "string",
+        "description": "The command, shown under the title."
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "{{command}}"
+    },
+    "children": [
+      {
+        "type": "gitgraph",
+        "props": {
+          "text": "{{text}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "All branches",
+      "props": {
+        "text": "* 9f2c1e7 (HEAD -> main, origin/main) Merge pull request #48 from feat/refunds (Ada Lovelace, 2 hours ago)\n|\\  \n| * 4b1d0a2 (origin/feat/refunds, feat/refunds) Handle partial refunds (Grace Hopper, 3 hours ago)\n| * 77e9c3f Add refund endpoint (Grace Hopper, 5 hours ago)\n* | c03f5e1 Bump dependencies (Ada Lovelace, 4 hours ago)\n|/  \n* 1aa8d34 (tag: v1.4.0) Release 1.4.0 (Ada Lovelace, 2 days ago)\n| * 5e6f7a8 (origin/spike/cache) Try a read-through cache (Alan Turing, 3 days ago)\n|/  \n* 0b9c8d7 Paginate orders (Alan Turing, 4 days ago)\n* e4d3c2b Initial commit (Ada Lovelace, 2 weeks ago)\n",
+        "title": "History",
+        "command": "git log --graph --all --format=\"%h%d %s (%an, %ar)\""
+      }
+    }
+  ]
+}

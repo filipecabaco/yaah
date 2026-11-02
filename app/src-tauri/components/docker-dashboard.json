@@ -1,0 +1,160 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "docker-dashboard",
+  "description": "Docker on this machine, live: every container with its state, image and ports (every 5s), and CPU and memory per running container as bars and a table (every 3s). The app reads Docker itself; no agent turn. Use when asked what is running in Docker or which container is busy.",
+  "props": {
+    "type": "object",
+    "properties": {}
+  },
+  "tree": {
+    "type": "stack",
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "Containers"
+        },
+        "children": [
+          {
+            "type": "live",
+            "props": {
+              "source": {
+                "kind": "docker.containers"
+              },
+              "every": 5000,
+              "as": "containers"
+            },
+            "children": [
+              {
+                "type": "table",
+                "props": {
+                  "columns": [
+                    {
+                      "key": "name",
+                      "label": "Name"
+                    },
+                    {
+                      "key": "state",
+                      "label": "State"
+                    },
+                    {
+                      "key": "status",
+                      "label": "Status"
+                    },
+                    {
+                      "key": "image",
+                      "label": "Image"
+                    },
+                    {
+                      "key": "ports",
+                      "label": "Ports"
+                    }
+                  ],
+                  "rows": "{{containers}}",
+                  "empty": "No containers."
+                }
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "card",
+        "props": {
+          "title": "Resource use",
+          "description": "Running containers"
+        },
+        "children": [
+          {
+            "type": "live",
+            "props": {
+              "source": {
+                "kind": "docker.stats"
+              },
+              "every": 3000,
+              "as": "stats"
+            },
+            "children": [
+              {
+                "if": "stats",
+                "children": [
+                  {
+                    "type": "chart",
+                    "props": {
+                      "kind": "bar",
+                      "data": "{{stats}}",
+                      "x": "name",
+                      "series": [
+                        {
+                          "key": "cpu",
+                          "label": "CPU"
+                        },
+                        {
+                          "key": "memPct",
+                          "label": "Memory"
+                        }
+                      ],
+                      "unit": "%",
+                      "height": 200
+                    }
+                  }
+                ],
+                "else": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "Nothing running.",
+                      "tone": "muted"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "table",
+                "props": {
+                  "columns": [
+                    {
+                      "key": "name",
+                      "label": "Name"
+                    },
+                    {
+                      "key": "cpu",
+                      "label": "CPU %",
+                      "align": "right"
+                    },
+                    {
+                      "key": "memUsage",
+                      "label": "Memory"
+                    },
+                    {
+                      "key": "netIO",
+                      "label": "Net in / out"
+                    },
+                    {
+                      "key": "blockIO",
+                      "label": "Disk read / write"
+                    },
+                    {
+                      "key": "pids",
+                      "label": "PIDs",
+                      "align": "right"
+                    }
+                  ],
+                  "rows": "{{stats}}",
+                  "empty": "No running containers."
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "This machine's Docker",
+      "props": {}
+    }
+  ]
+}

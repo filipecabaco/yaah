@@ -1,0 +1,328 @@
+//! The Tauri commands for agents, logins, projects, repos and chats. Each is a
+//! thin call into the module that owns the logic.
+#![allow(clippy::needless_pass_by_value, reason = "Tauri hands commands their arguments and state by value")]
+
+use crate::agents::{self, AgentsFile, Draft, PresetInfo, ProfileInfo, Report, Store};
+use crate::login::{self, Logins};
+use crate::projects::{Project, Projects, Status};
+use crate::session::{self, ChatTarget, Emit, Hub, SessionInfo, Transcript};
+use crate::{accounts, files, repos};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, State};
+
+/// UI events, sent through the app.
+pub fn emitter(app: AppHandle) -> Emit {
+    Arc::new(move |event: &str, payload: serde_json::Value| {
+        let _ = app.emit(event, payload);
+    })
+}
+
+// ── Agents & login ──────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentList {
+    profiles: Vec<ProfileInfo>,
+    default_id: Option<String>,
+}
+
+fn agent_list(hub: &Hub, file: AgentsFile) -> AgentList {
+    let default_id = file.default_id();
+    let profiles = file
+        .profiles
+        .into_iter()
+        .map(|p| {
+            let needs_login = hub.needs_login(&p.id);
+            agents::info(p, needs_login)
+        })
+        .collect();
+    AgentList { profiles, default_id }
+}
+
+/// Saved agent profiles (Claude accounts are migrated in on first run).
+#[tauri::command]
+pub fn list_agents(hub: State<'_, Arc<Hub>>) -> AgentList {
+    agent_list(&hub, Store::user().load())
+}
+
+/// Known ACP agents, with what is installed on this machine.
+#[tauri::command]
+pub fn list_agent_presets() -> Vec<PresetInfo> {
+    agents::presets()
+}
+
+/// Create or update a profile. An edited profile's running agent is stopped
+/// so its next chat starts with the new command.
+#[tauri::command]
+pub async fn save_agent(app: AppHandle, hub: State<'_, Arc<Hub>>, draft: Draft) -> Result<ProfileInfo, String> {
+    let (profile, replaced) = Store::user().save(&draft)?;
+    if replaced {
+        hub.drop_agent(&profile.id).await;
+    }
+    let _ = app.emit("accounts-changed", ());
+    let needs_login = hub.needs_login(&profile.id);
+    Ok(agents::info(profile, needs_login))
+}
+
+#[tauri::command]
+pub async fn remove_agent(app: AppHandle, hub: State<'_, Arc<Hub>>, id: String) -> Result<(), String> {
+    Store::user().remove(&id)?;
+    hub.drop_agent(&id).await;
+    let _ = app.emit("accounts-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_default_agent(app: AppHandle, id: String) -> Result<(), String> {
+    Store::user().set_default(&id)?;
+    let _ = app.emit("accounts-changed", ());
+    Ok(())
+}
+
+/// Start the agent a draft describes, run ACP `initialize`, and report what it
+/// said. Nothing is logged in and no session is opened. A saved profile keeps the report.
+#[tauri::command]
+pub async fn test_agent(app: AppHandle, draft: Draft) -> Result<Report, String> {
+    let profile = draft.to_profile(&[])?;
+    let report = agents::test(&profile).await?;
+    if let Some(id) = &draft.id
+        && Store::user().find(id).is_some_and(|p| p.same_command(&profile))
+    {
+        Store::user().record_report(id, &report);
+        let _ = app.emit("accounts-changed", ());
+    }
+    Ok(report)
+}
+
+#[tauri::command]
+pub async fn login_methods(hub: State<'_, Arc<Hub>>, account_id: String) -> Result<Vec<agents::AuthMethod>, String> {
+    login::methods(&hub, &account_id).await
+}
+
+#[tauri::command]
+pub async fn start_login(
+    app: AppHandle,
+    hub: State<'_, Arc<Hub>>,
+    logins: State<'_, Logins>,
+    account_id: String,
+    method_id: String,
+) -> Result<(), String> {
+    logins.start(hub.inner().clone(), emitter(app), &account_id, &method_id).await
+}
+
+#[tauri::command]
+pub async fn submit_login_code(logins: State<'_, Logins>, account_id: String, code: String) -> Result<(), String> {
+    logins.submit_code(&account_id, &code).await
+}
+
+#[tauri::command]
+pub fn cancel_login(logins: State<'_, Logins>, account_id: String) {
+    logins.cancel(&account_id);
+}
+
+// ── Projects ────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub fn list_projects(projects: State<'_, Projects>) -> Result<Vec<Project>, String> {
+    projects.list()
+}
+
+#[tauri::command]
+pub fn create_project(projects: State<'_, Projects>, name: String, dirs: Vec<String>) -> Result<Project, String> {
+    projects.create(&name, &dirs)
+}
+
+#[tauri::command]
+pub fn rename_project(projects: State<'_, Projects>, id: String, name: String) -> Result<Project, String> {
+    let name = name.trim().to_owned();
+    if name.is_empty() {
+        return Err("name can't be empty".into());
+    }
+    projects.update(&id, |p| {
+        p.name = name;
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn set_project_status(projects: State<'_, Projects>, id: String, status: Status) -> Result<Project, String> {
+    projects.update(&id, |p| {
+        p.status = status;
+        Ok(())
+    })
+}
+
+#[tauri::command]
+pub fn add_project_dir(projects: State<'_, Projects>, id: String, dir: String) -> Result<Project, String> {
+    projects.add_dir(&id, &dir)
+}
+
+#[tauri::command]
+pub fn add_project_dirs(projects: State<'_, Projects>, id: String, dirs: Vec<String>) -> Result<Project, String> {
+    projects.add_dirs(&id, &dirs)
+}
+
+#[tauri::command]
+pub fn remove_project_dir(projects: State<'_, Projects>, id: String, dir: String) -> Result<Project, String> {
+    projects.remove_dir(&id, &dir)
+}
+
+#[tauri::command]
+pub fn delete_project(projects: State<'_, Projects>, id: String) -> Result<(), String> {
+    projects.delete(&id)
+}
+
+#[tauri::command]
+pub fn read_brief(projects: State<'_, Projects>, id: String) -> Result<String, String> {
+    projects.read_brief(&id)
+}
+
+#[tauri::command]
+pub fn write_brief(projects: State<'_, Projects>, id: String, text: String) -> Result<(), String> {
+    projects.write_brief(&id, &text)
+}
+
+// ── Repos ───────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoList {
+    roots: Vec<String>,
+    repos: Vec<repos::Repo>,
+}
+
+/// Git repos under the workspace roots. Walks the disk, so off the main thread.
+#[tauri::command]
+pub async fn list_repos() -> Result<RepoList, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let roots = repos::roots();
+        let repos = repos::scan(&roots);
+        RepoList { roots, repos }
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn set_workspace_roots(roots: Vec<String>) -> Result<Vec<String>, String> {
+    repos::set_roots(roots)
+}
+
+#[tauri::command]
+pub async fn clone_repo(source: String, root: String) -> Result<repos::Repo, String> {
+    repos::clone(&source, &root).await
+}
+
+// ── Chats ───────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn new_session(
+    hub: State<'_, Arc<Hub>>,
+    projects: State<'_, Projects>,
+    project_id: String,
+    account_id: String,
+) -> Result<SessionInfo, String> {
+    let project = projects.get(&project_id)?;
+    hub.new_session(ChatTarget::Project(&project), &account_id).await
+}
+
+/// A chat outside any project: in `dir`, or a fresh scratch folder for quick work.
+#[tauri::command]
+pub async fn new_quick_chat(hub: State<'_, Arc<Hub>>, account_id: String, dir: Option<String>) -> Result<SessionInfo, String> {
+    let dir = match dir {
+        Some(d) if std::path::Path::new(&d).is_dir() => d,
+        Some(d) => return Err(format!("{d} is not a folder")),
+        None => {
+            let d = accounts::home().join(".yaah/scratch").join(&session::random_token()[..12]);
+            std::fs::create_dir_all(&d).map_err(|e| format!("create {}: {e}", d.display()))?;
+            d.to_string_lossy().into_owned()
+        }
+    };
+    hub.new_session(ChatTarget::Folder(dir), &account_id).await
+}
+
+/// File a chat under a project (or none, with `project_id` null).
+#[tauri::command]
+pub fn set_chat_project(
+    hub: State<'_, Arc<Hub>>,
+    projects: State<'_, Projects>,
+    session_id: String,
+    project_id: Option<String>,
+) -> Result<SessionInfo, String> {
+    if let Some(id) = &project_id {
+        projects.get(id)?;
+    }
+    hub.set_session_project(&session_id, project_id)
+}
+
+/// A quick chat that grew: make a project from its folder and file the chat under it.
+#[tauri::command]
+pub fn promote_chat(
+    hub: State<'_, Arc<Hub>>,
+    projects: State<'_, Projects>,
+    session_id: String,
+    name: String,
+) -> Result<(Project, SessionInfo), String> {
+    let cwd = hub.transcript(&session_id)?.info.cwd;
+    let project = projects.create(&name, &[cwd])?;
+    let info = hub.set_session_project(&session_id, Some(project.id.clone()))?;
+    Ok((project, info))
+}
+
+#[tauri::command]
+pub fn list_sessions(hub: State<'_, Arc<Hub>>) -> Vec<SessionInfo> {
+    hub.list_sessions()
+}
+
+#[tauri::command]
+pub fn get_transcript(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<Transcript, String> {
+    hub.transcript(&session_id)
+}
+
+#[tauri::command]
+pub async fn answer_ui(hub: State<'_, Arc<Hub>>, session_id: String, index: usize, values: serde_json::Value) -> Result<(), String> {
+    hub.answer_ui(&session_id, index, values).await
+}
+
+/// The user changed fields of a form they haven't sent; the agent can read and edit the same draft.
+#[tauri::command]
+pub fn edit_ui(hub: State<'_, Arc<Hub>>, session_id: String, index: usize, values: serde_json::Value) -> Result<serde_json::Value, String> {
+    hub.edit_form(&session_id, session::FormRef::Index(index), &values, "user")
+}
+
+#[tauri::command]
+pub async fn send_prompt(hub: State<'_, Arc<Hub>>, session_id: String, text: String, mentions: Option<Vec<String>>) -> Result<(), String> {
+    hub.prompt(&session_id, text, mentions.unwrap_or_default()).await
+}
+
+#[tauri::command]
+pub fn rename_session(hub: State<'_, Arc<Hub>>, session_id: String, title: String) -> Result<SessionInfo, String> {
+    hub.rename_session(&session_id, &title)
+}
+
+#[tauri::command]
+pub fn delete_session(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<(), String> {
+    hub.delete_session(&session_id)
+}
+
+/// Files in a chat's folders matching `query`, for @mentions.
+#[tauri::command]
+pub async fn search_files(
+    hub: State<'_, Arc<Hub>>,
+    session_id: String,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<files::FileMatch>, String> {
+    let roots: Vec<_> = hub.session_roots(&session_id).into_iter().filter(|r| !r.to_string_lossy().contains("/.yaah/projects/")).collect();
+    tauri::async_runtime::spawn_blocking(move || files::search(&roots, &query, limit.unwrap_or(30))).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn cancel_turn(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<(), String> {
+    hub.cancel(&session_id)
+}
+
+#[tauri::command]
+pub fn respond_permission(hub: State<'_, Arc<Hub>>, session_id: String, index: usize, option_id: Option<String>) -> Result<(), String> {
+    hub.respond_permission(&session_id, index, option_id.as_deref())
+}

@@ -1,0 +1,298 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "pr-view",
+  "description": "A GitHub pull request, live through the user's GitHub connection (Settings → Integrations): title, state, review decision, labels and size; checks with failures first; the description; the full diff in the diff viewer; reviews and comments. Refreshes every minute. Use when talking about a PR instead of pasting its details or diff.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "repo": {
+        "type": "string",
+        "description": "\"owner/name\"."
+      },
+      "number": {
+        "type": "number",
+        "description": "The PR number."
+      }
+    },
+    "required": [
+      "repo",
+      "number"
+    ]
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "github.pr",
+        "repo": "{{repo}}",
+        "number": "{{number}}"
+      },
+      "every": 60000,
+      "as": "pr"
+    },
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "#{{pr.number}} {{pr.title}}",
+          "description": "{{pr.author}} wants to merge {{pr.head}} into {{pr.base}}"
+        },
+        "children": [
+          {
+            "type": "stack",
+            "props": {
+              "direction": "row",
+              "gap": "sm",
+              "align": "center",
+              "wrap": true
+            },
+            "children": [
+              {
+                "type": "badge",
+                "props": {
+                  "text": "{{pr.stateLabel}}",
+                  "variant": "secondary"
+                }
+              },
+              {
+                "type": "badge",
+                "props": {
+                  "text": "{{pr.reviewLabel}}",
+                  "variant": "outline"
+                }
+              },
+              {
+                "each": "pr.labels",
+                "as": "label",
+                "children": [
+                  {
+                    "type": "badge",
+                    "props": {
+                      "text": "{{label}}",
+                      "variant": "outline"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "props": {
+                  "text": "+{{pr.additions}} −{{pr.deletions}} · {{pr.changedFiles}} files",
+                  "tone": "muted",
+                  "size": "sm"
+                }
+              },
+              {
+                "type": "link",
+                "props": {
+                  "text": "Open on GitHub",
+                  "href": "{{pr.url}}"
+                }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "props": {
+              "text": "Checks: {{pr.checksSummary.text}}",
+              "tone": "{{pr.checksSummary.tone}}",
+              "size": "sm",
+              "weight": "medium"
+            }
+          },
+          {
+            "if": "pr.checks",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "All {{pr.checks.length}} checks"
+                },
+                "children": [
+                  {
+                    "each": "pr.checks",
+                    "as": "c",
+                    "key": "name",
+                    "children": [
+                      {
+                        "type": "stack",
+                        "props": {
+                          "direction": "row",
+                          "gap": "sm",
+                          "align": "center"
+                        },
+                        "children": [
+                          {
+                            "type": "text",
+                            "props": {
+                              "text": "{{c.mark}}",
+                              "tone": "{{c.tone}}",
+                              "mono": true
+                            }
+                          },
+                          {
+                            "type": "text",
+                            "props": {
+                              "text": "{{c.name}}",
+                              "size": "sm"
+                            }
+                          },
+                          {
+                            "if": "c.url",
+                            "children": [
+                              {
+                                "type": "link",
+                                "props": {
+                                  "text": "details",
+                                  "href": "{{c.url}}"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "if": "pr.body",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "Description"
+                },
+                "children": [
+                  {
+                    "type": "markdown",
+                    "props": {
+                      "text": "{{pr.body}}"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "live",
+            "props": {
+              "source": {
+                "kind": "github.pr.diff",
+                "repo": "{{repo}}",
+                "number": "{{number}}"
+              },
+              "as": "diff"
+            },
+            "children": [
+              {
+                "type": "patch",
+                "props": {
+                  "text": "{{diff.text}}",
+                  "title": "Changes"
+                }
+              },
+              {
+                "if": "diff.truncated",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "The diff is long; the end is cut. Open it on GitHub for the rest.",
+                      "tone": "muted",
+                      "size": "xs"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "if": "pr.reviews",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "Reviews ({{pr.reviews.length}})",
+                  "open": true
+                },
+                "children": [
+                  {
+                    "each": "pr.reviews",
+                    "as": "r",
+                    "children": [
+                      {
+                        "type": "text",
+                        "props": {
+                          "text": "{{r.author}} · {{r.state}}",
+                          "size": "sm",
+                          "weight": "medium"
+                        }
+                      },
+                      {
+                        "if": "r.body",
+                        "children": [
+                          {
+                            "type": "markdown",
+                            "props": {
+                              "text": "{{r.body}}"
+                            }
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "if": "pr.comments",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "Comments ({{pr.comments.length}})"
+                },
+                "children": [
+                  {
+                    "each": "pr.comments",
+                    "as": "c",
+                    "children": [
+                      {
+                        "type": "text",
+                        "props": {
+                          "text": "{{c.author}}",
+                          "size": "sm",
+                          "weight": "medium"
+                        }
+                      },
+                      {
+                        "type": "markdown",
+                        "props": {
+                          "text": "{{c.body}}"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "A pull request",
+      "props": {
+        "repo": "supabase/realtime",
+        "number": 2476
+      }
+    }
+  ]
+}

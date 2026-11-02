@@ -1,0 +1,7 @@
+# Toolchain for yaah (mise). `mise install` sets it up.
+[tools]
+node = "26.11.1"
+pnpm = "12.9.1"
+rust = { version = "1.99.1", components = "clippy,rustfmt,llvm-tools-preview" }
+cargo-deny = "0.20.2"
+"cargo:cargo-llvm-cov" = "0.9.1"

@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "file-tree",
+  "description": "A folder structure as a tree you can fold, with file counts per folder. Pass what `tree` printed (tree -F marks folders best), or `paths` from find, git ls-files or rg --files. Use when showing a project's layout or where files live.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "Output of tree."
+      },
+      "paths": {
+        "type": "array",
+        "description": "Instead of text: file paths."
+      },
+      "find": {
+        "type": "string",
+        "description": "A name or path to find: opens the tree down to it and marks it. Use it to show where something lives."
+      },
+      "title": {
+        "type": "string",
+        "description": "Card title, e.g. what was run for."
+      },
+      "command": {
+        "type": "string",
+        "description": "The command, shown under the title."
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "{{command}}"
+    },
+    "children": [
+      {
+        "type": "filetree",
+        "props": {
+          "text": "{{text}}",
+          "paths": "{{paths}}",
+          "find": "{{find}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "tree -F",
+      "props": {
+        "text": ".\n├── Cargo.toml\n├── README.md\n├── src/\n│   ├── main.rs\n│   ├── api/\n│   │   ├── mod.rs\n│   │   ├── auth.rs\n│   │   └── orders.rs\n│   └── store/\n│       ├── mod.rs\n│       └── migrations.rs\n└── tests/\n    └── smoke.rs\n\n4 directories, 9 files\n",
+        "title": "Project layout",
+        "command": "tree -F"
+      }
+    },
+    {
+      "title": "Showing where the auth code lives",
+      "props": {
+        "text": ".\n├── Cargo.toml\n├── README.md\n├── src/\n│   ├── main.rs\n│   ├── api/\n│   │   ├── mod.rs\n│   │   ├── auth.rs\n│   │   └── orders.rs\n│   └── store/\n│       ├── mod.rs\n│       └── migrations.rs\n└── tests/\n    └── smoke.rs\n\n4 directories, 9 files\n",
+        "find": "auth",
+        "title": "Where auth lives",
+        "command": "tree -F"
+      }
+    },
+    {
+      "title": "git ls-files",
+      "props": {
+        "paths": [
+          "src/main.rs",
+          "src/api/mod.rs",
+          "src/api/auth.rs",
+          "src/api/orders.rs",
+          "src/store/mod.rs",
+          "tests/smoke.rs",
+          "Cargo.toml"
+        ],
+        "title": "Tracked files",
+        "command": "git ls-files"
+      }
+    }
+  ]
+}

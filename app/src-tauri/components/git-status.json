@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "git-status",
+  "description": "The working tree at a glance: branch with ahead/behind, then conflicts, staged, unstaged and untracked files, each change marked. Pass what `git status --porcelain=v1 -b` printed (best) or plain git status. Use before committing, or when explaining what changed.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "Output of git status."
+      },
+      "title": {
+        "type": "string",
+        "description": "Card title, e.g. what was run for."
+      },
+      "command": {
+        "type": "string",
+        "description": "The command, shown under the title."
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "{{command}}"
+    },
+    "children": [
+      {
+        "type": "gitstatus",
+        "props": {
+          "text": "{{text}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "Mid-merge with staged work",
+      "props": {
+        "text": "## feat/refunds...origin/feat/refunds [ahead 2]\nM  src/billing.rs\nR  src/refund.rs -> src/billing/refund.rs\nA  src/billing/partial.rs\n M README.md\nUU src/api/orders.rs\n?? notes/refunds.md\n",
+        "title": "Working tree",
+        "command": "git status --porcelain=v1 -b"
+      }
+    }
+  ]
+}

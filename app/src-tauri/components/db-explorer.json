@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "db-explorer",
+  "description": "A database's tables and columns, read by the app from a saved connection (credentials never reach the agent): one foldable section per table listing column names, types and nullability. Use to show what is in a database before querying it.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "connection": {
+        "type": "string",
+        "description": "A connection name from ui_catalog `connections`."
+      }
+    },
+    "required": [
+      "connection"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{connection}}",
+      "description": "Tables and columns"
+    },
+    "children": [
+      {
+        "type": "live",
+        "props": {
+          "source": {
+            "kind": "postgres.schema",
+            "connection": "{{connection}}"
+          },
+          "as": "schema"
+        },
+        "children": [
+          {
+            "each": "schema.tables",
+            "as": "t",
+            "key": "table",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "{{t.schema}}.{{t.table}} · {{t.columns.length}} columns"
+                },
+                "children": [
+                  {
+                    "type": "table",
+                    "props": {
+                      "columns": [
+                        {
+                          "key": "name",
+                          "label": "Column"
+                        },
+                        {
+                          "key": "type",
+                          "label": "Type"
+                        },
+                        {
+                          "key": "nullable",
+                          "label": "Nullable"
+                        }
+                      ],
+                      "rows": "{{t.columns}}"
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "The shop database",
+      "props": {
+        "connection": "shop"
+      }
+    }
+  ]
+}

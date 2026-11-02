@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "json-view",
+  "description": "JSON with syntax colours, folding and item counts, and a raw/copy toggle. Pass JSON text as printed by jq, curl or a file (several documents in a row show as a list), or a `value`. Use for API responses, config and jq results instead of pasting JSON into prose.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "JSON text."
+      },
+      "value": {
+        "description": "Instead of text: any JSON value."
+      },
+      "find": {
+        "type": "string",
+        "description": "A key, value or path (customer.email) to open and mark."
+      },
+      "title": {
+        "type": "string",
+        "description": "Card title, e.g. what was run for."
+      },
+      "command": {
+        "type": "string",
+        "description": "The command, shown under the title."
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "{{command}}"
+    },
+    "children": [
+      {
+        "type": "json",
+        "props": {
+          "text": "{{text}}",
+          "value": "{{value}}",
+          "find": "{{find}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "An API response",
+      "props": {
+        "text": "{\"id\":\"ord_1042\",\"status\":\"paid\",\"total\":{\"amount\":4999,\"currency\":\"EUR\"},\"items\":[{\"sku\":\"MUG-01\",\"qty\":2,\"price\":1499},{\"sku\":\"TEE-M\",\"qty\":1,\"price\":2001}],\"customer\":{\"id\":\"cus_77\",\"email\":\"ada@example.com\",\"vip\":true},\"refundedAt\":null}",
+        "title": "Order ord_1042",
+        "command": "curl -s localhost:4000/orders/ord_1042 | jq"
+      }
+    },
+    {
+      "title": "Pointing at a field",
+      "props": {
+        "text": "{\"id\":\"ord_1042\",\"status\":\"paid\",\"total\":{\"amount\":4999,\"currency\":\"EUR\"},\"items\":[{\"sku\":\"MUG-01\",\"qty\":2,\"price\":1499},{\"sku\":\"TEE-M\",\"qty\":1,\"price\":2001}],\"customer\":{\"id\":\"cus_77\",\"email\":\"ada@example.com\",\"vip\":true},\"refundedAt\":null}",
+        "find": "customer.email",
+        "title": "Where the email is",
+        "command": "curl -s localhost:4000/orders/ord_1042 | jq"
+      }
+    },
+    {
+      "title": "jq printing several results",
+      "props": {
+        "text": "\"ord_1042\"\n\"ord_1043\"\n\"ord_1050\"",
+        "title": "Paid orders",
+        "command": "jq '.[] | select(.status==\"paid\") | .id' orders.json"
+      }
+    }
+  ]
+}

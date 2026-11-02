@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "sql-editor",
+  "description": "A SQL editor on one of the user's database connections, for exploring data together: highlighting, completion of real table and column names, ⌘↵ to run, results as a sortable table, a history of runs, and \"Send to chat\" so the user can hand a query and its result back to you. Runs read-only. Start it with the query you suggest; render again with the same id and new `sql` to rewrite it.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "connection": {
+        "type": "string",
+        "description": "A connection name from ui_catalog `connections`."
+      },
+      "sql": {
+        "type": "string",
+        "description": "The query to start from."
+      },
+      "title": {
+        "type": "string",
+        "description": "What the query is for."
+      }
+    },
+    "required": [
+      "connection"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "SQL on {{connection}}"
+    },
+    "children": [
+      {
+        "type": "sql",
+        "props": {
+          "connection": "{{connection}}",
+          "sql": "{{sql}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "Top customers by spend",
+      "props": {
+        "connection": "shop",
+        "title": "Top customers by spend",
+        "sql": "select c.name, count(*) as orders, sum(o.quantity * p.price_cents) / 100.0 as spent\nfrom orders o\njoin customers c on c.id = o.customer_id\njoin products p on p.id = o.product_id\ngroup by c.name\norder by spent desc\nlimit 10"
+      }
+    }
+  ]
+}

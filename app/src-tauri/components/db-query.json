@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "db-query",
+  "description": "A read-only SQL query's result, run by the app on a saved connection (credentials never reach the agent; READ ONLY transaction, 15s timeout): a sortable, filterable table, an optional chart, and re-run on demand or every `every` ms. Use to show data from a database, or keep a metric live. Check the query with source_read first.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "connection": {
+        "type": "string",
+        "description": "A connection name from ui_catalog `connections`."
+      },
+      "sql": {
+        "type": "string",
+        "description": "The query."
+      },
+      "title": {
+        "type": "string",
+        "description": "What the result shows."
+      },
+      "every": {
+        "type": "number",
+        "description": "Re-run every N ms (minimum 1000). Omit to run once."
+      },
+      "chart": {
+        "type": "object",
+        "description": "Optional chart of the rows: { kind: bar|line|area, x: column, series: [{ key, label }], unit? }."
+      },
+      "find": {
+        "type": "string",
+        "description": "Fill the table's filter to point at rows."
+      }
+    },
+    "required": [
+      "connection",
+      "sql"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "{{connection}}"
+    },
+    "children": [
+      {
+        "type": "live",
+        "props": {
+          "source": {
+            "kind": "postgres.query",
+            "connection": "{{connection}}",
+            "sql": "{{sql}}"
+          },
+          "every": "{{every}}",
+          "as": "result"
+        },
+        "children": [
+          {
+            "if": "chart",
+            "children": [
+              {
+                "type": "chart",
+                "props": {
+                  "kind": "{{chart.kind}}",
+                  "data": "{{result.rows}}",
+                  "x": "{{chart.x}}",
+                  "series": "{{chart.series}}",
+                  "unit": "{{chart.unit}}"
+                }
+              }
+            ]
+          },
+          {
+            "type": "table",
+            "props": {
+              "columns": "{{result.columns}}",
+              "rows": "{{result.rows}}",
+              "empty": "No rows.",
+              "find": "{{find}}"
+            }
+          },
+          {
+            "if": "result.truncated",
+            "children": [
+              {
+                "type": "text",
+                "props": {
+                  "text": "Showing the first {{result.rows.length}} rows.",
+                  "tone": "muted",
+                  "size": "xs"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "Revenue by category",
+      "props": {
+        "connection": "shop",
+        "title": "Revenue by category",
+        "sql": "select p.category, round(sum(o.quantity * p.price_cents) / 100.0, 2)::float as revenue from orders o join products p on p.id = o.product_id group by 1 order by 2 desc",
+        "chart": {
+          "kind": "bar",
+          "x": "category",
+          "series": [
+            {
+              "key": "revenue",
+              "label": "Revenue"
+            }
+          ],
+          "unit": "$"
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "container-logs",
+  "description": "A Docker container's logs, live: the last lines with timestamps, refreshed every 3s and kept scrolled to the newest line, with search. Use when the user wants to watch a container or you need them to see an error as it happens.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "container": {
+        "type": "string",
+        "description": "Container name or id."
+      },
+      "tail": {
+        "type": "number",
+        "description": "Lines to keep. Default 200."
+      }
+    },
+    "required": [
+      "container"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{container}}",
+      "description": "docker logs"
+    },
+    "children": [
+      {
+        "type": "live",
+        "props": {
+          "source": {
+            "kind": "docker.logs",
+            "container": "{{container}}",
+            "tail": "{{tail}}"
+          },
+          "every": 3000,
+          "as": "logs"
+        },
+        "children": [
+          {
+            "type": "textfile",
+            "props": {
+              "text": "{{logs.text}}",
+              "follow": true
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "The demo database",
+      "props": {
+        "container": "yaah-pg-demo",
+        "tail": 100
+      }
+    }
+  ]
+}

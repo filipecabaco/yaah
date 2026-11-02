@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "word-count",
+  "description": "What wc printed, as a breakdown: totals for lines, words and bytes, and a bar per file. Pass the output and, for wc -l / -w / -c, which counts it holds in `columns`. Use when comparing file sizes or counting lines across files.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "Output of wc."
+      },
+      "columns": {
+        "type": "array",
+        "description": "e.g. [\"lines\"] for wc -l. Default lines, words, bytes."
+      },
+      "title": {
+        "type": "string",
+        "description": "Card title, e.g. what was run for."
+      },
+      "command": {
+        "type": "string",
+        "description": "The command, shown under the title."
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "{{command}}"
+    },
+    "children": [
+      {
+        "type": "wordcount",
+        "props": {
+          "text": "{{text}}",
+          "columns": "{{columns}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "wc over the sources",
+      "props": {
+        "text": "     120     412    3804 src/main.rs\n     342    1180   11203 src/api/orders.rs\n      88     301    2650 src/api/auth.rs\n     515    1690   17702 src/store/migrations.rs\n      41     122    1088 tests/smoke.rs\n    1106    3705   36447 total\n",
+        "title": "Source size",
+        "command": "wc src/**/*.rs tests/*.rs"
+      }
+    }
+  ]
+}

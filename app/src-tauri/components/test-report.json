@@ -1,0 +1,64 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "test-report",
+  "description": "Results of a test run in green and red: pass/fail/skip counts, a bar, failures first with their messages, passing tests folded away. Pass the test command's output exactly as printed (cargo test, pytest -v, go test -v, jest, vitest, node --test, TAP, mix test, rspec). Use after running tests, instead of summarising them in prose.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "text": {
+        "type": "string",
+        "description": "The test run's output, as printed."
+      },
+      "find": {
+        "type": "string",
+        "description": "Fill the search box to show the user where something is."
+      },
+      "title": {
+        "type": "string",
+        "description": "Card title, e.g. what was run for."
+      },
+      "command": {
+        "type": "string",
+        "description": "The command, shown under the title."
+      }
+    },
+    "required": [
+      "text"
+    ]
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "{{command}}"
+    },
+    "children": [
+      {
+        "type": "tests",
+        "props": {
+          "text": "{{text}}",
+          "find": "{{find}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "cargo test with a failure",
+      "props": {
+        "text": "running 7 tests\ntest billing::tests::rounds_to_cents ... ok\ntest billing::tests::applies_discount ... ok\ntest billing::tests::refunds_partial ... FAILED\ntest api::tests::rejects_bad_token ... ok\ntest api::tests::paginates ... ok\ntest api::tests::rate_limits ... ignored\ntest store::tests::migrates ... ok\n\nfailures:\n\n---- billing::tests::refunds_partial stdout ----\n\nthread 'billing::tests::refunds_partial' panicked at src/billing.rs:88:9:\nassertion `left == right` failed\n  left: 1250\n right: 1200\n\nfailures:\n    billing::tests::refunds_partial\n\ntest result: FAILED. 5 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.42s\n",
+        "title": "Unit tests",
+        "command": "cargo test"
+      }
+    },
+    {
+      "title": "pytest -v, all green",
+      "props": {
+        "text": "tests/test_auth.py::test_login PASSED                                     [ 20%]\ntests/test_auth.py::test_logout PASSED                                    [ 40%]\ntests/test_auth.py::test_reset_password PASSED                            [ 60%]\ntests/test_orders.py::test_create_order PASSED                            [ 80%]\ntests/test_orders.py::test_cancel_order SKIPPED (needs payments sandbox)  [100%]\n\n========================= 4 passed, 1 skipped in 1.84s =========================\n",
+        "title": "API tests",
+        "command": "pytest -v"
+      }
+    }
+  ]
+}

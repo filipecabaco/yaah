@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "linear-issues",
+  "description": "A list of Linear issues from the user's Linear connection, sortable and filterable: a team's open issues, the user's own (assignee \"me\"), or everything. Refreshes every 2 minutes; fill `find` to point at some.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "team": {
+        "type": "string",
+        "description": "Team key, e.g. \"ENG\"."
+      },
+      "assignee": {
+        "type": "string",
+        "description": "\"me\" for the user's own issues."
+      },
+      "state": {
+        "type": "string",
+        "description": "open (default) or all."
+      },
+      "title": {
+        "type": "string",
+        "description": "What the list is."
+      },
+      "find": {
+        "type": "string",
+        "description": "Fill the filter to point at issues."
+      }
+    }
+  },
+  "tree": {
+    "type": "card",
+    "props": {
+      "title": "{{title}}",
+      "description": "Linear"
+    },
+    "children": [
+      {
+        "type": "live",
+        "props": {
+          "source": {
+            "kind": "linear.issues",
+            "team": "{{team}}",
+            "assignee": "{{assignee}}",
+            "state": "{{state}}"
+          },
+          "every": 120000,
+          "as": "issues"
+        },
+        "children": [
+          {
+            "type": "table",
+            "props": {
+              "columns": [
+                {
+                  "key": "id",
+                  "label": "ID"
+                },
+                {
+                  "key": "title",
+                  "label": "Title"
+                },
+                {
+                  "key": "state",
+                  "label": "State"
+                },
+                {
+                  "key": "priority",
+                  "label": "Priority"
+                },
+                {
+                  "key": "assignee",
+                  "label": "Assignee"
+                }
+              ],
+              "rows": "{{issues}}",
+              "empty": "No issues.",
+              "find": "{{find}}"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "My open issues",
+      "props": {
+        "assignee": "me",
+        "title": "My open issues"
+      }
+    }
+  ]
+}
