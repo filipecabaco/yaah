@@ -316,6 +316,14 @@ export type Repo = {
   branch: string | null;
 };
 
+/**
+ * How far a new chat got (session.rs `StartStage`): the agent's process starting (only when it
+ * wasn't running), then `session/new`, with the MCP servers the agent starts meanwhile.
+ */
+export type StartStage = "agent" | "mcpServers" | "session";
+
+export type SessionStartingEvent = { startId: string; stage: StartStage; servers: string[] };
+
 export type SessionInfo = {
   sessionId: string;
   /** null for a quick chat outside any project. */
@@ -711,12 +719,20 @@ export const api = {
 
   // chats
   listSessions: () => invoke<SessionInfo[]>("list_sessions"),
-  /** `extraDirs`: repos chosen up front; they join the project (docs/research/chat-repos-contract.md). */
-  newSession: (projectId: string, accountId: string, extraDirs?: string[]) =>
-    invoke<SessionInfo>("new_session", { projectId, accountId, ...(extraDirs?.length ? { extraDirs } : {}) }),
+  /**
+   * `extraDirs`: repos chosen up front; they join the project (docs/research/chat-repos-contract.md).
+   * `startId`: how far it got comes as `session-starting` events with it (`events.sessionStarting`).
+   */
+  newSession: (projectId: string, accountId: string, extraDirs?: string[], startId?: string) =>
+    invoke<SessionInfo>("new_session", { projectId, accountId, ...(extraDirs?.length ? { extraDirs } : {}), ...(startId ? { startId } : {}) }),
   /** A chat outside any project: in `dir`, or a fresh scratch folder; `extraDirs`: repos chosen up front, the chat's own. */
-  newQuickChat: (accountId: string, dir?: string, extraDirs?: string[]) =>
-    invoke<SessionInfo>("new_quick_chat", { accountId, dir: dir ?? null, ...(extraDirs?.length ? { extraDirs } : {}) }),
+  newQuickChat: (accountId: string, dir?: string, extraDirs?: string[], startId?: string) =>
+    invoke<SessionInfo>("new_quick_chat", {
+      accountId,
+      dir: dir ?? null,
+      ...(extraDirs?.length ? { extraDirs } : {}),
+      ...(startId ? { startId } : {}),
+    }),
   /** Add repos to a chat as it goes: to its project when it has one, else to the chat (docs/research/chat-repos-contract.md). */
   addChatDirs: (sessionId: string, paths: string[]) => invoke<SessionInfo>("add_chat_dirs", { sessionId, paths }),
   setChatProject: (sessionId: string, projectId: string | null) => invoke<SessionInfo>("set_chat_project", { sessionId, projectId }),
@@ -774,6 +790,8 @@ export const events = {
   /** A form's shared draft changed (the user's edit or the agent's `ui_set_values`). */
   sessionDraft: (cb: (e: SessionDraftEvent) => void) => on("session-draft", cb),
   sessionInfo: (cb: (info: SessionInfo) => void) => on("session-info", cb),
+  /** How far a new chat started with a `startId` got. */
+  sessionStarting: (cb: (e: SessionStartingEvent) => void) => on("session-starting", cb),
   accountsChanged: (cb: () => void) => on("accounts-changed", cb),
   loginOutput: (cb: (e: { accountId: string; line: string }) => void) => on("login-output", cb),
   loginUrl: (cb: (e: { accountId: string; url: string }) => void) => on("login-url", cb),

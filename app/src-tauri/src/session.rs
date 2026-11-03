@@ -155,6 +155,17 @@ pub struct Notice {
     pub mcp_server: Option<String>,
 }
 
+/// How far a new chat got (`session-starting` events): the agent's process starting and
+/// `initialize` (only when it wasn't running), then `session/new`: with the MCP servers it
+/// starts meanwhile, when it has any.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum StartStage {
+    Agent,
+    McpServers,
+    Session,
+}
+
 impl Entry {
     fn error(message: impl Into<String>) -> Self {
         Entry::Error { message: message.into(), login_account: None }
@@ -1123,15 +1134,29 @@ impl Hub {
     /// the project's context folder are additional roots, and its brief goes with
     /// the first prompt. In a folder: a quick chat with just that folder.
     pub async fn new_session(&self, target: ChatTarget<'_>, account_id: &str) -> Result<SessionInfo, String> {
-        self.new_session_with(target, account_id, &[]).await
+        self.new_session_with(target, account_id, &[], None).await
     }
 
     /// [`Hub::new_session`], with folders chosen up front. A quick chat keeps them
     /// as its own (`extra_dirs`), checked like [`Hub::add_dirs`]'s. A project's go
     /// to the project before the chat starts (`commands::new_session`), so they
     /// are ignored here.
-    pub async fn new_session_with(&self, target: ChatTarget<'_>, account_id: &str, extra_dirs: &[String]) -> Result<SessionInfo, String> {
+    ///
+    /// With `start` (an id the UI picked), how far it got goes to the UI as `session-starting`
+    /// events ([`StartStage`]) while the agent starts and `session/new` runs.
+    pub async fn new_session_with(
+        &self,
+        target: ChatTarget<'_>,
+        account_id: &str,
+        extra_dirs: &[String],
+        start: Option<&str>,
+    ) -> Result<SessionInfo, String> {
         let account = self.shared.profile(account_id)?;
+        let stage = |stage: StartStage, servers: &[String]| {
+            if let Some(id) = start {
+                (self.shared.app)("session-starting", json!({ "startId": id, "stage": stage, "servers": servers }));
+            }
+        };
         let (cwd, additional_dirs, extra_dirs, project) = match target {
             ChatTarget::Project(p) => (p.cwd(), p.additional_dirs(), vec![], Some(p)),
             ChatTarget::Folder(dir) => {
@@ -1139,6 +1164,9 @@ impl Hub {
                 (dir, extra.clone(), extra, None)
             }
         };
+        if self.live_agent(&account.id).is_none() {
+            stage(StartStage::Agent, &[]);
+        }
         let agent = self.agent(&account).await?;
         if !additional_dirs.is_empty() && !agent.caps.additional_dirs {
             return Err("this agent can't work across several folders (no additionalDirectories support)".into());
@@ -1149,7 +1177,9 @@ impl Hub {
         }
         let ui_token = random_token();
         let guide = self.add_ui_server(&agent, &ui_token, None, &mut params);
-        crate::mcp_servers::inject(&mut params, agent.caps.mcp_http, agent.caps.mcp_sse, &account);
+        let servers = crate::mcp_servers::inject(&mut params, agent.caps.mcp_http, agent.caps.mcp_sse, &account);
+        // The agent starts its MCP servers while it opens the session, in the one `session/new`.
+        stage(if servers.is_empty() { StartStage::Session } else { StartStage::McpServers }, &servers);
 
         let res = agent.conn.request("session/new", params).await;
         let session_id = res
@@ -1898,6 +1928,38 @@ fn push_notice(shared: &Shared, s: &mut Session, notice: Notice) {
     shared.push(s, Entry::Notices { items: vec![notice] });
 }
 
+/// codex-acp reports MCP startup as failed tool calls titled `mcp__<server>__startup` (ids
+/// `mcp_startup.…`): a server it didn't start because Codex's config already has one by that
+/// name, or one that failed or was cancelled. They are notices, not tool calls: the first an
+/// info line, the others in the chat's MCP notices.
+fn mcp_startup_notice(update: &Value) -> Option<Notice> {
+    let title = update["title"].as_str().unwrap_or_default();
+    let server = title.strip_prefix("mcp__").and_then(|t| t.strip_suffix("__startup"));
+    let by_id = update["toolCallId"].as_str().is_some_and(|id| id.starts_with("mcp_startup."));
+    let failed_startup = server.is_some() && update["status"] == "failed";
+    if !by_id && !failed_startup {
+        return None;
+    }
+    let server = server.or_else(|| update["toolCallId"].as_str()?.strip_prefix("mcp_startup.")?.split('.').next()).unwrap_or("?").to_owned();
+    let message = update["content"].as_array().into_iter().flatten().filter_map(|c| c["content"]["text"].as_str()).collect::<Vec<_>>().join("\n");
+    let quoted = format!("MCP server \"{server}\"");
+    let notice = |severity: &str, title: String, description: Option<String>| Notice {
+        severity: severity.into(),
+        title,
+        description,
+        mcp_server: Some(server.clone()),
+    };
+    if message.contains("already defines an MCP server with this name") {
+        return Some(notice("info", format!("Codex uses its own {server}"), None));
+    }
+    if message.contains("startup was cancelled") {
+        return Some(notice("warning", format!("{quoted} startup was cancelled"), None));
+    }
+    // "[codex-acp forwarded startup error] MCP server `x` failed to start: <why>"
+    let why = message.split_once("failed to start:").map_or(message.as_str(), |(_, w)| w).trim();
+    Some(notice("warning", format!("{quoted} didn't start"), Some(why.to_owned()).filter(|w| !w.is_empty())))
+}
+
 fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
     if s.replaying {
         return;
@@ -1914,6 +1976,11 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
         let severity = if claude_meta["status"] == "failed" { "warning" } else { "info" };
         let mcp_server = claude_meta["server"].as_str().map(str::to_owned);
         return push_notice(shared, s, Notice { severity: severity.into(), title, description, mcp_server });
+    }
+    if matches!(kind, "tool_call" | "tool_call_update")
+        && let Some(notice) = mcp_startup_notice(update)
+    {
+        return push_notice(shared, s, notice);
     }
     match kind {
         "notice" => {
@@ -2791,6 +2858,87 @@ mod live_tests {
 
     include!("live_ui_review.rs");
     include!("live_adapter_tests.rs");
+
+    /// How long a chat takes to open with `YAAH_LIVE_ACCOUNT`'s agent (meant for Codex): spawn,
+    /// `initialize`, `session/new`, then what it reports about MCP startup in the next 30 s (`YAAH_LIVE_WAIT`).
+    /// Three fresh processes: the servers yaah passed in 0.3.0 (Codex's own names again), the
+    /// ones it passes now, and none. No prompt is sent; the profile is only read.
+    ///
+    /// ```sh
+    /// YAAH_LIVE_ACCOUNT=codex cargo test --lib live_session_start_timing -- --ignored --nocapture
+    /// ```
+    ///
+    /// `YAAH_LIVE_ROUNDS=3` runs the three that many times.
+    #[test]
+    #[ignore = "starts the real agent"]
+    fn live_session_start_timing() {
+        let account = std::env::var("YAAH_LIVE_ACCOUNT").unwrap_or_else(|_| "codex".into());
+        let profile = Store::user().find(&account).unwrap_or_else(|| panic!("YAAH_LIVE_ACCOUNT={account} names no agent"));
+        let cwd = std::env::temp_dir().join(format!("yaah-live-timing-{}", random_token()));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let env_num = |k: &str, d: u64| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+        let (rounds, wait) = (env_num("YAAH_LIVE_ROUNDS", 1), env_num("YAAH_LIVE_WAIT", 30));
+        let variants = ["0.3.0 (duplicates)", "now (deduplicated)", "no servers"];
+        for variant in (0..rounds).flat_map(|_| variants) {
+            tauri::async_runtime::block_on(async {
+                let t0 = Instant::now();
+                let log: Arc<Mutex<Vec<String>>> = Arc::default();
+                let seen = log.clone();
+                let (conn, _) = agents::spawn_routed(
+                    &profile,
+                    move |msg, responder| {
+                        let at = t0.elapsed().as_secs_f64();
+                        match msg {
+                            Incoming::Notification { method, params } => {
+                                let u = &params["update"];
+                                if u["sessionUpdate"] == "tool_call" || u["sessionUpdate"] == "notice" {
+                                    let what = u["title"].as_str().unwrap_or_default().to_owned();
+                                    seen.lock().unwrap().push(format!("{at:6.2}s {method} {} {what} {}", u["sessionUpdate"], u["status"]));
+                                }
+                            }
+                            Incoming::Request { id, method, .. } => {
+                                seen.lock().unwrap().push(format!("{at:6.2}s request {method}"));
+                                responder.err(id, -32601, "not in this test");
+                            }
+                        }
+                    },
+                    |_| {},
+                    &[],
+                )
+                .expect("spawn");
+                let init = agents::initialize(&conn).await.expect("initialize");
+                let t_init = t0.elapsed();
+                let caps = Report::from_initialize(&init);
+                let mut params = json!({ "cwd": cwd, "mcpServers": [] });
+                let starting = match variant {
+                    "0.3.0 (duplicates)" => {
+                        let mine: Vec<_> = crate::mcp_servers::Store::user().list().into_iter().filter(|s| s.for_profile(&profile.id)).collect();
+                        params["mcpServers"] = json!(crate::mcp_servers::for_agent(&mine, caps.mcp_http, caps.mcp_sse).0);
+                        vec![]
+                    }
+                    "now (deduplicated)" => crate::mcp_servers::inject(&mut params, caps.mcp_http, caps.mcp_sse, &profile),
+                    _ => vec![],
+                };
+                let given: Vec<&str> = params["mcpServers"].as_array().unwrap().iter().filter_map(|s| s["name"].as_str()).collect();
+                println!("\n== {variant}: passing {given:?}; starting {starting:?}");
+                let t1 = Instant::now();
+                let res = conn.request("session/new", params.clone()).await;
+                let t_new = t1.elapsed();
+                println!(
+                    "spawn + initialize {:.2}s, session/new {:.2}s ({})",
+                    t_init.as_secs_f64(),
+                    t_new.as_secs_f64(),
+                    if res.is_ok() { "ok" } else { "failed" }
+                );
+                tokio::time::sleep(Duration::from_secs(wait)).await;
+                for line in log.lock().unwrap().iter() {
+                    println!("  {line}");
+                }
+                let _ = conn.shutdown(Duration::from_secs(5)).await;
+            });
+        }
+        std::fs::remove_dir_all(&cwd).ok();
+    }
 }
 
 #[cfg(test)]
@@ -3103,6 +3251,45 @@ mod stream_tests {
             hub.shared.auth_status_update(kind, &json!({ "authStatus": { "kind": kind } }));
             assert!(!hub.needs_login(kind) && hub.auth_status(kind).unwrap().ready(), "{kind}");
         }
+    }
+
+    /// codex-acp's MCP startup reports, as it sends them (`McpStartupReporter`).
+    fn codex_startup(server: &str, message: &str) -> Value {
+        json!({
+            "sessionUpdate": "tool_call",
+            "toolCallId": format!("mcp_startup.{server}.6f1c"),
+            "kind": "other",
+            "title": format!("mcp__{server}__startup"),
+            "status": "failed",
+            "content": [{ "type": "content", "content": { "type": "text", "text": message } }],
+        })
+    }
+
+    #[test]
+    fn codex_mcp_startup_reports_are_notices_not_failed_tool_calls() {
+        let (hub, _) = hub(COALESCE);
+        update(
+            &hub,
+            &codex_startup(
+                "chrome-devtools",
+                "[codex-acp] MCP server `chrome-devtools` was not started, because the Codex config already defines an MCP server with this name. Codex uses its own entry, or no server if that entry is disabled.",
+            ),
+        );
+        update(&hub, &codex_startup("rea", "[codex-acp forwarded startup error] MCP server `rea` failed to start: handshake timed out after 30s"));
+        update(&hub, &codex_startup("fetch", "[codex-acp forwarded startup error] MCP server `fetch` startup was cancelled."));
+        // An ordinary tool call stays one.
+        update(&hub, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "mcp__fetch__fetch", "status": "failed" }));
+        let entries = hub.shared.with("s", |s| s.entries.iter().map(|e| serde_json::to_value(&**e).unwrap()).collect::<Vec<_>>()).unwrap();
+        assert_eq!(entries.len(), 2, "{entries:#?}");
+        assert_eq!(
+            entries[0],
+            json!({ "type": "notices", "items": [
+                { "severity": "info", "title": "Codex uses its own chrome-devtools", "mcpServer": "chrome-devtools" },
+                { "severity": "warning", "title": "MCP server \"rea\" didn't start", "description": "handshake timed out after 30s", "mcpServer": "rea" },
+                { "severity": "warning", "title": "MCP server \"fetch\" startup was cancelled", "mcpServer": "fetch" },
+            ] })
+        );
+        assert_eq!(entries[1]["type"], "tool");
     }
 
     fn chunk(hub: &Hub, text: &str, thought: bool) {

@@ -42,7 +42,7 @@ import { api, type Entry, type ToolContent } from "@/lib/api";
 import { openComponent, openSettings } from "@/lib/app-events";
 import { baseName, compactPath, elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
-import { readToolText } from "@/lib/tool-output";
+import { readToolText, toolTextLayout } from "@/lib/tool-output";
 import { cn } from "@/lib/utils";
 import { toolLabel } from "@/lib/ui-tool-label";
 
@@ -273,9 +273,9 @@ function ToolCall({ entry, turnActive }: { entry: Of<"tool">; turnActive: boolea
         <CollapsibleContent>
           <div className="flex flex-col gap-2 border-t px-3 py-2">
             {entry.content.length > 0 ? (
-              entry.content.map((c, i) => <ToolContentView key={i} content={c} />)
+              entry.content.map((c, i) => <ToolContentView key={i} content={c} failed={entry.status === "failed"} />)
             ) : (
-              <Pre>{JSON.stringify(entry.rawInput, null, 2)}</Pre>
+              <Pre layout="code">{JSON.stringify(entry.rawInput, null, 2)}</Pre>
             )}
           </div>
         </CollapsibleContent>
@@ -295,10 +295,10 @@ function toolPaths(entry: Of<"tool">): string[] {
   return [...new Set(paths.filter(Boolean))];
 }
 
-function ToolContentView({ content }: { content: ToolContent }) {
+function ToolContentView({ content, failed }: { content: ToolContent; failed: boolean }) {
   switch (content.type) {
     case "content":
-      return content.content.text == null ? <Pre>{`[${content.content.type}]`}</Pre> : <ToolText raw={content.content.text} />;
+      return content.content.text == null ? <Pre>{`[${content.content.type}]`}</Pre> : <ToolText raw={content.content.text} failed={failed} />;
     case "diff":
       return <TextDiff path={content.path} oldText={content.oldText ?? ""} newText={content.newText} />;
     case "terminal":
@@ -306,11 +306,21 @@ function ToolContentView({ content }: { content: ToolContent }) {
   }
 }
 
-/** A tool's text: a code fence shows as code (no fence markers), a unified diff in the diff view (with the raw text a click away). */
-export function ToolText({ raw }: { raw: string }) {
+/**
+ * A tool's text: a code fence shows as code (no fence markers), a unified diff in the diff view
+ * (with the raw text a click away), anything else (messages, errors) wrapped; a failed call's in
+ * the destructive colour.
+ */
+export function ToolText({ raw, failed = false }: { raw: string; failed?: boolean }) {
   const shown = useMemo(() => readToolText(raw), [raw]);
   const [asText, setAsText] = useState(false);
-  if (!shown.diff) return <Pre>{shown.text}</Pre>;
+  const layout = toolTextLayout(shown);
+  if (layout !== "diff")
+    return (
+      <Pre layout={layout} failed={failed}>
+        {shown.text}
+      </Pre>
+    );
   return (
     <div className="flex flex-col gap-1">
       <div className="flex justify-end">
@@ -318,14 +328,28 @@ export function ToolText({ raw }: { raw: string }) {
           {asText ? "Diff view" : "Raw"}
         </Button>
       </div>
-      {asText ? <Pre>{shown.text}</Pre> : <PatchView text={shown.text} />}
+      {asText ? <Pre layout="code">{shown.text}</Pre> : <PatchView text={shown.text} />}
     </div>
   );
 }
 
-/** Code or command output as printed: one line per line (scroll sideways), tabs 4 wide. */
-function Pre({ children }: { children: string }) {
-  return <pre className="max-h-96 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre [tab-size:4]">{children}</pre>;
+/**
+ * A tool's text, as tall as it is up to 24 rem (then it scrolls). Code keeps one line per line and
+ * scrolls sideways, tabs 4 wide, with room below the last line for the scrollbar; prose wraps.
+ */
+function Pre({ children, layout = "prose", failed = false }: { children: string; layout?: "code" | "prose"; failed?: boolean }) {
+  return (
+    <pre
+      data-layout={layout}
+      className={cn(
+        "max-h-96 rounded-md bg-muted px-2 pt-2 font-mono text-xs leading-5 [tab-size:4]",
+        layout === "code" ? "overflow-auto pb-3 whitespace-pre" : "overflow-y-auto pb-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap",
+        failed && "bg-destructive/5 text-destructive",
+      )}
+    >
+      {children}
+    </pre>
+  );
 }
 
 function Plan({ entry }: { entry: Of<"plan"> }) {
@@ -434,7 +458,24 @@ function ErrorEntry({ entry, onLogin }: { entry: Of<"error">; onLogin: (accountI
 
 /** What the agent flagged outside its reply: MCP servers that didn't start or need signing in, and the like. */
 function NoticesEntry({ entry }: { entry: Of<"notices"> }) {
-  const items = entry.items;
+  // An MCP server that's fine, only not yaah's ("Codex uses its own fetch"): one quiet line each.
+  const infoLines = entry.items.filter((n) => n.mcpServer && n.severity === "info");
+  const items = entry.items.filter((n) => !infoLines.includes(n));
+  return (
+    <>
+      {infoLines.map((n, i) => (
+        <p key={i} role="status" className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Info className="size-3.5 shrink-0" aria-hidden />
+          {n.title}
+          {n.description && <span>· {n.description}</span>}
+        </p>
+      ))}
+      {items.length > 0 && <NoticesCard items={items} />}
+    </>
+  );
+}
+
+function NoticesCard({ items }: { items: Of<"notices">["items"] }) {
   const mcp = items.filter((n) => n.mcpServer);
   const warn = items.some((n) => n.severity !== "info");
   const summary =

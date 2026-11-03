@@ -40,3 +40,12 @@ export function isUnifiedDiff(text: string): boolean {
   if (/^diff --git /.test(t)) return true;
   return /^--- \S.*\n\+\+\+ \S.*\n@@ /.test(t);
 }
+
+/**
+ * How a card lays a tool's text out. Only a real code block (a fence) and a diff keep their
+ * lines as printed and scroll sideways; anything else (messages, errors, prose) wraps.
+ */
+export function toolTextLayout(t: ToolText): "diff" | "code" | "prose" {
+  if (t.diff) return "diff";
+  return t.fenced ? "code" : "prose";
+}

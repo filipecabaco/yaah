@@ -467,21 +467,275 @@ pub fn for_agent(servers: &[Server], http: bool, sse: bool) -> (Vec<Value>, Vec<
 
 /// Append the user's servers to `params.mcpServers` (session/new, session/load).
 /// What an agent can't take is logged (names only) and shown in Settings.
-pub fn inject(params: &mut Value, http: bool, sse: bool, agent: &agents::Profile) {
-    // A Claude agent already loads the servers in its own .claude.json: passing them again
-    // starts each twice (and reports each failure twice).
-    let own: Vec<Server> = if agent.preset == "claude" {
-        let dir = agent.config_dir.as_ref().map_or_else(accounts::home, PathBuf::from);
-        read_source(&dir.join(".claude.json")).into_iter().map(|(_, s)| s).collect()
-    } else {
-        vec![]
-    };
-    let mine: Vec<Server> = Store::user().list().into_iter().filter(|s| s.for_profile(&agent.id) && !own.iter().any(|o| same_target(o, s))).collect();
+///
+/// Returns the names of the MCP servers the session will start: the agent's own
+/// (from its config) and the ones given here, yaah's UI server left out. The
+/// chat's loading state lists them while `session/new` runs.
+pub fn inject(params: &mut Value, http: bool, sse: bool, agent: &agents::Profile) -> Vec<String> {
+    let env = Env { home: accounts::home(), codex_home: std::env::var("CODEX_HOME").ok() };
+    inject_from(params, http, sse, agent, Store::user().list(), &env)
+}
+
+/// Where agents keep their own config: the home folder, and yaah's own `CODEX_HOME` (the agent inherits it).
+struct Env {
+    home: PathBuf,
+    codex_home: Option<String>,
+}
+
+fn inject_from(params: &mut Value, http: bool, sse: bool, agent: &agents::Profile, servers: Vec<Server>, env: &Env) -> Vec<String> {
+    let cwd = params["cwd"].as_str().map(PathBuf::from);
+    let own = OwnServers::of(agent, env, cwd.as_deref());
+    let mine: Vec<Server> = servers.into_iter().filter(|s| s.for_profile(&agent.id) && !own.covers(s)).collect();
     let (servers, skipped) = for_agent(&mine, http, sse);
     for note in skipped {
         eprintln!("[mcp] not given to {}: {note}", agent.label);
     }
+    let mut starting = own.enabled;
+    for s in &servers {
+        if let Some(name) = s["name"].as_str()
+            && !starting.iter().any(|n| n == name)
+        {
+            starting.push(name.to_owned());
+        }
+    }
     append(params, servers);
+    starting
+}
+
+/// The MCP servers an agent loads from its own config, which yaah mustn't pass again.
+#[derive(Debug, Default)]
+struct OwnServers {
+    /// A Claude agent's (`.claude.json`): the same command or URL is the same server.
+    claude: Vec<Server>,
+    /// A Codex agent's (`config.toml`): codex-acp skips a requested server whose name its
+    /// config already defines, and reports each as a failed tool call. Disabled entries count.
+    codex: Vec<String>,
+    /// The ones it starts itself, by name.
+    enabled: Vec<String>,
+}
+
+impl OwnServers {
+    fn of(agent: &agents::Profile, env: &Env, cwd: Option<&Path>) -> Self {
+        match agent.preset.as_str() {
+            // A Claude agent already loads the servers in its own .claude.json: passing them again
+            // starts each twice (and reports each failure twice).
+            "claude" => {
+                let dir = agent.config_dir.as_ref().map_or_else(|| env.home.clone(), PathBuf::from);
+                let claude: Vec<Server> = read_source(&dir.join(".claude.json")).into_iter().map(|(_, s)| s).collect();
+                let enabled = claude.iter().filter(|s| s.enabled).map(|s| s.name.clone()).collect();
+                Self { claude, codex: vec![], enabled }
+            }
+            "codex" => {
+                let found = codex_servers(&codex_config_files(&codex_home(agent, env), Path::new(CODEX_SYSTEM_CONFIG), cwd));
+                let enabled = found.iter().filter(|(_, on)| *on).map(|(n, _)| n.clone()).collect();
+                Self { claude: vec![], codex: found.into_iter().map(|(n, _)| n).collect(), enabled }
+            }
+            _ => Self::default(),
+        }
+    }
+
+    fn covers(&self, s: &Server) -> bool {
+        self.codex.contains(&s.name) || self.claude.iter().any(|o| same_target(o, s))
+    }
+}
+
+// ── Codex's own servers ─────────────────────────────────────────────────────
+
+/// Codex's system-wide config layer.
+const CODEX_SYSTEM_CONFIG: &str = "/etc/codex/config.toml";
+
+/// Where a Codex profile keeps its config: `CODEX_HOME` from the profile's env, else from
+/// yaah's own environment (the agent inherits it), else `~/.codex`.
+fn codex_home(agent: &agents::Profile, env: &Env) -> PathBuf {
+    agent
+        .env
+        .get("CODEX_HOME")
+        .cloned()
+        .or_else(|| env.codex_home.clone())
+        .filter(|h| !h.trim().is_empty())
+        .map_or_else(|| env.home.join(".codex"), PathBuf::from)
+}
+
+/// The config files Codex layers for a session in `cwd`: the system one, the user's
+/// (`$CODEX_HOME/config.toml`), then each `.codex/config.toml` from the project root (the
+/// nearest folder up from `cwd` with a `.git`, else `cwd` itself) down to `cwd`.
+fn codex_config_files(codex_home: &Path, system: &Path, cwd: Option<&Path>) -> Vec<PathBuf> {
+    let mut files = vec![system.to_path_buf(), codex_home.join("config.toml")];
+    if let Some(cwd) = cwd {
+        let root = cwd.ancestors().find(|d| d.join(".git").exists()).unwrap_or(cwd);
+        let mut project: Vec<PathBuf> = cwd.ancestors().take_while(|d| d.starts_with(root)).map(|d| d.join(".codex/config.toml")).collect();
+        project.reverse();
+        for f in project {
+            if !files.contains(&f) {
+                files.push(f);
+            }
+        }
+    }
+    files
+}
+
+/// (name, enabled) for each MCP server the files define, the later file winning on `enabled`.
+fn codex_servers(files: &[PathBuf]) -> Vec<(String, bool)> {
+    let mut out: Vec<(String, bool)> = vec![];
+    for file in files {
+        let Ok(text) = std::fs::read_to_string(file) else { continue };
+        for (name, enabled) in toml_mcp_servers(&text) {
+            match out.iter_mut().find(|(n, _)| *n == name) {
+                Some(slot) => slot.1 = enabled.unwrap_or(slot.1),
+                None => out.push((name, enabled.unwrap_or(true))),
+            }
+        }
+    }
+    out
+}
+
+/// The `mcp_servers` names in a Codex `config.toml`, with `enabled` when it is set.
+///
+/// Not a TOML parser: it reads table headers (`[mcp_servers.<name>]`, `[mcp_servers]` then
+/// `<name> = { … }`) and dotted keys (`mcp_servers.<name>.command = …`), and skips what
+/// could look like one inside a multi-line string or array. Values are never kept.
+fn toml_mcp_servers(text: &str) -> Vec<(String, Option<bool>)> {
+    let mut out: Vec<(String, Option<bool>)> = vec![];
+    let mut add = |name: &str, enabled: Option<bool>| match out.iter_mut().find(|(n, _)| n == name) {
+        Some(slot) => slot.1 = enabled.or(slot.1),
+        None => out.push((name.to_owned(), enabled)),
+    };
+    let mut table: Vec<String> = vec![];
+    let mut scan = TomlScan::default();
+    for line in text.lines() {
+        if scan.open() {
+            scan.feed(line);
+            continue;
+        }
+        let trimmed = line.trim_start();
+        if trimmed.starts_with('[') {
+            let header = trimmed.trim_start_matches('[');
+            table = toml_key(header, ']').map(|(k, _)| k).unwrap_or_default();
+            if table.first().is_some_and(|t| t == "mcp_servers")
+                && let Some(name) = table.get(1)
+            {
+                add(name, None);
+            }
+            continue;
+        }
+        let Some((key, value)) = toml_key(trimmed, '=') else { continue };
+        let path: Vec<&str> = table.iter().chain(&key).map(String::as_str).collect();
+        if let ["mcp_servers", name, rest @ ..] = path.as_slice() {
+            let value = value.trim_start();
+            let enabled = match rest {
+                ["enabled"] => toml_bool(value),
+                // `name = { command = "…", enabled = false }`
+                [] => value
+                    .split(['{', ','])
+                    .find_map(|kv| kv.split_once('=').filter(|(k, _)| k.trim() == "enabled").and_then(|(_, v)| toml_bool(v.trim()))),
+                _ => None,
+            };
+            add(name, enabled);
+        }
+        scan.feed(value);
+    }
+    out
+}
+
+fn toml_bool(value: &str) -> Option<bool> {
+    let word: String = value.chars().take_while(char::is_ascii_alphabetic).collect();
+    match word.as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// A dotted TOML key (`a."b.c".'d'`) up to `end` (`=` for a key/value line, `]` for a header),
+/// and what follows `end`. None when it isn't one.
+fn toml_key(s: &str, end: char) -> Option<(Vec<String>, &str)> {
+    let mut keys = vec![];
+    let mut rest = s.trim_start();
+    loop {
+        let first = rest.chars().next()?;
+        let (key, after) = if first == '"' || first == '\'' {
+            let close = rest[1..].find(first)? + 1;
+            (rest[1..close].to_owned(), &rest[close + 1..])
+        } else {
+            let len = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-')).unwrap_or(rest.len());
+            if len == 0 {
+                return None;
+            }
+            (rest[..len].to_owned(), &rest[len..])
+        };
+        keys.push(key);
+        rest = after.trim_start();
+        if let Some(r) = rest.strip_prefix('.') {
+            rest = r.trim_start();
+        } else {
+            return Some((keys, rest.strip_prefix(end)?));
+        }
+    }
+}
+
+/// Whether a TOML value goes on past its line: an open multi-line string or array.
+#[derive(Default)]
+struct TomlScan {
+    /// Open `[` and `{`.
+    depth: usize,
+    /// The delimiter of an open multi-line string.
+    string: Option<&'static str>,
+}
+
+impl TomlScan {
+    fn open(&self) -> bool {
+        self.depth > 0 || self.string.is_some()
+    }
+
+    fn feed(&mut self, line: &str) {
+        let mut rest = line;
+        loop {
+            if let Some(delim) = self.string {
+                let Some(end) = rest.find(delim) else { return };
+                rest = &rest[end + delim.len()..];
+                self.string = None;
+            }
+            let Some(i) = rest.find(['"', '\'', '[', ']', '{', '}', '#']) else { return };
+            let c = rest.as_bytes()[i];
+            rest = &rest[i..];
+            match c {
+                b'#' => return,
+                b'[' | b'{' => {
+                    self.depth += 1;
+                    rest = &rest[1..];
+                }
+                b']' | b'}' => {
+                    self.depth = self.depth.saturating_sub(1);
+                    rest = &rest[1..];
+                }
+                _ => {
+                    for delim in ["\"\"\"", "'''"] {
+                        if let Some(r) = rest.strip_prefix(delim) {
+                            self.string = Some(delim);
+                            rest = r;
+                        }
+                    }
+                    if self.string.is_some() {
+                        continue;
+                    }
+                    // A one-line string: up to its closing quote (basic strings escape with `\`).
+                    let q = c as char;
+                    let mut chars = rest[1..].char_indices();
+                    let mut close = None;
+                    while let Some((j, ch)) = chars.next() {
+                        if ch == '\\' && q == '"' {
+                            chars.next();
+                        } else if ch == q {
+                            close = Some(j + 2);
+                            break;
+                        }
+                    }
+                    let Some(close) = close else { return };
+                    rest = &rest[close..];
+                }
+            }
+        }
+    }
 }
 
 fn append(params: &mut Value, servers: Vec<Value>) {
@@ -1268,6 +1522,128 @@ mod tests {
         let mut d = stdio_draft("fixture", &agents::join_args(["sh", script.to_str().unwrap()]));
         d.env.insert("FIXTURE_VERSION".into(), "1.2.3".into());
         d.to_server().unwrap()
+    }
+
+    #[test]
+    fn codex_config_server_names_are_read_from_headers_and_dotted_keys() {
+        let text = r#"
+model = "gpt-5" # [mcp_servers.in-a-comment]
+instructions = """
+[mcp_servers.inside-a-string]
+"""
+args = [
+  "[mcp_servers.inside-an-array]",
+  ["nested"],
+]
+
+[mcp_servers.chrome-devtools]
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest"]
+
+[mcp_servers.chrome-devtools.tools.new_page]
+approval = "never"
+
+[mcp_servers."node_repl"]
+command = "node"
+[mcp_servers.node_repl.env]
+TOKEN = "s3cret"
+
+[mcp_servers.off]
+url = "https://x"
+enabled = false
+
+[mcp_servers]
+fetch = { command = "uvx", args = ["mcp-server-fetch"] }
+gone = { command = "x", enabled = false }
+
+[profiles.work]
+mcp_servers = "not a server"
+"#;
+        let root = "mcp_servers.dotted.command = \"x\"\n".to_owned() + text;
+        assert_eq!(
+            toml_mcp_servers(&root),
+            [
+                ("dotted".to_owned(), None),
+                ("chrome-devtools".to_owned(), None),
+                ("node_repl".to_owned(), None),
+                ("off".to_owned(), Some(false)),
+                ("fetch".to_owned(), None),
+                ("gone".to_owned(), Some(false)),
+            ]
+        );
+        assert_eq!(toml_mcp_servers("[mcp_servers]\n"), []);
+        assert_eq!(toml_key("a.\"b.c\" . 'd' = 1", '='), Some((vec!["a".into(), "b.c".into(), "d".into()], " 1")));
+        assert_eq!(toml_key("[x]", '='), None);
+    }
+
+    fn codex_profile(env: &[(&str, &str)]) -> agents::Profile {
+        agents::Profile {
+            id: "codex".into(),
+            label: "Codex".into(),
+            preset: "codex".into(),
+            command: "npx".into(),
+            args: vec![],
+            env: env.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())).collect(),
+            config_dir: None,
+            report: None,
+            provider: None,
+        }
+    }
+
+    #[test]
+    fn a_codex_agent_isnt_given_the_servers_its_own_config_defines() {
+        let home = temp_dir();
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex/config.toml"),
+            "[mcp_servers.chrome-devtools]\ncommand = \"npx\"\n\n[mcp_servers.vitro]\ncommand = \"vitro\"\nenabled = false\n[mcp_servers.own]\ncommand = \"own\"\n",
+        )
+        .unwrap();
+        // A project config from the repository root down to the chat's folder counts too.
+        let repo = home.join("repo");
+        let cwd = repo.join("sub");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(cwd.join(".codex")).unwrap();
+        std::fs::create_dir_all(repo.join(".codex")).unwrap();
+        std::fs::write(repo.join(".codex/config.toml"), "[mcp_servers.fetch]\ncommand = \"uvx\"\n").unwrap();
+        std::fs::write(cwd.join(".codex/config.toml"), "[mcp_servers.own]\nenabled = false\n").unwrap();
+
+        let servers: Vec<Server> = ["chrome-devtools", "fetch", "vitro", "rea"]
+            .iter()
+            .map(|n| http_draft(n, &format!("https://{n}.example/mcp")).to_server().unwrap())
+            .collect();
+        let given = |agent: &agents::Profile, cwd: &Path| {
+            let mut params = json!({ "cwd": cwd, "mcpServers": [] });
+            let starting = inject_from(&mut params, true, false, agent, servers.clone(), &Env { home: home.clone(), codex_home: None });
+            let names: Vec<String> = params["mcpServers"].as_array().unwrap().iter().map(|s| s["name"].as_str().unwrap().to_owned()).collect();
+            (names, starting)
+        };
+
+        let (names, starting) = given(&codex_profile(&[]), &cwd);
+        assert_eq!(names, ["rea"], "same names as Codex's own (enabled or not) aren't passed again");
+        assert_eq!(starting, ["chrome-devtools", "fetch", "rea"], "what starts: Codex's enabled ones, then ours");
+
+        // Outside the repository only the user's config applies.
+        let elsewhere = home.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        assert_eq!(given(&codex_profile(&[]), &elsewhere).0, ["fetch", "rea"]);
+
+        // CODEX_HOME on the profile replaces ~/.codex.
+        let other = home.join("codex-home");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("config.toml"), "[mcp_servers]\nrea = { command = \"rea\" }\n").unwrap();
+        let with_home = codex_profile(&[("CODEX_HOME", other.to_str().unwrap())]);
+        assert_eq!(given(&with_home, &elsewhere).0, ["chrome-devtools", "fetch", "vitro"]);
+        // So does yaah's own CODEX_HOME, which the agent inherits.
+        let mut params = json!({ "cwd": elsewhere, "mcpServers": [] });
+        let env = Env { home: home.clone(), codex_home: Some(other.to_string_lossy().into_owned()) };
+        inject_from(&mut params, true, false, &codex_profile(&[]), servers.clone(), &env);
+        assert_eq!(params["mcpServers"].as_array().unwrap().len(), 3, "rea is Codex's own there");
+
+        // Other agents get every server.
+        let gemini = agents::Profile { preset: "gemini".into(), ..codex_profile(&[]) };
+        assert_eq!(given(&gemini, &cwd).0, ["chrome-devtools", "fetch", "vitro", "rea"]);
+        std::fs::remove_dir_all(home).unwrap();
     }
 
     #[test]

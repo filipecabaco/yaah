@@ -6,9 +6,13 @@ import "./index.css";
 import { followTheme, setAppearance, setThemes, settingsUnavailable } from "./lib/theme";
 import { api } from "./lib/api";
 import { setCardRules } from "./lib/tool-cards";
+import { installDragFallback, overlayTitlebar } from "./hooks/use-titlebar";
 
 // The OS light/dark setting, unless Settings → General picked one.
 followTheme();
+
+// macOS: a press in a title-bar drag region that Tauri's own mousedown didn't turn into a drag gets a second try (use-titlebar.ts).
+if (overlayTitlebar()) installDragFallback();
 
 const root = () => ReactDOM.createRoot(document.getElementById("root") as HTMLElement);
 

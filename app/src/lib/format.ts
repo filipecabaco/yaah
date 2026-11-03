@@ -1,4 +1,5 @@
 // Display formatting shared by every screen: counts, sizes, durations and paths.
+import type { StartStage } from "@/lib/api";
 
 const integer = new Intl.NumberFormat();
 
@@ -54,3 +55,21 @@ export const baseName = (path: string) => path.replace(/\/+$/, "").split("/").po
 
 /** How long something has been running: `12 s`, `2 min 5 s`, `3 min`. */
 export const elapsedText = (s: number) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}`);
+
+/** At most this many MCP server names in a new chat's starting line; the rest are counted. */
+const SHOWN_SERVERS = 4;
+
+/** What a new chat is waiting for: "Starting Codex…", "Starting MCP servers: chrome-devtools, fetch…", "Opening the session…". */
+export function startingText(start: { stage: StartStage; servers: string[] }, agentLabel: string): string {
+  switch (start.stage) {
+    case "agent":
+      return `Starting ${agentLabel}…`;
+    case "mcpServers": {
+      const names = start.servers.slice(0, SHOWN_SERVERS).join(", ");
+      const more = start.servers.length - SHOWN_SERVERS;
+      return `Starting MCP servers: ${names}${more > 0 ? ` and ${more} more` : ""}…`;
+    }
+    case "session":
+      return "Opening the session…";
+  }
+}

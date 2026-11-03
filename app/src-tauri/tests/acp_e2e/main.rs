@@ -66,6 +66,7 @@ fn main() {
         ),
         ("other_chats_in_the_project_pick_up_added_repos_on_their_next_prompt", other_chats_in_the_project_pick_up_added_repos_on_their_next_prompt),
         ("quick_chats_start_with_repos_chosen_up_front", quick_chats_start_with_repos_chosen_up_front),
+        ("a_new_chat_reports_how_far_it_got", a_new_chat_reports_how_far_it_got),
         (
             "claude_on_openrouter_gets_providers_set_and_the_key_never_reaches_logs",
             claude_on_openrouter_gets_providers_set_and_the_key_never_reaches_logs,
@@ -1006,11 +1007,11 @@ fn quick_chats_start_with_repos_chosen_up_front() {
     let r = repos(&f, &["api", "web"]);
     let cwd = f.dir.to_string_lossy().into_owned();
     let chosen = [r[0].clone(), r[1].clone(), r[0].clone(), cwd.clone()];
-    let info = tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd.clone()), ACCOUNT, &chosen)).unwrap();
+    let info = tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd.clone()), ACCOUNT, &chosen, None)).unwrap();
     assert_eq!((info.extra_dirs.clone(), info.additional_dirs.clone(), info.dirs_changed), (r.clone(), r.clone(), false));
     assert_eq!(f.requests("session/new").pop().unwrap()["additionalDirectories"], json!(r));
     let bad = f.dir.join("missing").to_string_lossy().into_owned();
-    let err = tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd), ACCOUNT, &[bad])).unwrap_err();
+    let err = tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd), ACCOUNT, &[bad], None)).unwrap_err();
     assert!(err.contains("is not a folder"), "{err}");
     assert_eq!(f.requests("session/new").len(), 1, "checked before any session starts");
 }
@@ -1136,4 +1137,32 @@ fn providers_set_inner() {
     let events = serde_json::to_string(&*f.events.lock().unwrap()).unwrap();
     assert!(!events.contains(LEAK_KEY), "a UI event holds the key");
     agent_routes::set_resolver(None);
+}
+
+/// With a start id, a new chat tells the UI what it's waiting for: the agent starting (only when it
+/// wasn't running), then `session/new`, with the MCP servers it starts meanwhile when there are any.
+fn a_new_chat_reports_how_far_it_got() {
+    let f = Fixture::new(&[]);
+    let cwd = f.dir.to_string_lossy().into_owned();
+    let stages = |id: &str| -> Vec<Value> {
+        let events = f.events.lock().unwrap();
+        events.iter().filter(|(n, v)| n == "session-starting" && v["startId"] == id).map(|(_, v)| v.clone()).collect()
+    };
+    tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd.clone()), ACCOUNT, &[], Some("first"))).unwrap();
+    let first = stages("first");
+    assert_eq!(first.len(), 2, "{first:?}");
+    assert_eq!(first[0]["stage"], "agent");
+    let servers = first[1]["servers"].as_array().unwrap();
+    assert_eq!(first[1]["stage"], if servers.is_empty() { "session" } else { "mcpServers" }, "{first:?}");
+    assert!(!servers.contains(&json!("yaah-ui")), "yaah's own UI server isn't one to wait for");
+
+    // The agent is running now: straight to the session.
+    tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd.clone()), ACCOUNT, &[], Some("second"))).unwrap();
+    let second = stages("second");
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert_ne!(second[0]["stage"], "agent");
+
+    let before = f.events.lock().unwrap().iter().filter(|(n, _)| n == "session-starting").count();
+    tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd), ACCOUNT, &[], None)).unwrap();
+    assert_eq!(f.events.lock().unwrap().iter().filter(|(n, _)| n == "session-starting").count(), before, "none without a start id");
 }
