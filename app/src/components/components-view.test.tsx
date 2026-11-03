@@ -32,7 +32,7 @@ describe("Component library", () => {
         .getAllByRole("heading")
         .map((h) => h.textContent),
     ).toEqual(["Platform kit"]);
-    expect(within(nav).getByRole("button", { name: /platform\/host-health/ })).toBeInTheDocument();
+    expect(await within(nav).findByRole("button", { name: /platform\/host-health/ })).toBeInTheDocument();
     expect(within(nav).queryByRole("button", { name: /^pr-list/ })).toBeNull();
     // The first of its components opens, labelled with its library.
     expect(await screen.findByRole("heading", { level: 2, name: "platform/host-health" })).toBeInTheDocument();
@@ -49,7 +49,7 @@ describe("Component library", () => {
   it("copies a library component into the user's collection under a name they choose", async () => {
     const { user } = renderApp();
     const nav = await openLibrary(user);
-    await user.click(within(nav).getByRole("button", { name: /platform\/host-health/ }));
+    await user.click(await within(nav).findByRole("button", { name: /platform\/host-health/ }));
     await screen.findByRole("heading", { level: 2, name: "platform/host-health" });
 
     await user.click(screen.getByRole("button", { name: "Copy to my collection" }));

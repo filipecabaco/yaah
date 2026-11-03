@@ -2893,8 +2893,9 @@ mod lock_tests {
 
         // Real work on chat A: form edits saved at once, and its whole transcript read, back to back.
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let worker = std::thread::spawn({
-            let (hub, stop) = (hub.clone(), stop.clone());
+            let (hub, stop, done) = (hub.clone(), stop.clone(), done.clone());
             move || {
                 let mut slowest = Duration::ZERO;
                 let mut i = 0;
@@ -2905,17 +2906,26 @@ mod lock_tests {
                     hub.flush();
                     std::hint::black_box(hub.transcript("a").unwrap());
                     slowest = slowest.max(t.elapsed());
+                    done.store(i, Ordering::Relaxed);
                 }
                 (i, slowest)
             }
         });
-        let mut lat = stream_b(600);
+        // Chat B streams for as long as chat A takes to do a few full save+read rounds: on a slow CI runner one
+        // round can outlast hundreds of chunks, so a fixed chunk count could finish before A did any work at all.
+        let started = Instant::now();
+        let mut lat = stream_b(200);
+        while done.load(Ordering::Relaxed) < 3 && started.elapsed() < Duration::from_secs(60) {
+            lat.extend(stream_b(100));
+        }
         stop.store(true, Ordering::Relaxed);
         let (rounds, slowest) = worker.join().unwrap();
         lat.sort();
         let p99 = lat[lat.len() * 99 / 100];
-        assert!(rounds > 1, "chat A was busy while chat B streamed");
-        assert!(p99 < Duration::from_millis(25), "chat B p99 {p99:?} while each save+read of A took up to {slowest:?}");
+        assert!(rounds >= 3, "chat A did {rounds} save+read rounds while chat B streamed");
+        // A blocked lock would put chat B behind a whole save+read of A (tens to hundreds of ms); allow CI noise below that.
+        assert!(p99 < Duration::from_millis(50), "chat B p99 {p99:?} while each save+read of A took up to {slowest:?}");
+        assert!(p99 < slowest, "chat B p99 {p99:?} should stay below one save+read of A ({slowest:?})");
         let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("a.json")).unwrap()).unwrap();
         assert_eq!(saved["entries"].as_array().unwrap().len(), 3001);
         assert!(saved["entries"][3000]["draft"]["a"].as_str().is_some_and(|v| v.starts_with('v')));
