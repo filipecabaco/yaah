@@ -15,6 +15,30 @@ async function openLibrary(user: ReturnType<typeof renderApp>["user"]) {
 }
 
 describe("Component library", () => {
+  it("closes back to what was open: its close button, Escape, or the sidebar entry again", async () => {
+    const { user } = renderApp();
+    const gone = () => waitFor(() => expect(screen.queryByRole("navigation", { name: "Components" })).toBeNull());
+
+    // From the home screen, the close button goes back home.
+    await openLibrary(user);
+    await user.click(screen.getByRole("button", { name: "Close Component library" }));
+    await gone();
+    expect(screen.getByRole("button", { name: /^quick chat\b(?!s)/i })).toBeInTheDocument();
+
+    // Escape closes it too.
+    await openLibrary(user);
+    await user.keyboard("{Escape}");
+    await gone();
+
+    // Opened from a project, clicking "Component library" again goes back to that project.
+    await user.click(screen.getAllByText("billing revamp")[0]);
+    expect(await screen.findByRole("textbox", { name: "Project name" })).toHaveValue("billing revamp");
+    await openLibrary(user);
+    await user.click(screen.getByRole("button", { name: "Component library" }));
+    await gone();
+    expect(await screen.findByRole("textbox", { name: "Project name" })).toHaveValue("billing revamp");
+  });
+
   it("filters by library and shows which library each component comes from", async () => {
     const { user } = renderApp();
     const nav = await openLibrary(user);

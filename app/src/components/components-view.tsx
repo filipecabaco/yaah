@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { ChevronLeft, ChevronRight, Copy, CopyPlus, LayoutPanelTop, Loader2, RefreshCw, Share2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, CopyPlus, LayoutPanelTop, Loader2, RefreshCw, Share2, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -22,7 +22,28 @@ const shortName = (name: string) => name.slice(name.lastIndexOf("/") + 1);
  * Browse the UI libraries agents build from: yaah's, the user's own, and installed ones.
  * `initial` is a component to show (a chat's "Open in Component library").
  */
-export function ComponentsView({ initial = null, onInitialSeen }: { initial?: string | null; onInitialSeen?: () => void }) {
+export function ComponentsView({
+  initial = null,
+  onInitialSeen,
+  onClose,
+}: {
+  initial?: string | null;
+  onInitialSeen?: () => void;
+  /** Back to what was open before. Also on Escape, unless a field or dialog has it. */
+  onClose?: () => void;
+}) {
+  useEffect(() => {
+    if (!onClose) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      const t = e.target;
+      if (t instanceof HTMLElement && (t.closest("input, textarea, select, [contenteditable=true]") || t.isContentEditable)) return;
+      if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const [components, setComponents] = useState<UiComponent[] | null>(null);
   const [selected, setSelected] = useState<string | null>(initial);
   const [filter, setFilter] = useState<string | null>(null);
@@ -95,9 +116,16 @@ export function ComponentsView({ initial = null, onInitialSeen }: { initial?: st
       >
         <div className="flex items-center justify-between px-4 py-3">
           <h1 className="text-sm font-medium">Component library</h1>
-          <Button variant="ghost" size="icon-xs" onClick={load} title="Refresh" aria-label="Refresh components">
-            <RefreshCw />
-          </Button>
+          <div className="flex items-center gap-0.5">
+            <Button variant="ghost" size="icon-xs" onClick={load} title="Refresh" aria-label="Refresh components">
+              <RefreshCw />
+            </Button>
+            {onClose && (
+              <Button variant="ghost" size="icon-xs" onClick={onClose} title="Close (Esc)" aria-label="Close Component library">
+                <X />
+              </Button>
+            )}
+          </div>
         </div>
         {sources.length > 1 && (
           <div className="flex flex-wrap gap-1 px-3 pb-1" role="group" aria-label="Show library">

@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FolderGit2, MessageSquarePlus } from "lucide-react";
 import { Mark } from "@/components/brand/mark";
 import { Chat } from "@/components/chat";
@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useShortcuts } from "@/hooks/use-shortcuts";
-import { useYaah } from "@/hooks/use-yaah";
+import { useYaah, type Selection } from "@/hooks/use-yaah";
 import { TranscriptsContext } from "@/hooks/use-transcript";
 import { api, canChat, type AgentProfile, type SessionInfo } from "@/lib/api";
 import { onOpenComponent, onOpenSettings } from "@/lib/app-events";
@@ -73,6 +73,26 @@ export default function App() {
   );
   const select = y.setSelection;
   const openChat = (id: string) => select({ kind: "chat", id });
+  // The Component library takes the main area; closing it goes back to what was open before (a chat, a project, or home).
+  const selection = y.selection;
+  const current = useRef<Selection>(selection);
+  const beforeLibrary = useRef<Selection>(null);
+  // However the library opens (sidebar, palette, a chat's menu), remember the view it replaced.
+  useEffect(() => {
+    if (selection?.kind === "components" && current.current?.kind !== "components") beforeLibrary.current = current.current;
+    current.current = selection;
+  }, [selection]);
+  const openLibrary = useCallback(() => select({ kind: "components" }), [select]);
+  const closeLibrary = useCallback(() => select(beforeLibrary.current), [select]);
+  /** The sidebar's selection; its "Component library" entry toggles the library. */
+  const selectFromSidebar = useCallback(
+    (s: Selection) => {
+      if (s?.kind !== "components") return select(s);
+      if (current.current?.kind === "components") closeLibrary();
+      else openLibrary();
+    },
+    [select, openLibrary, closeLibrary],
+  );
   // Stable, so the (memoised) sidebar doesn't re-render with the rest of the app.
   const { newQuickChat, newChatInFolder, agentId } = y;
   const sidebar = {
@@ -122,9 +142,9 @@ export default function App() {
     () =>
       onOpenComponent((name) => {
         setShowComponent(name);
-        select({ kind: "components" });
+        openLibrary();
       }),
-    [select],
+    [openLibrary],
   );
 
   useShortcuts({
@@ -226,7 +246,7 @@ export default function App() {
                 quickChats={y.quickChats}
                 selection={y.selection}
                 activeProjectId={project?.id ?? null}
-                onSelect={y.setSelection}
+                onSelect={selectFromSidebar}
                 onNewChat={y.newChat}
                 onProjectChange={y.putProject}
                 {...sidebar}
@@ -234,7 +254,7 @@ export default function App() {
 
               {y.selection?.kind === "components" ? (
                 <Suspense fallback={<main className="flex-1" />}>
-                  <ComponentsView initial={showComponent} onInitialSeen={clearShowComponent} />
+                  <ComponentsView initial={showComponent} onInitialSeen={clearShowComponent} onClose={closeLibrary} />
                 </Suspense>
               ) : chat ? (
                 <Chat
