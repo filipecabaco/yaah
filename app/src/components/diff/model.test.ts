@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import liveShowcase from "@/dev/fixtures/live-showcase.json";
-import { changed, diffTexts, hunkRange, parsePatch } from "@/components/diff/model";
+import { changed, diffLines, diffTexts, hunkRange, parsePatch } from "@/components/diff/model";
 
 /** The `git add -N . && git diff` the agent showed in the recorded live_showcase run. */
 function recordedDiff(): string {
@@ -115,5 +115,116 @@ describe("hunkRange", () => {
     expect(hunkRange(hunk)).toEqual([6, 6]);
     const contextOnly = { header: "@@", lines: [{ kind: " " as const, text: "a", old: 5, new: 7 }] };
     expect(hunkRange(contextOnly).every(Number.isFinite)).toBe(true);
+  });
+});
+
+/** Length of the longest common subsequence (the classic table), as a reference for Myers. */
+function lcsLength(a: string[], b: string[]): number {
+  let prev = new Array<number>(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i++) {
+    const row = new Array<number>(b.length + 1).fill(0);
+    for (let j = 1; j <= b.length; j++) row[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], row[j - 1]);
+    prev = row;
+  }
+  return prev[b.length];
+}
+
+/** Applying the edit script to `a` must give `b`. */
+function apply(a: string[], b: string[], ops: string[]): string[] {
+  const out: string[] = [];
+  let i = 0;
+  let j = 0;
+  for (const op of ops) {
+    if (op === "=") {
+      expect(a[i]).toBe(b[j]);
+      out.push(a[i++]);
+      j++;
+    } else if (op === "-") i++;
+    else out.push(b[j++]);
+  }
+  expect([i, j]).toEqual([a.length, b.length]);
+  return out;
+}
+
+/** A small deterministic generator, so a failure always reproduces. */
+function rng(seed: number) {
+  return () => (seed = (seed * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+}
+
+describe("diffLines (Myers)", () => {
+  it.each([
+    ["abcabba", "cbabac", 5], // the paper's example: D = 5
+    ["", "abc", 3],
+    ["abc", "", 3],
+    ["abc", "abc", 0],
+    ["abc", "xyz", 6],
+    ["a", "b", 2],
+    ["ab", "ba", 2],
+  ])("%s → %s takes %i edits and rebuilds the new text", (from, to, d) => {
+    const a = [...from];
+    const b = [...to];
+    const ops = diffLines(a, b);
+    expect(apply(a, b, ops)).toEqual(b);
+    expect(ops.filter((o) => o !== "=").length).toBe(d);
+  });
+
+  it("is minimal on random texts (as many edits as the LCS allows)", () => {
+    const next = rng(42);
+    for (let round = 0; round < 300; round++) {
+      const pick = () => Array.from({ length: Math.floor(next() * 40) }, () => "abcde"[Math.floor(next() * 5)]);
+      const a = pick();
+      const b = pick();
+      const ops = diffLines(a, b);
+      expect(apply(a, b, ops)).toEqual(b);
+      expect(ops.filter((o) => o !== "=").length).toBe(a.length + b.length - 2 * lcsLength(a, b));
+    }
+  });
+
+  it("puts each change's removals before its additions", () => {
+    const ops = diffLines(["a", "x", "b"], ["a", "y", "b"]);
+    expect(ops).toEqual(["=", "-", "+", "="]);
+  });
+});
+
+describe("diffTexts on large files", () => {
+  it("a 5000-line file with every 7th line changed is exact, not a whole-file replace", () => {
+    const before = Array.from({ length: 5000 }, (_, i) => `const line${i} = compute(${i});`);
+    const after = before.map((l, i) => (i % 7 === 0 ? `${l} // changed` : l));
+    const t0 = performance.now();
+    const file = diffTexts("big.ts", before.join("\n"), after.join("\n"));
+    const ms = performance.now() - t0;
+    const changedLines = Math.ceil(5000 / 7);
+    expect(file).toMatchObject({ status: "modified", added: changedLines, removed: changedLines });
+    // Every change is the one line, removed then added, at its own number.
+    const changes = file.hunks.flatMap((h) => h.lines).filter((l) => l.kind !== " ");
+    expect(changes.slice(0, 4)).toEqual([
+      { kind: "-", text: "const line0 = compute(0);", old: 1 },
+      { kind: "+", text: "const line0 = compute(0); // changed", new: 1 },
+      { kind: "-", text: "const line7 = compute(7);", old: 8 },
+      { kind: "+", text: "const line7 = compute(7); // changed", new: 8 },
+    ]);
+    // Changes 7 lines apart share their context, so it's one hunk of every line.
+    expect(file.hunks).toHaveLength(1);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it("two unrelated 5000-line files are all removed and all added", () => {
+    const a = Array.from({ length: 5000 }, (_, i) => `old ${i}`).join("\n");
+    const b = Array.from({ length: 5000 }, (_, i) => `new ${i}`).join("\n");
+    expect(diffTexts("x", a, b)).toMatchObject({ added: 5000, removed: 5000 });
+  });
+
+  it("scattered inserts and deletes in 5000 lines line up with the right line numbers", () => {
+    const before = Array.from({ length: 5000 }, (_, i) => `row ${i}`);
+    const after = before.filter((_, i) => i % 500 !== 3);
+    after.splice(2500, 0, "inserted A", "inserted B");
+    const file = diffTexts("x", before.join("\n"), after.join("\n"));
+    expect(file).toMatchObject({ added: 2, removed: 10 });
+    const lines = file.hunks.flatMap((h) => h.lines);
+    expect(lines.filter((l) => l.kind === "-").map((l) => l.old)).toEqual([4, 504, 1004, 1504, 2004, 2504, 3004, 3504, 4004, 4504]);
+    expect(lines.filter((l) => l.kind === "+").map((l) => [l.text, l.new])).toEqual([
+      ["inserted A", 2501],
+      ["inserted B", 2502],
+    ]);
   });
 });

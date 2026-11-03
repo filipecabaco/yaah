@@ -8,11 +8,11 @@ import { installBrowserMock, type BrowserMockOptions } from "@/dev/browser-mock"
 import { setCardRules } from "@/lib/tool-cards";
 
 export function renderApp(options: BrowserMockOptions = {}) {
-  installBrowserMock({ delay: 0, ...options });
+  const mock = installBrowserMock({ delay: 0, ...options });
   setCardRules({});
   const user = userEvent.setup();
   const view = render(<App />);
-  return { user, ...view };
+  return { user, mock, ...view };
 }
 
 /** Start a quick chat from the empty screen and send `text`. */

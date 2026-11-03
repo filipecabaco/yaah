@@ -129,3 +129,32 @@ describe("a form the user and the agent fill together", () => {
     expect(area).toHaveValue("billing");
   });
 });
+
+describe("the Assembling UI card", () => {
+  it("spins while ui_render is pending and in progress, then takes the UI's title", async () => {
+    // Real (short) waits between the recorded steps, so each state is on screen for a moment.
+    const { user } = renderApp({ delay: 0.3 });
+    const statuses: (string | null)[] = [];
+    const { events } = await import("@/lib/api");
+    const off = await events.sessionEntry((e) => {
+      if (e.entry.type === "tool" && e.entry.toolCallId === "toolu_assemble") statuses.push(e.entry.status);
+    });
+    const log = await sendInQuickChat(user, "show the deploys");
+
+    // Pending, then in progress: the card says the UI is being put together, with a spinner.
+    const card = (await within(log).findByText("Assembling UI")).closest('[data-slot="collapsible-trigger"]')?.parentElement as HTMLElement;
+    expect(within(card).getByText("in progress")).toHaveClass("sr-only");
+    expect(card.querySelector(".animate-spin")).not.toBeNull();
+    expect(within(card).queryByText("done")).toBeNull();
+
+    // Completed: the UI's own title, no spinner, and the UI itself below.
+    expect(await within(log).findByText("Deploys", { selector: "span" })).toBeInTheDocument();
+    await waitFor(() => expect(within(log).queryByText("Assembling UI")).toBeNull());
+    const done = within(log).getByText("Deploys", { selector: "span" }).closest('[data-slot="collapsible-trigger"]')?.parentElement as HTMLElement;
+    expect(done.querySelector(".animate-spin")).toBeNull();
+    expect(within(done).getByText("done")).toBeInTheDocument();
+    expect(await within(log).findByRole("table")).toHaveTextContent("rolling out");
+    expect(statuses).toEqual(["pending", "in_progress", "in_progress", "completed"]);
+    off();
+  });
+});

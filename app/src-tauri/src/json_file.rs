@@ -2,39 +2,81 @@
 //! servers, database connections, settings): read whole, written atomically (a
 //! fresh temp file renamed over the old one), with a lock around each
 //! read-modify-write. Files that may hold secrets are created 0600.
+//!
+//! Reads are cached in memory while the file is unchanged on disk (its
+//! [`Stamp`]): hot paths (a token per API call, connections per live poll)
+//! cost a `stat` instead of a read and parse. Any write, ours or another
+//! program's, changes the stamp.
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use serde_json::Value;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::SystemTime;
+
+/// What a file looks like on disk. An atomic replace (a new inode) or any write
+/// (a new time or size) changes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    modified: Option<SystemTime>,
+    len: u64,
+    ino: u64,
+}
+
+impl Stamp {
+    /// The file's stamp now; `None` if it can't be read.
+    pub fn of(path: &Path) -> Option<Self> {
+        std::fs::metadata(path).ok().map(|m| Self { modified: m.modified().ok(), len: m.len(), ino: m.ino() })
+    }
+}
 
 pub struct JsonFile {
     path: PathBuf,
     /// 0600 rather than the umask's default: tokens, passwords, MCP env and headers.
     private: bool,
-    /// Serialises read-modify-write within the app.
-    lock: Mutex<()>,
+    /// Serialises read-modify-write within the app, and guards the cache.
+    lock: Mutex<Option<(Stamp, Value)>>,
 }
 
 impl JsonFile {
     pub fn new(path: PathBuf, private: bool) -> Self {
-        Self { path, private, lock: Mutex::new(()) }
+        Self { path, private, lock: Mutex::new(None) }
     }
 
     pub fn path(&self) -> &Path {
         &self.path
     }
 
-    fn guard(&self) -> MutexGuard<'_, ()> {
+    fn guard(&self) -> MutexGuard<'_, Option<(Stamp, Value)>> {
         self.lock.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The contents; a missing or unreadable file reads as the default.
     pub fn read<T: DeserializeOwned + Default>(&self) -> T {
-        let _g = self.guard();
-        read(&self.path)
+        let mut cache = self.guard();
+        self.cached(&mut cache)
+    }
+
+    /// The contents through the cache (held under the lock).
+    fn cached<T: DeserializeOwned + Default>(&self, cache: &mut Option<(Stamp, Value)>) -> T {
+        let Some(stamp) = Stamp::of(&self.path) else {
+            *cache = None;
+            return T::default();
+        };
+        if cache.as_ref().is_none_or(|(s, _)| *s != stamp) {
+            *cache = Some((stamp, read::<Value>(&self.path)));
+        }
+        let value = cache.as_ref().map_or(&Value::Null, |(_, v)| v);
+        if value.is_null() {
+            return T::default();
+        }
+        T::deserialize(value).unwrap_or_else(|e| {
+            eprintln!("[config] {} is unreadable, ignoring it: {e}", self.path.display());
+            T::default()
+        })
     }
 
     /// Change the contents under the lock and save them. Nothing is written if `f` fails.
@@ -42,10 +84,12 @@ impl JsonFile {
     where
         T: DeserializeOwned + Serialize + Default,
     {
-        let _g = self.guard();
-        let mut value = read(&self.path);
+        let mut cache = self.guard();
+        let mut value: T = self.cached(&mut cache);
         let out = f(&mut value)?;
         write(&self.path, &value, self.private)?;
+        // What was just written, as of the stamp it left.
+        *cache = Stamp::of(&self.path).zip(serde_json::to_value(&value).ok());
         Ok(out)
     }
 }
@@ -153,6 +197,38 @@ mod tests {
             })
             .unwrap_err();
         assert!(err.starts_with("couldn't save") && err.contains("x.json"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[derive(serde::Deserialize, Default)]
+    struct Typed {
+        t: String,
+    }
+
+    /// Reads come from memory while the file is unchanged, and see any change made to it.
+    #[test]
+    fn reads_are_cached_until_the_file_changes() {
+        let dir = temp_dir();
+        let file = JsonFile::new(dir.join("tokens.json"), true);
+        file.update(|m: &mut Map<String, Value>| Ok(m.insert("t".into(), json!("one")))).unwrap();
+        assert_eq!(file.read::<Map<String, Value>>()["t"], "one");
+        // Unreadable but unchanged: the cached contents (no read happens).
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(file.read::<Map<String, Value>>()["t"], "one", "served from memory");
+        std::fs::set_permissions(file.path(), std::fs::Permissions::from_mode(0o600)).unwrap();
+        // Another program rewrites it, same size: seen at once.
+        std::fs::write(file.path(), r#"{"t":"two"}"#).unwrap();
+        let other = file.path().with_file_name("other.json");
+        std::fs::write(&other, r#"{"t":"six"}"#).unwrap();
+        std::fs::rename(&other, file.path()).unwrap();
+        assert_eq!(file.read::<Map<String, Value>>()["t"], "six", "a replaced file is read again");
+        // Our own write updates the cache.
+        file.update(|m: &mut Map<String, Value>| Ok(m.insert("t".into(), json!("three")))).unwrap();
+        assert_eq!(file.read::<Map<String, Value>>()["t"], "three");
+        // Typed reads go through the same cache.
+        assert_eq!(file.read::<Typed>().t, "three");
+        std::fs::remove_file(file.path()).unwrap();
+        assert!(file.read::<Map<String, Value>>().is_empty(), "deleted: the default again");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

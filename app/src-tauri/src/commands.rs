@@ -5,7 +5,7 @@
 use crate::agents::{self, AgentsFile, Draft, PresetInfo, ProfileInfo, Report, Store};
 use crate::login::{self, Logins};
 use crate::projects::{Project, Projects, Status};
-use crate::session::{self, ChatTarget, Emit, Hub, SessionInfo, Transcript};
+use crate::session::{self, ChatTarget, Emit, Hub, Page, SessionInfo, Transcript};
 use crate::{accounts, agent_conformance, agent_install, agent_versions, files, repos, settings};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
@@ -39,10 +39,12 @@ fn agent_list(hub: &Hub, file: AgentsFile) -> AgentList {
     AgentList { profiles, default_id }
 }
 
-/// Saved agent profiles (Claude accounts are migrated in on first run).
+/// Saved agent profiles (Claude accounts are migrated in on first run). Reads
+/// files, so off the main thread.
 #[tauri::command]
-pub fn list_agents(hub: State<'_, Arc<Hub>>) -> AgentList {
-    agent_list(&hub, Store::user().load())
+pub async fn list_agents(hub: State<'_, Arc<Hub>>) -> Result<AgentList, String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || agent_list(&hub, Store::user().load())).await.map_err(|e| e.to_string())
 }
 
 /// Known ACP agents, with what is installed on this machine.
@@ -328,20 +330,32 @@ pub fn promote_chat(
     session_id: String,
     name: String,
 ) -> Result<(Project, SessionInfo), String> {
-    let cwd = hub.transcript(&session_id)?.info.cwd;
+    let cwd = hub.session_info(&session_id)?.cwd;
     let project = projects.create(&name, &[cwd])?;
     let info = hub.set_session_project(&session_id, Some(project.id.clone()))?;
     Ok((project, info))
 }
 
+/// Every chat's info (no transcripts), off the main thread.
 #[tauri::command]
-pub fn list_sessions(hub: State<'_, Arc<Hub>>) -> Vec<SessionInfo> {
-    hub.list_sessions()
+pub async fn list_sessions(hub: State<'_, Arc<Hub>>) -> Result<Vec<SessionInfo>, String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || hub.list_sessions()).await.map_err(|e| e.to_string())
 }
 
+/// Part of a chat's transcript: `limit` entries (default 200) from `from`, or the last ones.
+/// The first call for a chat reads it from disk.
 #[tauri::command]
-pub fn get_transcript(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<Transcript, String> {
-    hub.transcript(&session_id)
+pub async fn get_entries(hub: State<'_, Arc<Hub>>, session_id: String, from: Option<usize>, limit: Option<usize>) -> Result<Page, String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || hub.entries(&session_id, from, limit)).await.map_err(|e| e.to_string())?
+}
+
+/// The whole transcript. `get_entries` pages it.
+#[tauri::command]
+pub async fn get_transcript(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<Transcript, String> {
+    let hub = hub.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || hub.transcript(&session_id)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

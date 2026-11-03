@@ -3,7 +3,7 @@
 // arrive already expanded by Rust into `$component` nodes, so this only knows
 // primitives. It runs no agent code; everything here is data mapped onto
 // shadcn, and every prop is read from `unknown` through lib/narrow.
-import { Component, lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { Component, Suspense, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ArrowDownRight, ArrowRight, ArrowUpRight, ChevronRight, ExternalLink, RotateCw } from "lucide-react";
 import { Markdown, SafeImage } from "@/components/markdown";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
@@ -19,30 +19,44 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DiffView } from "@/components/diff/diff-view";
-import { diffTexts, parsePatch } from "@/components/diff/model";
 import { api } from "@/lib/api";
 import { formatDuration } from "@/lib/format";
 import { isWebUrl, openExternal } from "@/lib/links";
 import { asArray, asNumber, asObj, isObj, optText, show, type Obj } from "@/lib/narrow";
 import { cn } from "@/lib/utils";
+import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
 
 // Library-backed blocks load on first use, so a chat without a chart never downloads Recharts.
-const UiChart = lazy(() => import("@/components/ui-blocks/chart"));
-const UiMap = lazy(() => import("@/components/ui-blocks/map"));
-const UiDataTable = lazy(() => import("@/components/ui-blocks/data-table"));
-const UiDiagram = lazy(() => import("@/components/ui-blocks/diagram"));
-const UiSql = lazy(() => import("@/components/ui-blocks/sql"));
+// Once a chat shows agent UI, the rest are fetched while the app is idle (preloadUiBlocks), and a
+// block whose code is in draws at once instead of flashing a placeholder.
+const UiChart = preloadable(() => import("@/components/ui-blocks/chart").then((m) => m.default));
+const UiMap = preloadable(() => import("@/components/ui-blocks/map").then((m) => m.default));
+const UiDataTable = preloadable(() => import("@/components/ui-blocks/data-table").then((m) => m.default));
+const UiDiagram = preloadable(() => import("@/components/ui-blocks/diagram").then((m) => m.default));
+const UiSql = preloadable(() => import("@/components/ui-blocks/sql").then((m) => m.default));
 // Command output views share one chunk, loaded the first time an agent shows one.
 const cliViews = () => import("@/components/ui-blocks/cli/views");
-const TestsView = lazy(() => cliViews().then((m) => ({ default: m.TestsView })));
-const FileTreeView = lazy(() => cliViews().then((m) => ({ default: m.FileTreeView })));
-const JsonView = lazy(() => cliViews().then((m) => ({ default: m.JsonView })));
-const TextFileView = lazy(() => cliViews().then((m) => ({ default: m.TextFileView })));
-const WordCountView = lazy(() => cliViews().then((m) => ({ default: m.WordCountView })));
-const GitGraphView = lazy(() => cliViews().then((m) => ({ default: m.GitGraphView })));
-const GitStatusView = lazy(() => cliViews().then((m) => ({ default: m.GitStatusView })));
-const DiffStatView = lazy(() => cliViews().then((m) => ({ default: m.DiffStatView })));
+const TestsView = preloadable(() => cliViews().then((m) => m.TestsView));
+const FileTreeView = preloadable(() => cliViews().then((m) => m.FileTreeView));
+const JsonView = preloadable(() => cliViews().then((m) => m.JsonView));
+const TextFileView = preloadable(() => cliViews().then((m) => m.TextFileView));
+const WordCountView = preloadable(() => cliViews().then((m) => m.WordCountView));
+const GitGraphView = preloadable(() => cliViews().then((m) => m.GitGraphView));
+const GitStatusView = preloadable(() => cliViews().then((m) => m.GitStatusView));
+const DiffStatView = preloadable(() => cliViews().then((m) => m.DiffStatView));
+// Diffs: the `diff` and `patch` blocks, and edit tool calls.
+const diffBlocks = () => import("@/components/ui-blocks/diff-blocks");
+const TextDiffBlock = preloadable(() => diffBlocks().then((m) => m.TextDiffBlock));
+const PatchBlock = preloadable(() => diffBlocks().then((m) => m.PatchBlock));
+const BLOCKS = [UiChart, UiMap, UiDataTable, UiDiagram, UiSql, TestsView, TextDiffBlock];
+
+let preloading = false;
+/** After the first agent UI: fetch every block's code while the app is idle. */
+function preloadUiBlocks() {
+  if (preloading) return;
+  preloading = true;
+  whenIdle(() => void preloadAll(BLOCKS));
+}
 
 function Lazy({ height, children }: { height: number; children: ReactNode }) {
   return <Suspense fallback={<div className="animate-pulse rounded-md bg-muted" style={{ height }} />}>{children}</Suspense>;
@@ -72,6 +86,7 @@ const variant = (v: unknown, fallback: Variant): Variant => ((VARIANTS as readon
 
 /** An agent UI tree with its props. `form` connects its forms to the transcript entry. */
 export function UiTree({ tree, props, form }: { tree: unknown; props: unknown; form?: FormHost }) {
+  useEffect(preloadUiBlocks, []);
   return (
     <UiErrorBoundary tree={tree}>
       <FormHostContext.Provider value={form}>
@@ -656,15 +671,20 @@ function BrowserFrame({ src, title, height }: { src: string; title?: string; hei
 }
 
 /** A diff of two texts (an edit tool call, or a `diff` node). */
-export function TextDiff({ path, oldText, newText }: { path: string; oldText: string; newText: string }) {
-  const files = useMemo(() => [diffTexts(path, oldText, newText)], [path, oldText, newText]);
-  return <DiffView files={files} />;
+export function TextDiff(props: { path: string; oldText: string; newText: string }) {
+  return (
+    <Lazy height={80}>
+      <TextDiffBlock {...props} />
+    </Lazy>
+  );
 }
 
-function PatchView({ text, title }: { text: string; title?: string }) {
-  const files = useMemo(() => parsePatch(text), [text]);
-  if (files.length === 0) return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs">{text || "(empty diff)"}</pre>;
-  return <DiffView files={files} title={title} />;
+function PatchView(props: { text: string; title?: string }) {
+  return (
+    <Lazy height={80}>
+      <PatchBlock {...props} />
+    </Lazy>
+  );
 }
 
 /** One broken node shows an error instead of blanking the chat; a new tree from the agent tries again. */
@@ -771,10 +791,23 @@ function LiveSource({
   const [paused, setPaused] = useState(false);
   const [nonce, setNonce] = useState(0);
   const seen = useRef(false);
+  const box = useRef<HTMLDivElement>(null);
+  // Scrolled out of view: stop polling (each read is real work in Rust: sysinfo, docker, an API or a query).
+  // Back in view, the effect runs again and reads at once, so the data is never stale on screen.
+  const [onScreen, setOnScreen] = useState(true);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver((entries) => setOnScreen(entries.some((e) => e.isIntersecting)), { rootMargin: "200px" });
+    io.observe(el);
+    return () => io.disconnect();
+  }, []);
 
   useEffect(() => {
     let stop = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // Off screen after a first reading: wait until it scrolls back.
+    if (!onScreen && seen.current) return;
     const next = (ms: number) => {
       if (!stop) timer = setTimeout(() => void read(), ms);
     };
@@ -799,11 +832,11 @@ function LiveSource({
       stop = true;
       clearTimeout(timer);
     };
-  }, [key, interval, keep, paused, nonce]);
+  }, [key, interval, keep, paused, nonce, onScreen]);
 
   const name = typeof as === "string" && as ? as : "data";
   return (
-    <div className="flex flex-col gap-2">
+    <div ref={box} className="flex flex-col gap-2">
       {state.data === undefined && state.error == null ? (
         <div className="h-24 animate-pulse rounded-md bg-muted" />
       ) : (

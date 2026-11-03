@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { ChevronRight, Copy, CopyPlus, LayoutPanelTop, Loader2, RefreshCw, Share2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Copy, CopyPlus, LayoutPanelTop, Loader2, RefreshCw, Share2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -31,12 +31,15 @@ export function ComponentsView({ initial = null, onInitialSeen }: { initial?: st
   const [copying, setCopying] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
 
+  // In a narrow window the list and the component take turns on screen (see the layout below).
+  const [pane, setPane] = useState<"list" | "detail">(initial ? "detail" : "list");
   // Asked to show another component while open.
   const [shownInitial, setShownInitial] = useState(initial);
   if (initial && initial !== shownInitial) {
     setShownInitial(initial);
     setSelected(initial);
     setFilter(null);
+    setPane("detail");
   }
   useEffect(() => {
     if (initial) onInitialSeen?.();
@@ -71,6 +74,7 @@ export function ComponentsView({ initial = null, onInitialSeen }: { initial?: st
   const open = (name: string) => {
     setSelected(name);
     setCopying(null);
+    setPane("detail");
   };
 
   const pickFilter = (source: string | null) => {
@@ -79,8 +83,16 @@ export function ComponentsView({ initial = null, onInitialSeen }: { initial?: st
   };
 
   return (
-    <main className="flex min-w-0 flex-1">
-      <div className="flex w-64 shrink-0 flex-col border-r">
+    // Wide: the list beside the component. Narrow (under 36rem for this page, i.e. a window
+    // under about 700px beside the sidebar): one at a time, the list or the component with a
+    // way back to the list. A container query, so it follows the page's own width.
+    <main className="@container/library flex min-w-0 flex-1" data-pane={pane}>
+      <div
+        className={cn(
+          "flex w-64 shrink-0 flex-col border-r @max-xl/library:w-full @max-xl/library:border-r-0",
+          pane === "detail" && current && "@max-xl/library:hidden",
+        )}
+      >
         <div className="flex items-center justify-between px-4 py-3">
           <h1 className="text-sm font-medium">Component library</h1>
           <Button variant="ghost" size="icon-xs" onClick={load} title="Refresh" aria-label="Refresh components">
@@ -146,7 +158,14 @@ export function ComponentsView({ initial = null, onInitialSeen }: { initial?: st
         </div>
       </div>
 
-      <div className="min-w-0 flex-1 overflow-y-auto">
+      <div className={cn("min-w-0 flex-1 overflow-y-auto", (pane === "list" || !current) && "@max-xl/library:hidden")}>
+        {current && (
+          <div className="sticky top-0 z-10 border-b bg-background px-2 py-1.5 @xl/library:hidden">
+            <Button variant="ghost" size="sm" onClick={() => setPane("list")}>
+              <ChevronLeft /> All components
+            </Button>
+          </div>
+        )}
         <ErrorText error={error} className="p-6 text-sm" />
         {components && components.length === 0 && (
           <div className="mx-auto flex max-w-md flex-col items-center gap-2 px-6 py-24 text-center text-sm text-muted-foreground">

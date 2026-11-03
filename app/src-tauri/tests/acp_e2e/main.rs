@@ -26,6 +26,7 @@ fn main() {
     }
     let tests: &[(&str, fn())] = &[
         ("initialize_advertises_notices_and_a_turn_streams", initialize_advertises_notices_and_a_turn_streams),
+        ("long_replies_stream_as_coalesced_appends", long_replies_stream_as_coalesced_appends),
         ("project_chats_send_the_brief_and_folders_once", project_chats_send_the_brief_and_folders_once),
         ("dont_ask_again_answers_waiting_and_later_requests_in_that_chat_only", dont_ask_again_answers_waiting_and_later_requests_in_that_chat_only),
         ("unnamed_requests_are_never_remembered", unnamed_requests_are_never_remembered),
@@ -185,6 +186,44 @@ fn emitter(events: &Arc<Mutex<Vec<(String, Value)>>>) -> Emit {
     Arc::new(move |name: &str, payload: Value| events.lock().unwrap().push((name.to_owned(), payload)))
 }
 
+fn as_values(t: &Transcript) -> Vec<Value> {
+    t.entries.iter().map(|e| serde_json::to_value(e).unwrap()).collect()
+}
+
+fn utf16(s: &str) -> usize {
+    s.encode_utf16().count()
+}
+
+/// What the UI builds from one chat's events, by the streaming contract: an
+/// append applies only when the shown text plus it is `len` UTF-16 units long.
+fn replay(events: &[(String, Value)], sid: &str) -> Vec<Value> {
+    let mut entries: Vec<Value> = vec![];
+    for (name, v) in events.iter().filter(|(_, v)| v["sessionId"] == sid) {
+        let Some(i) = v["index"].as_u64().and_then(|i| usize::try_from(i).ok()) else { continue };
+        match name.as_str() {
+            "session-entry" => {
+                if entries.len() <= i {
+                    entries.resize(i + 1, Value::Null);
+                }
+                entries[i] = v["entry"].clone();
+            }
+            "session-append" => {
+                let field = v["field"].as_str().unwrap();
+                let shown = entries[i][field].as_str().expect("an append to text the UI has").to_owned();
+                let text = v["text"].as_str().unwrap();
+                assert_eq!(utf16(&shown) + utf16(text), usize::try_from(v["len"].as_u64().unwrap()).unwrap(), "out of sync at {v}");
+                entries[i][field] = json!(shown + text);
+            }
+            "session-draft" => {
+                entries[i]["draft"] = v["draft"].clone();
+                entries[i]["draftBy"] = v["draftBy"].clone();
+            }
+            _ => {}
+        }
+    }
+    entries
+}
+
 fn last_agent_text(t: &Transcript) -> String {
     t.entries.iter().rev().find_map(|e| if let Entry::Agent { text, .. } = e { Some(text.clone()) } else { None }).unwrap_or_default()
 }
@@ -236,10 +275,13 @@ fn initialize_advertises_notices_and_a_turn_streams() {
     assert!(matches!(&t.entries[4], Entry::Plan { entries } if entries[0]["status"] == "completed"), "a new plan replaces the last");
     assert!(matches!(&t.entries[5], Entry::Agent { text, .. } if text == "[notes](file:///tmp/notes.md)"));
 
-    // The UI heard about every change, by index.
+    // The UI heard about every change, by index: a message starts as an entry and grows by appends.
     let events = f.events.lock().unwrap().clone();
     assert!(events.iter().any(|(n, v)| n == "session-entry" && v["index"] == 2 && v["entry"]["text"] == "Hello "));
+    assert!(events.iter().any(|(n, v)| n == "session-append" && v["index"] == 2 && v["field"] == "text" && v["len"] == 11));
+    assert!(!events.iter().any(|(n, v)| n == "session-entry" && v["entry"]["text"] == "Hello world"), "the whole message isn't sent again");
     assert!(events.iter().any(|(n, v)| n == "session-info" && v["running"] == true));
+    assert_eq!(replay(&events, &sid), as_values(&t), "the UI's copy, built from the events, is the transcript");
 
     // Mentions go as links; only absolute paths count.
     tauri::async_runtime::block_on(f.hub.prompt(&sid, "echo hi".into(), vec!["/tmp/a b.txt".into(), "relative.txt".into()])).unwrap();
@@ -248,6 +290,42 @@ fn initialize_advertises_notices_and_a_turn_streams() {
     assert_eq!(prompt["prompt"][0], json!({ "type": "resource_link", "uri": "file:///tmp/a b.txt", "name": "a b.txt" }));
     assert_eq!(prompt["prompt"].as_array().unwrap().len(), 2);
     assert!(matches!(&f.hub.transcript(&sid).unwrap().entries[6], Entry::User { attachments, .. } if attachments == &["a b.txt"]));
+}
+
+/// A long reply from a real agent process: the chunks arrive back to back and
+/// reach the UI as a few appends, joined, in order, the rest sent before the
+/// turn ends; the transcript is written when the turn ends.
+fn long_replies_stream_as_coalesced_appends() {
+    let f = Fixture::new(&[]);
+    f.hub.set_timings(yaah_lib::session::COALESCE, Duration::from_secs(3600));
+    let sid = f.chat();
+    let t = f.turn(&sid, "long 2000");
+    let expected = (0..2000).fold(String::new(), |mut s, i| {
+        use std::fmt::Write;
+        let _ = write!(s, "{i}: héllo 👋 𝄞 ");
+        s
+    });
+    assert_eq!(last_agent_text(&t), expected);
+    let events = f.events.lock().unwrap().clone();
+    let appends: Vec<&Value> = events.iter().filter(|(n, v)| n == "session-append" && v["sessionId"] == sid.as_str()).map(|(_, v)| v).collect();
+    assert!(!appends.is_empty() && appends.len() < 2000, "{} appends for 2000 chunks", appends.len());
+    assert_eq!(appends.last().unwrap()["len"], utf16(&expected));
+    assert_eq!(replay(&events, &sid), as_values(&t), "the UI's copy, built from the events, is the transcript");
+    let last_append = events.iter().rposition(|(n, _)| n == "session-append").unwrap();
+    let stopped = events.iter().rposition(|(n, v)| n == "session-info" && v["running"] == false).unwrap();
+    assert!(last_append < stopped, "the turn's text is all sent before it ends");
+
+    // The turn's end wrote the transcript, though saves otherwise wait an hour here.
+    let saved = || {
+        let files = std::fs::read_dir(f.dir.join("sessions")).ok()?;
+        let file = files.filter_map(Result::ok).map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e == "json"))?;
+        std::fs::read_to_string(file).ok()
+    };
+    let started = Instant::now();
+    while !saved().is_some_and(|s| s.contains("1999: héllo")) {
+        assert!(started.elapsed() < PATIENCE, "the turn's end didn't write the transcript");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn project_chats_send_the_brief_and_folders_once() {

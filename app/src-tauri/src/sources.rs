@@ -8,14 +8,23 @@
 //!
 //! Database credentials live only in the app (`~/.config/yaah/connections.json`,
 //! mode 0600). Agents and UI refer to a connection by name, never by URL.
+//!
+//! Reads are shared: identical reads in flight become one, and an answer is
+//! reused while it is fresh ([`FRESH`] for this machine, as long as the run
+//! took and at least [`STATS_FRESH`] for `docker stats`, [`API_FRESH`] for
+//! GitHub, Linear and GitLab). Postgres clients are pooled per connection
+//! ([`Pool`]).
 
 use crate::accounts::home;
+use crate::integrations::Integrations;
 use crate::json_file::JsonFile;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 use sysinfo::{DiskRefreshKind, Disks, ProcessRefreshKind, ProcessesToUpdate, System};
@@ -23,6 +32,14 @@ use sysinfo::{DiskRefreshKind, Disks, ProcessRefreshKind, ProcessesToUpdate, Sys
 const DOCKER_TIMEOUT: Duration = Duration::from_secs(10);
 /// Live views polling the same thing within this share one reading.
 const FRESH: Duration = Duration::from_secs(1);
+/// `docker stats` takes about 2 s: an answer is kept at least this long, and
+/// never less than the run took, so live views don't keep one running all the time.
+const STATS_FRESH: Duration = Duration::from_secs(5);
+/// GitHub, Linear and GitLab answers are reused this long (rate limits, and
+/// several views of one PR or board).
+pub(crate) const API_FRESH: Duration = Duration::from_secs(5);
+/// Shared answers kept before old ones are dropped.
+const MAX_SHARED: usize = 256;
 /// Diffs past this are cut, with a note: the full one is a click away on GitHub.
 const MAX_DIFF_BYTES: usize = 600_000;
 const QUERY_TIMEOUT_MS: u32 = 15_000;
@@ -30,14 +47,22 @@ const DEFAULT_ROW_LIMIT: u64 = 1_000;
 const MAX_ROW_LIMIT: u64 = 10_000;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-/// A reading shared by concurrent callers: the first runs it, the rest wait and reuse it.
-type Shared = Arc<tokio::sync::Mutex<Option<(Instant, Result<String, String>)>>>;
+/// A reading shared by concurrent callers: the first runs it, the rest wait and
+/// reuse it while it is fresh (when it was taken, for how long, the answer).
+type Shared<T> = Arc<tokio::sync::Mutex<Option<(Instant, Duration, Result<T, String>)>>>;
 
 pub struct Sources {
-    system: Arc<Mutex<SystemState>>,
+    /// Taken on a thread of its own at startup (the first process scan).
+    system: Arc<Mutex<Option<SystemState>>>,
     /// Recent docker answers, by command line.
-    docker: Mutex<HashMap<String, Shared>>,
+    docker: Mutex<HashMap<String, Shared<String>>>,
+    /// Recent GitHub, Linear and GitLab answers, by the source's canonical JSON.
+    api: Mutex<HashMap<String, Shared<Value>>>,
     connections: Arc<JsonFile>,
+    integrations: &'static Integrations,
+    /// The docker CLI (a stand-in in tests).
+    docker_bin: OsString,
+    pool: Arc<Pool>,
 }
 
 struct SystemState {
@@ -45,6 +70,80 @@ struct SystemState {
     disks: Disks,
     refreshed: Instant,
     last: Option<Value>,
+}
+
+impl SystemState {
+    fn new() -> Self {
+        let mut sys = System::new();
+        sys.refresh_cpu_usage();
+        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cpu());
+        Self { sys, disks: Disks::new(), refreshed: Instant::now(), last: None }
+    }
+}
+
+/// `v` as JSON with every object's keys in order: one key for the same source however it was written.
+fn canonical(v: &Value) -> String {
+    fn sorted(v: &Value) -> Value {
+        match v {
+            Value::Object(m) => {
+                let mut keys: Vec<&String> = m.keys().collect();
+                keys.sort();
+                let mut out = serde_json::Map::new();
+                for k in keys {
+                    out.insert(k.clone(), sorted(&m[k]));
+                }
+                Value::Object(out)
+            }
+            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
+            other => other.clone(),
+        }
+    }
+    // serde_json may keep insertion order (another crate can turn that on): sort explicitly.
+    let mut out = String::new();
+    write_sorted(&sorted(v), &mut out);
+    out
+}
+
+fn write_sorted(v: &Value, out: &mut String) {
+    match v {
+        Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (n, k) in keys.into_iter().enumerate() {
+                if n > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String(k.clone()).to_string());
+                out.push(':');
+                write_sorted(&m[k], out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (n, item) in items.iter().enumerate() {
+                if n > 0 {
+                    out.push(',');
+                }
+                write_sorted(item, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+/// The shared slot for `key`, made if there is none. Old answers nobody is
+/// waiting on are dropped once there are more than [`MAX_SHARED`].
+fn shared_slot<T>(map: &Mutex<HashMap<String, Shared<T>>>, key: String) -> Shared<T> {
+    let mut map = map.lock().unwrap_or_else(PoisonError::into_inner);
+    if map.len() > MAX_SHARED {
+        map.retain(|_, slot| {
+            Arc::strong_count(slot) > 1 || slot.try_lock().is_ok_and(|s| s.as_ref().is_some_and(|(at, fresh, _)| at.elapsed() < *fresh))
+        });
+    }
+    map.entry(key).or_default().clone()
 }
 
 impl Default for Sources {
@@ -86,12 +185,35 @@ impl Sources {
     }
 
     fn with_store(connections: Arc<JsonFile>) -> Self {
-        let mut sys = System::new();
-        // CPU usage is a delta between two refreshes; take the first one now.
-        sys.refresh_cpu_usage();
-        sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cpu());
-        let state = SystemState { sys, disks: Disks::new(), refreshed: Instant::now(), last: None };
-        Self { system: Arc::new(Mutex::new(state)), docker: Mutex::default(), connections }
+        let system: Arc<Mutex<Option<SystemState>>> = Arc::default();
+        // CPU usage is a delta between two refreshes: take the first one now, off the caller's thread.
+        let first = system.clone();
+        let _ = std::thread::Builder::new().name("yaah-sources-init".into()).spawn(move || {
+            first.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(SystemState::new);
+        });
+        Self {
+            system,
+            docker: Mutex::default(),
+            api: Mutex::default(),
+            connections,
+            integrations: Integrations::user(),
+            docker_bin: "docker".into(),
+            pool: Pool::shared(),
+        }
+    }
+
+    /// Read GitHub, Linear and GitLab through `integrations` (tests' stand-in).
+    #[cfg(test)]
+    pub(crate) fn with_integrations(mut self, integrations: &'static Integrations) -> Self {
+        self.integrations = integrations;
+        self
+    }
+
+    /// Run `bin` as the docker CLI (tests' stand-in).
+    #[cfg(test)]
+    pub(crate) fn with_docker(mut self, bin: PathBuf) -> Self {
+        self.docker_bin = bin.into_os_string();
+        self
     }
 
     /// Read a source. Errors are written for the agent or user to act on.
@@ -101,9 +223,11 @@ impl Sources {
             "system" => {
                 // Refreshing reads every process: off the async threads.
                 let state = self.system.clone();
-                tokio::task::spawn_blocking(move || snapshot(&mut state.lock().unwrap_or_else(PoisonError::into_inner)))
-                    .await
-                    .map_err(|e| format!("system: {e}"))
+                tokio::task::spawn_blocking(move || {
+                    snapshot(state.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(SystemState::new))
+                })
+                .await
+                .map_err(|e| format!("system: {e}"))
             }
             "docker.containers" => self.docker_containers().await,
             "docker.stats" => self.docker_stats(source["container"].as_str()).await,
@@ -111,23 +235,50 @@ impl Sources {
                 let container = source["container"].as_str().ok_or("docker.logs needs `container`")?;
                 self.docker_logs(container, source["tail"].as_u64().unwrap_or(200).min(5_000)).await
             }
-            "github.pr" => github_pr(repo(&source["repo"])?, pr_number(&source["number"])?).await,
-            "github.pr.diff" => github_pr_diff(repo(&source["repo"])?, pr_number(&source["number"])?).await,
-            "github.prs" => {
-                let state = source["state"].as_str().unwrap_or("open");
-                github_prs(repo(&source["repo"])?, state, source["limit"].as_u64().unwrap_or(30).min(100)).await
-            }
-            "linear.issue" | "linear.issues" | "linear.board" | "linear.cycle" => crate::integrations::linear(kind, source).await,
-            "github.issue" | "github.issues" | "gitlab.issue" | "gitlab.issues" | "linear.project" => crate::work_items::source(kind, source).await,
-            "postgres.schema" => postgres_schema(self.connection(&source["connection"])?).await,
+            "github.pr" | "github.pr.diff" | "github.prs" | "github.issue" | "github.issues" | "gitlab.issue" | "gitlab.issues" | "linear.issue"
+            | "linear.issues" | "linear.board" | "linear.cycle" | "linear.project" => self.api_shared(kind, source).await,
+            "postgres.schema" => postgres_schema(&self.pool, self.connection(&source["connection"])?).await,
             "postgres.query" => {
                 let sql = source["sql"].as_str().ok_or("postgres.query needs `sql`")?;
                 let limit = source["limit"].as_u64().unwrap_or(DEFAULT_ROW_LIMIT).min(MAX_ROW_LIMIT);
-                postgres_query(&self.connection(&source["connection"])?, sql, limit).await
+                postgres_query(&self.pool, &self.connection(&source["connection"])?, sql, limit).await
             }
             other => Err(format!(
                 "unknown source kind `{other}`; known: system, docker.containers, docker.stats, docker.logs, github.pr, github.pr.diff, github.prs, github.issue, github.issues, gitlab.issue, gitlab.issues, linear.issue, linear.issues, linear.project, linear.board, linear.cycle, postgres.schema, postgres.query"
             )),
+        }
+    }
+
+    /// A GitHub, Linear or GitLab source, shared: identical reads in flight make
+    /// one request, and its answer is reused for [`API_FRESH`] (an error only by
+    /// the reads that waited on it).
+    async fn api_shared(&self, kind: &str, source: &Value) -> Result<Value, String> {
+        let slot = shared_slot(&self.api, canonical(source));
+        let arrived = Instant::now();
+        let mut slot = slot.lock().await;
+        if let Some((at, fresh, out)) = &*slot
+            // An answer while fresh; an error only to the reads that were waiting on it.
+            && (at.elapsed() < *fresh || (out.is_err() && *at >= arrived))
+        {
+            return out.clone();
+        }
+        let out = self.api_read(kind, source).await;
+        let fresh = if out.is_ok() { API_FRESH } else { Duration::ZERO };
+        *slot = Some((Instant::now(), fresh, out.clone()));
+        out
+    }
+
+    async fn api_read(&self, kind: &str, source: &Value) -> Result<Value, String> {
+        let i = self.integrations;
+        match kind {
+            "github.pr" => github_pr(i, repo(&source["repo"])?, pr_number(&source["number"])?).await,
+            "github.pr.diff" => github_pr_diff(i, repo(&source["repo"])?, pr_number(&source["number"])?).await,
+            "github.prs" => {
+                let state = source["state"].as_str().unwrap_or("open");
+                github_prs(i, repo(&source["repo"])?, state, source["limit"].as_u64().unwrap_or(30).min(100)).await
+            }
+            "linear.issue" | "linear.issues" | "linear.board" | "linear.cycle" => i.linear_source(kind, source).await,
+            _ => crate::work_items::source_with(i, kind, source).await,
         }
     }
 
@@ -239,12 +390,11 @@ fn snapshot(state: &mut SystemState) -> Value {
 
 // ── Docker (via the docker CLI: no daemon socket handling here) ─────────────
 
-async fn docker(args: &[&str]) -> Result<String, String> {
-    let out =
-        tokio::time::timeout(DOCKER_TIMEOUT, crate::path_env::tokio_command("docker").args(args).stdin(Stdio::null()).kill_on_drop(true).output())
-            .await
-            .map_err(|_| "docker didn't answer within 10s".to_owned())?
-            .map_err(|e| format!("couldn't run docker: {e}"))?;
+async fn docker(bin: &OsString, args: &[&str]) -> Result<String, String> {
+    let out = tokio::time::timeout(DOCKER_TIMEOUT, crate::path_env::tokio_command(bin).args(args).stdin(Stdio::null()).kill_on_drop(true).output())
+        .await
+        .map_err(|_| "docker didn't answer within 10s".to_owned())?
+        .map_err(|e| format!("couldn't run docker: {e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(format!("docker {}: {}", args[0], err.trim()));
@@ -277,18 +427,20 @@ fn valid_container(c: &str) -> Result<(), String> {
 }
 
 impl Sources {
-    /// `docker <args>`, shared with any caller asking the same within [`FRESH`]
-    /// (`docker stats` alone takes a couple of seconds).
+    /// `docker <args>`, shared with any caller asking the same while it is fresh:
+    /// at least [`FRESH`] and as long as the run took, and for `docker stats`
+    /// (about 2 s a run) at least [`STATS_FRESH`].
     async fn docker_shared(&self, args: &[&str]) -> Result<String, String> {
-        let slot = self.docker.lock().unwrap_or_else(PoisonError::into_inner).entry(args.join("\u{1f}")).or_default().clone();
+        let slot = shared_slot(&self.docker, args.join("\u{1f}"));
         let mut slot = slot.lock().await;
-        if let Some((at, out)) = &*slot
-            && at.elapsed() < FRESH
+        if let Some((at, fresh, out)) = &*slot
+            && at.elapsed() < *fresh
         {
             return out.clone();
         }
-        let out = docker(args).await;
-        *slot = Some((Instant::now(), out.clone()));
+        let started = Instant::now();
+        let out = docker(&self.docker_bin, args).await;
+        *slot = Some((Instant::now(), docker_fresh_for(args, started.elapsed()), out.clone()));
         out
     }
 
@@ -330,6 +482,12 @@ impl Sources {
         let lines: Vec<&str> = text.lines().collect();
         Ok(json!({ "container": container, "lines": lines.len(), "text": lines.join("\n") }))
     }
+}
+
+/// How long a docker answer that took `took` to get stays fresh.
+fn docker_fresh_for(args: &[&str], took: Duration) -> Duration {
+    let floor = if args.first() == Some(&"stats") { STATS_FRESH } else { FRESH };
+    took.max(floor)
 }
 
 // ── GitHub (its API, with the account connected in Settings → Integrations) ─
@@ -380,9 +538,9 @@ fn flatten_pr(pr: &Value) -> Value {
     p
 }
 
-async fn github_pr((owner, name): (&str, &str), number: u64) -> Result<Value, String> {
+async fn github_pr(i: &Integrations, (owner, name): (&str, &str), number: u64) -> Result<Value, String> {
     let q = PR_QUERY.replace("CHECKS", CHECKS_FIELDS);
-    let data = crate::integrations::github_graphql(&q, json!({ "owner": owner, "name": name, "number": number })).await?;
+    let data = i.github_graphql(&q, json!({ "owner": owner, "name": name, "number": number })).await?;
     let pr = &data["repository"]["pullRequest"];
     if pr.is_null() {
         return Err(format!("no PR #{number} in {owner}/{name}"));
@@ -400,14 +558,14 @@ fn cut_at_line(text: &mut String, max: usize) -> bool {
     true
 }
 
-async fn github_pr_diff((owner, name): (&str, &str), number: u64) -> Result<Value, String> {
-    let mut text = crate::integrations::github_get(&format!("/repos/{owner}/{name}/pulls/{number}"), "application/vnd.github.diff", true).await?;
+async fn github_pr_diff(i: &Integrations, (owner, name): (&str, &str), number: u64) -> Result<Value, String> {
+    let mut text = i.github_get(&format!("/repos/{owner}/{name}/pulls/{number}"), "application/vnd.github.diff", true).await?;
     let bytes = text.len();
     let truncated = cut_at_line(&mut text, MAX_DIFF_BYTES);
     Ok(json!({ "repo": format!("{owner}/{name}"), "number": number, "text": text, "bytes": bytes, "truncated": truncated }))
 }
 
-async fn github_prs((owner, name): (&str, &str), state: &str, limit: u64) -> Result<Value, String> {
+async fn github_prs(i: &Integrations, (owner, name): (&str, &str), state: &str, limit: u64) -> Result<Value, String> {
     let states = match state {
         "open" => json!(["OPEN"]),
         "closed" => json!(["CLOSED"]),
@@ -420,7 +578,7 @@ async fn github_prs((owner, name): (&str, &str), state: &str, limit: u64) -> Res
          pullRequests(states: $states, first: $first, orderBy: {{ field: UPDATED_AT, direction: DESC }}) {{ nodes {{ \
          number title url isDraft author {{ login }} headRefName reviewDecision updatedAt {CHECKS_FIELDS} }} }} }} }}"
     );
-    let data = crate::integrations::github_graphql(&q, json!({ "owner": owner, "name": name, "states": states, "first": limit.max(1) })).await?;
+    let data = i.github_graphql(&q, json!({ "owner": owner, "name": name, "states": states, "first": limit.max(1) })).await?;
     if data["repository"].is_null() {
         return Err(format!("no repo {owner}/{name} (or no access to it)"));
     }
@@ -614,25 +772,127 @@ fn tls() -> Result<postgres_native_tls::MakeTlsConnector, String> {
 }
 
 async fn open(c: &Connection) -> Result<tokio_postgres::Client, String> {
-    let (client, conn) = tokio::time::timeout(Duration::from_secs(10), tokio_postgres::connect(&c.url, tls()?))
-        .await
-        .map_err(|_| "timed out connecting".to_owned())?
-        .map_err(|e| e.to_string())?;
+    let (url, tls) = (c.url.clone(), tls()?);
+    // Connected on the app's runtime, which lives as long as the process: a pooled
+    // client outlives the caller's runtime (a test's, say), and its socket must too.
     tauri::async_runtime::spawn(async move {
-        let _ = conn.await;
-    });
-    Ok(client)
+        let (client, conn) = tokio::time::timeout(Duration::from_secs(10), tokio_postgres::connect(&url, tls))
+            .await
+            .map_err(|_| "timed out connecting".to_owned())?
+            .map_err(|e| e.to_string())?;
+        tauri::async_runtime::spawn(async move {
+            let _ = conn.await;
+        });
+        Ok(client)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-/// A connection for agent or UI SQL: only as a role [`check_role`] accepts.
-async fn connect(c: &Connection) -> Result<tokio_postgres::Client, String> {
-    let client = open(c).await?;
-    let fresh = trusted_roles().lock().unwrap_or_else(PoisonError::into_inner).get(&c.url).is_some_and(|at| at.elapsed() < ROLE_CHECK_TTL);
-    if !fresh {
-        check_role(&client).await?;
-        trusted_roles().lock().unwrap_or_else(PoisonError::into_inner).insert(c.url.clone(), Instant::now());
+/// Idle clients kept per connection URL.
+const POOL_SIZE: usize = 2;
+/// How long an idle client is kept before it is closed.
+const POOL_IDLE: Duration = Duration::from_secs(60);
+
+/// Postgres clients for agent and UI SQL, kept open between queries (a new
+/// connection costs about 3 ms; live views query every second or two). At most
+/// [`POOL_SIZE`] idle per URL, each closed after [`POOL_IDLE`] unused. A client
+/// goes back only after its read-only transaction was rolled back cleanly.
+pub(crate) struct Pool {
+    size: usize,
+    idle_for: Duration,
+    state: Mutex<PoolState>,
+    /// Connections opened, ever (what tests and measurements count).
+    opened: AtomicUsize,
+}
+
+#[derive(Default)]
+struct PoolState {
+    idle: HashMap<String, Vec<(tokio_postgres::Client, Instant)>>,
+    /// A task is closing idle clients as they expire.
+    reaping: bool,
+}
+
+impl Pool {
+    pub(crate) fn new(size: usize, idle_for: Duration) -> Arc<Self> {
+        Arc::new(Self { size, idle_for, state: Mutex::default(), opened: AtomicUsize::new(0) })
     }
-    Ok(client)
+
+    /// The app's pool.
+    fn shared() -> Arc<Self> {
+        static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
+        POOL.get_or_init(|| Pool::new(POOL_SIZE, POOL_IDLE)).clone()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, PoolState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Close the clients idle longer than `idle_for` (or closed by the server).
+    fn prune(&self, state: &mut PoolState) {
+        for list in state.idle.values_mut() {
+            list.retain(|(client, at)| !client.is_closed() && at.elapsed() < self.idle_for);
+        }
+        state.idle.retain(|_, list| !list.is_empty());
+    }
+
+    /// Idle clients for `url` right now.
+    #[cfg(test)]
+    pub(crate) fn idle(&self, url: &str) -> usize {
+        let mut state = self.lock();
+        self.prune(&mut state);
+        state.idle.get(url).map_or(0, Vec::len)
+    }
+
+    /// A client for `c`: an idle one, else a new connection. Either way only as a role [`check_role`] accepts.
+    async fn get(&self, c: &Connection) -> Result<tokio_postgres::Client, String> {
+        let pooled = {
+            let mut state = self.lock();
+            self.prune(&mut state);
+            state.idle.get_mut(&c.url).and_then(Vec::pop).map(|(client, _)| client)
+        };
+        let client = if let Some(client) = pooled {
+            client
+        } else {
+            self.opened.fetch_add(1, Ordering::SeqCst);
+            open(c).await?
+        };
+        let fresh = trusted_roles().lock().unwrap_or_else(PoisonError::into_inner).get(&c.url).is_some_and(|at| at.elapsed() < ROLE_CHECK_TTL);
+        if !fresh {
+            check_role(&client).await?;
+            trusted_roles().lock().unwrap_or_else(PoisonError::into_inner).insert(c.url.clone(), Instant::now());
+        }
+        Ok(client)
+    }
+
+    /// Keep `client` for the next query on `url`, unless enough are idle already.
+    fn put(self: &Arc<Self>, url: &str, client: tokio_postgres::Client) {
+        if client.is_closed() {
+            return;
+        }
+        let mut state = self.lock();
+        self.prune(&mut state);
+        let list = state.idle.entry(url.to_owned()).or_default();
+        if list.len() >= self.size {
+            return;
+        }
+        list.push((client, Instant::now()));
+        if !state.reaping {
+            state.reaping = true;
+            let pool = self.clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(pool.idle_for / 4 + Duration::from_millis(10)).await;
+                    let mut state = pool.lock();
+                    pool.prune(&mut state);
+                    if state.idle.is_empty() {
+                        state.reaping = false;
+                        break;
+                    }
+                }
+            });
+        }
+    }
 }
 
 /// How long a role that passed [`check_role`] is trusted before it's asked again,
@@ -715,16 +975,16 @@ const RAW_STATEMENTS: &[&str] = &["select", "with", "values", "table", "show", "
 
 /// Run `sql` in a READ ONLY transaction with a statement timeout; rows come
 /// back as JSON objects (Postgres builds them, so every type converts).
-async fn postgres_query(c: &Connection, sql: &str, limit: u64) -> Result<Value, String> {
-    query_within(c, sql, limit, QUERY_TIMEOUT_MS).await
+async fn postgres_query(pool: &Arc<Pool>, c: &Connection, sql: &str, limit: u64) -> Result<Value, String> {
+    query_within(pool, c, sql, limit, QUERY_TIMEOUT_MS).await
 }
 
-async fn query_within(c: &Connection, sql: &str, limit: u64, timeout_ms: u32) -> Result<Value, String> {
+async fn query_within(pool: &Arc<Pool>, c: &Connection, sql: &str, limit: u64, timeout_ms: u32) -> Result<Value, String> {
     let sql = sql.trim().trim_end_matches(';').trim();
     if sql.is_empty() {
         return Err("empty query".into());
     }
-    let client = connect(c).await?;
+    let client = pool.get(c).await?;
     let begin = format!("begin read only; set local statement_timeout = {timeout_ms};");
     client.batch_execute(&begin).await.map_err(|e| db_error(&e))?;
     let result = async {
@@ -764,7 +1024,10 @@ async fn query_within(c: &Connection, sql: &str, limit: u64, timeout_ms: u32) ->
         Ok::<_, String>(json!({ "connection": c.name, "columns": columns, "rows": rows, "truncated": truncated }))
     }
     .await;
-    let _ = client.batch_execute("rollback").await;
+    // Settings a query changed go with the rollback; session-level advisory locks don't, so they are let go.
+    if client.batch_execute("rollback; select pg_advisory_unlock_all()").await.is_ok() {
+        pool.put(&c.url, client);
+    }
     result
 }
 
@@ -775,8 +1038,9 @@ fn db_error(e: &tokio_postgres::Error) -> String {
     }
 }
 
-async fn postgres_schema(c: Connection) -> Result<Value, String> {
+async fn postgres_schema(pool: &Arc<Pool>, c: Connection) -> Result<Value, String> {
     let q = postgres_query(
+        pool,
         &c,
         "select table_schema as schema, table_name as table, column_name as column, data_type as type, is_nullable = 'YES' as nullable \
          from information_schema.columns \
@@ -904,6 +1168,120 @@ mod tests {
         assert_eq!(target("postgres://admin:hunter2@db.example.com:6543/app"), "db.example.com:6543/app");
         assert_eq!(target("not a url"), "?");
     }
+
+    fn temp(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("yaah-src-{tag}-{}", crate::session::random_token()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A stand-in docker CLI that takes `secs` per run and logs each run to `runs.log`.
+    fn fake_docker(dir: &std::path::Path, secs: f64) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("docker");
+        let log = dir.join("runs.log");
+        std::fs::write(
+            &bin,
+            format!("#!/bin/sh\necho \"$1\" >> '{}'\nsleep {secs}\necho '{{\"Name\":\"db\",\"CPUPerc\":\"1.5%\",\"MemPerc\":\"2%\",\"ID\":\"abc\",\"Names\":\"db\"}}'\n", log.display()),
+        )
+        .unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        bin
+    }
+
+    fn runs(dir: &std::path::Path) -> Vec<String> {
+        std::fs::read_to_string(dir.join("runs.log")).unwrap_or_default().lines().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn docker_answers_stay_fresh_as_long_as_they_took() {
+        assert_eq!(docker_fresh_for(&["ps"], Duration::from_millis(90)), FRESH, "quick: the usual second");
+        assert_eq!(docker_fresh_for(&["logs"], Duration::from_millis(1500)), Duration::from_millis(1500), "slow: as long as it took");
+        assert_eq!(docker_fresh_for(&["stats"], Duration::from_secs(2)), STATS_FRESH, "stats: at least five seconds");
+        assert_eq!(docker_fresh_for(&["stats"], Duration::from_secs(7)), Duration::from_secs(7));
+
+        let dir = temp("docker");
+        let s = Sources::with_connections_file(dir.join("c.json")).with_docker(fake_docker(&dir, 1.3));
+        let read = |v: Value| tauri::async_runtime::block_on(s.read(&v)).unwrap();
+        // Four views asking at once: one run.
+        tauri::async_runtime::block_on(async {
+            let src = json!({ "kind": "docker.stats" });
+            let all = tokio::join!(s.read(&src), s.read(&src), s.read(&src), s.read(&src));
+            assert!([all.0, all.1, all.2, all.3].iter().all(|r| r.as_ref().unwrap()[0]["cpu"] == 1.5));
+        });
+        assert_eq!(runs(&dir), ["stats"]);
+        // Past the usual second but within the five: still the same reading.
+        std::thread::sleep(Duration::from_millis(1200));
+        read(json!({ "kind": "docker.stats" }));
+        assert_eq!(runs(&dir).len(), 1, "stats are kept at least 5 s");
+        // `docker ps` took 1.3 s, so it's kept 1.3 s rather than 1.
+        read(json!({ "kind": "docker.containers" }));
+        std::thread::sleep(Duration::from_millis(1100));
+        read(json!({ "kind": "docker.containers" }));
+        assert_eq!(runs(&dir), ["stats", "ps"], "fresh for as long as it took");
+        std::thread::sleep(Duration::from_millis(400));
+        read(json!({ "kind": "docker.containers" }));
+        assert_eq!(runs(&dir), ["stats", "ps", "ps"], "then read again");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn canonical_json_ignores_key_order() {
+        let a: Value = serde_json::from_str(r#"{"repo":"o/r","kind":"github.pr","number":1,"x":{"b":1,"a":[{"d":1,"c":2}]}}"#).unwrap();
+        let b: Value = serde_json::from_str(r#"{"number":1,"x":{"a":[{"c":2,"d":1}],"b":1},"kind":"github.pr","repo":"o/r"}"#).unwrap();
+        assert_eq!(canonical(&a), canonical(&b));
+        assert_eq!(canonical(&json!({ "b": "é\"", "a": null })), r#"{"a":null,"b":"é\""}"#);
+        assert_ne!(canonical(&json!({ "number": 1 })), canonical(&json!({ "number": 2 })));
+    }
+
+    /// Five live views of one issue make one request; a later read within the
+    /// window is served from memory; after it, the API is asked again.
+    #[test]
+    fn api_sources_share_one_request_and_a_short_cache() {
+        use crate::integrations::tests::{instance, mock};
+        let (base, seen) = mock(|r| match r.path.as_str() {
+            "/api.github.com/repos/o/r/issues/1" => {
+                std::thread::sleep(Duration::from_millis(150));
+                (
+                    200,
+                    json!({ "number": 1, "title": "Refunds", "state": "open", "html_url": "u", "comments": 0, "user": { "login": "ada" }, "labels": [] }),
+                )
+            }
+            "/api.github.com/repos/o/r/issues/2" => (500, json!("down")),
+            _ => (200, json!([])),
+        });
+        let i = instance(&base, 0);
+        i.put("github", json!({ "api_key": "ghp_x" })).unwrap();
+        let dir = temp("api");
+        let s = Sources::with_connections_file(dir.join("c.json")).with_integrations(i);
+        let issue = |n: u64| json!({ "kind": "github.issue", "repo": "o/r", "number": n });
+        let requests = |n: u64| seen.lock().unwrap().iter().filter(|l| l.starts_with(&format!("/api.github.com/repos/o/r/issues/{n}?"))).count();
+
+        let started = Instant::now();
+        tauri::async_runtime::block_on(async {
+            let src = issue(1);
+            // The same source written with its keys in another order is the same source.
+            let reordered: Value = serde_json::from_str(r#"{"number":1,"repo":"o/r","kind":"github.issue"}"#).unwrap();
+            let all = tokio::join!(s.read(&src), s.read(&src), s.read(&reordered), s.read(&src), s.read(&src));
+            for r in [all.0, all.1, all.2, all.3, all.4] {
+                assert_eq!(r.unwrap()["title"], "Refunds");
+            }
+        });
+        assert_eq!(requests(1), 1, "5 concurrent reads, 1 request");
+        let answered = Instant::now();
+        tauri::async_runtime::block_on(s.read(&issue(1))).unwrap();
+        assert_eq!(requests(1), 1, "within the window: from memory");
+        assert!(started.elapsed() < API_FRESH);
+        std::thread::sleep(API_FRESH.saturating_sub(answered.elapsed()) + Duration::from_millis(100));
+        tauri::async_runtime::block_on(s.read(&issue(1))).unwrap();
+        assert_eq!(requests(1), 2, "after it: asked again");
+
+        // Errors aren't kept: the next read tries again.
+        assert!(tauri::async_runtime::block_on(s.read(&issue(2))).is_err());
+        assert!(tauri::async_runtime::block_on(s.read(&issue(2))).is_err());
+        assert_eq!(requests(2), 2);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// Against a real database: the demo container (`yaah-pg-demo` on 127.0.0.1:54329)
@@ -939,7 +1317,7 @@ mod postgres_tests {
     fn demo() -> Option<Connection> {
         let url = tauri::async_runtime::block_on(read_only_url(&admin_url()));
         let c = url.map(|url| Connection { name: "demo".into(), url });
-        match c.and_then(|c| tauri::async_runtime::block_on(postgres_query(&c, "select 1", 1)).map(|_| c)) {
+        match c.and_then(|c| tauri::async_runtime::block_on(postgres_query(&Pool::shared(), &c, "select 1", 1)).map(|_| c)) {
             Ok(c) => Some(c),
             Err(e) => {
                 eprintln!("skipped: no Postgres to test against ({e})");
@@ -952,7 +1330,7 @@ mod postgres_tests {
     fn superusers_are_refused_before_any_sql_runs() {
         let Some(_) = demo() else { return };
         let admin = Connection { name: "admin".into(), url: admin_url() };
-        let e = tauri::async_runtime::block_on(postgres_query(&admin, "select pg_read_file('/etc/hostname')", 1)).unwrap_err();
+        let e = tauri::async_runtime::block_on(postgres_query(&Pool::shared(), &admin, "select pg_read_file('/etc/hostname')", 1)).unwrap_err();
         assert!(e.contains("superuser") && e.contains("CREATE ROLE yaah_ro") && e.contains("pg_read_all_data"), "{e}");
         let store = JsonFile::new(std::env::temp_dir().join(format!("yaah-pg-{}", crate::session::random_token())).join("c.json"), true);
         assert!(tauri::async_runtime::block_on(add(&store, "admin", &admin.url)).unwrap_err().contains("superuser"));
@@ -963,15 +1341,69 @@ mod postgres_tests {
     fn the_read_only_role_cant_reach_the_servers_files() {
         let Some(c) = demo() else { return };
         for sql in ["select pg_read_file('/etc/hostname')", "select * from pg_ls_dir('.')", "select pg_stat_file('postgresql.conf')"] {
-            let e = tauri::async_runtime::block_on(query_within(&c, sql, 10, 5_000)).unwrap_err();
+            let e = tauri::async_runtime::block_on(query_within(&Pool::shared(), &c, sql, 10, 5_000)).unwrap_err();
             assert!(e.contains("permission denied"), "{sql}: {e}");
         }
+    }
+
+    /// One client serves query after query; it is closed (on the server too) after
+    /// the idle time, and the next query connects again. Concurrent queries open
+    /// more, but only the pool's size stay.
+    #[test]
+    fn clients_are_pooled_and_dropped_when_idle() {
+        let Some(c) = demo() else { return };
+        let pool = Pool::new(2, Duration::from_millis(400));
+        let pid = |pool: &Arc<Pool>| {
+            let v = tauri::async_runtime::block_on(query_within(pool, &c, "select pg_backend_pid() as pid", 1, 5_000)).unwrap();
+            v["rows"][0]["pid"].as_i64().unwrap()
+        };
+        let first = pid(&pool);
+        for _ in 0..4 {
+            assert_eq!(pid(&pool), first, "the same connection");
+        }
+        assert_eq!((pool.opened.load(Ordering::SeqCst), pool.idle(&c.url)), (1, 1));
+        // A failed query leaves the client clean for the next one.
+        assert!(tauri::async_runtime::block_on(query_within(&pool, &c, "select nope", 1, 5_000)).is_err());
+        assert_eq!(pid(&pool), first);
+
+        // Three at once: three connections, two kept.
+        tauri::async_runtime::block_on(async {
+            let sleep = |sql| query_within(&pool, &c, sql, 1, 5_000);
+            let all = tokio::join!(sleep("select pg_sleep(0.1)"), sleep("select pg_sleep(0.1)"), sleep("select pg_sleep(0.1)"));
+            for r in [all.0, all.1, all.2] {
+                r.unwrap();
+            }
+        });
+        assert_eq!(pool.opened.load(Ordering::SeqCst), 3);
+        assert_eq!(pool.idle(&c.url), 2, "at most two idle");
+
+        // Idle past the limit: closed, here and on the server, without another query.
+        std::thread::sleep(Duration::from_millis(1_000));
+        let alive = tauri::async_runtime::block_on(async {
+            let (client, conn) = tokio_postgres::connect(&admin_url(), tokio_postgres::NoTls).await.unwrap();
+            tauri::async_runtime::spawn(conn);
+            let mut alive = 1;
+            for _ in 0..20 {
+                let row = client.query_one("select count(*) from pg_stat_activity where pid = $1", &[&i32::try_from(first).unwrap()]).await.unwrap();
+                alive = row.get::<_, i64>(0);
+                if alive == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            alive
+        });
+        assert_eq!(alive, 0, "the server no longer has the idle connection: closed by the pool on its own");
+        assert_eq!(pool.idle(&c.url), 0);
+        let next = pid(&pool);
+        assert_ne!(next, first, "a new connection after the idle drop");
+        assert_eq!(pool.opened.load(Ordering::SeqCst), 4);
     }
 
     #[test]
     fn the_statement_timeout_cancels_long_queries_on_both_paths() {
         let Some(c) = demo() else { return };
-        let run = |sql: &str| tauri::async_runtime::block_on(query_within(&c, sql, 10, 300)).unwrap_err();
+        let run = |sql: &str| tauri::async_runtime::block_on(query_within(&Pool::shared(), &c, sql, 10, 300)).unwrap_err();
         let started = Instant::now();
         assert!(run("select pg_sleep(5)").contains("statement timeout"));
         // EXPLAIN ANALYZE can't be wrapped as a subquery, so it runs as written: still bounded.

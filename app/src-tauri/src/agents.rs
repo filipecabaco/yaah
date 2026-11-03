@@ -248,8 +248,9 @@ impl AgentsFile {
 /// Profiles on disk. One per app; tests point it at a temp file.
 pub struct Store {
     path: PathBuf,
-    /// Serialises read-modify-write of the file.
-    lock: Mutex<()>,
+    /// Serialises read-modify-write of the file, and holds the last read while
+    /// the file is unchanged on disk (it is read on every prompt and new chat).
+    lock: Mutex<Option<(crate::json_file::Stamp, AgentsFile)>>,
 }
 
 /// Claude accounts worth migrating: logged in, or a config dir yaah or Claude Code made.
@@ -262,7 +263,7 @@ static USER: std::sync::OnceLock<Store> = std::sync::OnceLock::new();
 
 impl Store {
     pub fn at(path: PathBuf) -> Self {
-        Self { path, lock: Mutex::new(()) }
+        Self { path, lock: Mutex::new(None) }
     }
 
     /// `~/.config/yaah/agents.json`.
@@ -272,16 +273,32 @@ impl Store {
 
     /// Read the file; when there is none yet, migrate Claude accounts into it.
     pub fn load(&self) -> AgentsFile {
-        let _g = self.lock.lock().unwrap();
         self.load_with(existing_claude_accounts)
     }
 
     fn load_with(&self, claude_accounts: impl FnOnce() -> Vec<accounts::Account>) -> AgentsFile {
+        let mut cache = self.lock.lock().unwrap();
+        self.load_cached(&mut cache, claude_accounts)
+    }
+
+    fn load_cached(
+        &self,
+        cache: &mut Option<(crate::json_file::Stamp, AgentsFile)>,
+        claude_accounts: impl FnOnce() -> Vec<accounts::Account>,
+    ) -> AgentsFile {
+        let stamp = crate::json_file::Stamp::of(&self.path);
+        if let (Some(now), Some((then, file))) = (stamp, cache.as_ref())
+            && now == *then
+        {
+            return file.clone();
+        }
         if let Ok(raw) = std::fs::read_to_string(&self.path) {
-            return serde_json::from_str(&raw).unwrap_or_else(|e| {
+            let file: AgentsFile = serde_json::from_str(&raw).unwrap_or_else(|e| {
                 eprintln!("[agents] {} is unreadable, ignoring it: {e}", self.path.display());
                 AgentsFile::default()
             });
+            *cache = stamp.map(|s| (s, file.clone()));
+            return file;
         }
         let file = migrate(&claude_accounts());
         if !file.profiles.is_empty()
@@ -298,10 +315,11 @@ impl Store {
     }
 
     fn update<T>(&self, f: impl FnOnce(&mut AgentsFile) -> Result<T, String>) -> Result<T, String> {
-        let _g = self.lock.lock().unwrap();
-        let mut file = self.load_with(existing_claude_accounts);
+        let mut cache = self.lock.lock().unwrap();
+        let mut file = self.load_cached(&mut cache, existing_claude_accounts);
         let out = f(&mut file)?;
         self.write(&file)?;
+        *cache = crate::json_file::Stamp::of(&self.path).map(|s| (s, file));
         Ok(out)
     }
 
@@ -1034,6 +1052,27 @@ mod tests {
             let mode = std::fs::metadata(dir.join("agents.json")).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "env may hold API keys");
         }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// agents.json is read on every prompt: from memory while it is unchanged, again once it changes.
+    #[test]
+    fn profiles_are_cached_until_the_file_changes() {
+        use std::os::unix::fs::PermissionsExt;
+        let (store, dir) = temp_store();
+        store.save(&draft("Gemini", "custom", "gemini --acp")).unwrap();
+        let path = dir.join("agents.json");
+        // (The first save also migrates whatever Claude accounts this machine has.)
+        let n = store.load().profiles.len();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(store.load().profiles.len(), n, "unchanged: no read");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let mut edited: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        edited["profiles"][0]["label"] = json!("Edited by hand");
+        std::fs::write(&path, edited.to_string()).unwrap();
+        assert_eq!(store.load().profiles[0].label, "Edited by hand", "a change on disk is read");
+        store.save(&draft("Codex", "custom", "codex-acp")).unwrap();
+        assert_eq!(store.load().profiles.len(), n + 1, "our own write too");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

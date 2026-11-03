@@ -698,3 +698,62 @@ async fn starts_projects_from_gitlab_and_linear_items() {
     assert_eq!(projects.list().unwrap().len(), before);
     std::fs::remove_dir_all(home).ok();
 }
+
+/// Against the real Linear API, read-only, with the account connected in yaah
+/// (`~/.config/yaah/integrations.json`; nothing is written but a token refresh).
+/// Checks what the stand-in can't: that Linear accepts the queries as written.
+///
+///     cargo test --lib live_linear -- --ignored --nocapture
+#[tokio::test]
+#[ignore = "talks to the real Linear API with the user's connection"]
+async fn live_linear_queue_resolve_and_sources() {
+    let i = Integrations::user();
+    if !i.connected("linear") {
+        println!("skipped: Linear isn't connected");
+        return;
+    }
+    // The queue: `assignee/creator.isMe` for issues, and for projects
+    // `ProjectFilter.status.type` and `members.some.isMe` (Linear refuses an unknown filter field).
+    let q = queue(i, &[]).await;
+    let linear_errors: Vec<_> = q.errors.iter().filter(|e| matches!(e.service, WorkService::Linear | WorkService::LinearProject)).collect();
+    assert!(linear_errors.is_empty(), "{linear_errors:?}");
+    let projects = linear_projects_queue(i).await.unwrap();
+    assert!(projects.iter().all(|p| !matches!(p.state_key.as_deref(), Some("completed" | "canceled"))), "the status filter applies");
+    let issues: Vec<&WorkItem> = q.items.iter().filter(|w| w.service == WorkService::Linear).collect();
+    println!("live: {} Linear issues, {} projects in the queue", issues.len(), projects.len());
+
+    // `project(id:)` takes the slugId the queue and URLs carry, and `Project.content` exists.
+    if let Some(p) = projects.first() {
+        let by_url = resolve(i, &[], &p.url).await.unwrap();
+        assert_eq!((by_url.service, by_url.id.as_str()), (WorkService::LinearProject, p.id.as_str()));
+        let raw = i.linear("query($id: String!) { project(id: $id) { slugId content description } }", json!({ "id": p.id })).await.unwrap();
+        assert_eq!(raw["project"]["slugId"], json!(p.id));
+        let shaped = linear_project(i, &p.id).await.unwrap();
+        if let Some(content) = raw["project"]["content"].as_str().filter(|c| !c.trim().is_empty()) {
+            assert_eq!(shaped["description"].as_str(), Some(content), "the long write-up is the description");
+        }
+    }
+    if let Some(issue) = issues.first() {
+        let got = resolve(i, &[], &issue.id).await.unwrap();
+        assert_eq!(got.id, issue.id);
+    }
+
+    // Comments: the newest 30, oldest first, even on an issue with more.
+    let all = i
+        .linear("query { issues(first: 100, orderBy: updatedAt) { nodes { identifier comments(first: 250) { nodes { createdAt } } } } }", json!({}))
+        .await
+        .unwrap();
+    let busiest = all["issues"]["nodes"].as_array().unwrap().iter().max_by_key(|n| n["comments"]["nodes"].as_array().map_or(0, Vec::len)).cloned();
+    if let Some(n) = busiest {
+        let id = n["identifier"].as_str().unwrap();
+        let mut dates: Vec<&str> = n["comments"]["nodes"].as_array().unwrap().iter().filter_map(|c| c["createdAt"].as_str()).collect();
+        dates.sort_unstable();
+        let issue = linear_issue(i, id).await.unwrap();
+        let shown: Vec<&str> = issue["comments"].as_array().unwrap().iter().filter_map(|c| c["at"].as_str()).collect();
+        println!("live: {id} has {} comments, {} shown", dates.len(), shown.len());
+        assert_eq!(shown.len(), dates.len().min(SOURCE_COMMENTS));
+        assert!(shown.windows(2).all(|w| w[0] <= w[1]), "oldest first");
+        assert_eq!(shown.last(), dates.last(), "the newest comment is there");
+        assert_eq!(shown.first(), dates.get(dates.len().saturating_sub(SOURCE_COMMENTS)), "and the 29 before it");
+    }
+}

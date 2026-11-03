@@ -89,13 +89,10 @@ export function parsePatch(text: string): DiffFile[] {
 }
 
 const CONTEXT = 3;
-/** Above this many cells the LCS table gets expensive; fall back to a coarser diff. */
-const MAX_CELLS = 4_000_000;
 
 type Op = "=" | "-" | "+";
-const repeat = (op: Op, n: number): Op[] => Array<Op>(n).fill(op);
 
-/** Diff two texts by lines (LCS), grouped into hunks with 3 lines of context. */
+/** Diff two texts by lines (Myers), grouped into hunks with 3 lines of context. */
 export function diffTexts(path: string, oldText: string, newText: string): DiffFile {
   const a = oldText ? oldText.split("\n") : [];
   const b = newText ? newText.split("\n") : [];
@@ -105,7 +102,7 @@ export function diffTexts(path: string, oldText: string, newText: string): DiffF
   const lines: Line[] = [];
   let o = 1;
   let n = 1;
-  for (const op of lineOps(a, b)) {
+  for (const op of diffLines(a, b)) {
     if (op === "=") lines.push({ kind: " ", text: a[o - 1], old: o++, new: n++ });
     else if (op === "-") lines.push({ kind: "-", text: a[o - 1], old: o++ });
     else lines.push({ kind: "+", text: b[n - 1], new: n++ });
@@ -116,46 +113,121 @@ export function diffTexts(path: string, oldText: string, newText: string): DiffF
 }
 
 /**
- * The common start and end are kept as is; only the middle is diffed (LCS), so
- * a small edit to a big file stays cheap. A middle too big for the LCS table is
- * shown as replaced.
+ * The shortest edit script from `a` to `b`, line by line: Myers' O(ND) algorithm in linear
+ * space (the middle snake, divide and conquer), so it is exact for files of any size and
+ * fast when they're similar. Lines are compared as numbers (each distinct line gets one).
+ * Within each run of changes, removals come before additions.
  */
-function lineOps(a: string[], b: string[]): Op[] {
-  let s = 0;
-  while (s < a.length && s < b.length && a[s] === b[s]) s++;
-  let e = 0;
-  while (e < a.length - s && e < b.length - s && a[a.length - 1 - e] === b[b.length - 1 - e]) e++;
-  const midA = a.slice(s, a.length - e);
-  const midB = b.slice(s, b.length - e);
-  const mid = midA.length * midB.length > MAX_CELLS ? [...repeat("-", midA.length), ...repeat("+", midB.length)] : lcs(midA, midB);
-  return [...repeat("=", s), ...mid, ...repeat("=", e)];
+export function diffLines(a: string[], b: string[]): Op[] {
+  const ids = new Map<string, number>();
+  const intern = (lines: string[]) => Int32Array.from(lines, (l) => ids.get(l) ?? (ids.set(l, ids.size), ids.size - 1));
+  const x = intern(a);
+  const y = intern(b);
+  const ops: Op[] = [];
+  myers(x, 0, x.length, y, 0, y.length, ops);
+  // Removals first in each change: the order a reader expects.
+  for (let i = 0; i < ops.length;) {
+    if (ops[i] === "=") {
+      i++;
+      continue;
+    }
+    let j = i;
+    let removed = 0;
+    while (j < ops.length && ops[j] !== "=") if (ops[j++] === "-") removed++;
+    for (let k = i; k < j; k++) ops[k] = k - i < removed ? "-" : "+";
+    i = j;
+  }
+  return ops;
 }
 
-function lcs(a: string[], b: string[]): Op[] {
-  const w = b.length + 1;
-  const t = new Uint32Array((a.length + 1) * w);
-  for (let i = a.length - 1; i >= 0; i--)
-    for (let j = b.length - 1; j >= 0; j--)
-      t[i * w + j] = a[i] === b[j] ? t[(i + 1) * w + j + 1] + 1 : Math.max(t[(i + 1) * w + j], t[i * w + j + 1]);
-  const ops: Op[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      ops.push("=");
-      i++;
-      j++;
-    } else if (t[(i + 1) * w + j] >= t[i * w + j + 1]) {
-      ops.push("-");
-      i++;
+function myers(a: Int32Array, aLo: number, aHi: number, b: Int32Array, bLo: number, bHi: number, ops: Op[]) {
+  // The common start and end are kept as they are.
+  let pre = 0;
+  while (aLo + pre < aHi && bLo + pre < bHi && a[aLo + pre] === b[bLo + pre]) pre++;
+  let suf = 0;
+  while (aHi - suf > aLo + pre && bHi - suf > bLo + pre && a[aHi - 1 - suf] === b[bHi - 1 - suf]) suf++;
+  for (let k = 0; k < pre; k++) ops.push("=");
+  aLo += pre;
+  bLo += pre;
+  aHi -= suf;
+  bHi -= suf;
+  const n = aHi - aLo;
+  const m = bHi - bLo;
+  if (n === 0) for (let k = 0; k < m; k++) ops.push("+");
+  else if (m === 0) for (let k = 0; k < n; k++) ops.push("-");
+  else {
+    const split = middleSnake(a, aLo, n, b, bLo, m);
+    if (split) {
+      myers(a, aLo, aLo + split[0], b, bLo, bLo + split[1], ops);
+      myers(a, aLo + split[0], aHi, b, bLo + split[1], bHi, ops);
     } else {
-      ops.push("+");
-      j++;
+      // Nothing in common.
+      for (let k = 0; k < n; k++) ops.push("-");
+      for (let k = 0; k < m; k++) ops.push("+");
     }
   }
-  while (i++ < a.length) ops.push("-");
-  while (j++ < b.length) ops.push("+");
-  return ops;
+  for (let k = 0; k < suf; k++) ops.push("=");
+}
+
+/**
+ * Where the forward and backward searches for the shortest path meet: the point
+ * (x, y) on it to split the problem at, or null when the ranges share nothing.
+ * Both ranges are non-empty and differ at their first and last lines.
+ */
+function middleSnake(a: Int32Array, aLo: number, n: number, b: Int32Array, bLo: number, m: number): [number, number] | null {
+  const maxD = Math.ceil((n + m) / 2);
+  const offset = maxD;
+  const size = 2 * maxD + 2;
+  const vf = new Int32Array(size).fill(-1);
+  const vb = new Int32Array(size).fill(-1);
+  vf[offset + 1] = 0;
+  vb[offset + 1] = 0;
+  const delta = n - m;
+  // With an odd delta the paths meet on a forward step, with an even one on a backward step.
+  const front = delta % 2 !== 0;
+  let k1start = 0;
+  let k1end = 0;
+  let k2start = 0;
+  let k2end = 0;
+  for (let d = 0; d < maxD; d++) {
+    for (let k1 = -d + k1start; k1 <= d - k1end; k1 += 2) {
+      const i1 = offset + k1;
+      let x1 = k1 === -d || (k1 !== d && vf[i1 - 1] < vf[i1 + 1]) ? vf[i1 + 1] : vf[i1 - 1] + 1;
+      let y1 = x1 - k1;
+      while (x1 < n && y1 < m && a[aLo + x1] === b[bLo + y1]) {
+        x1++;
+        y1++;
+      }
+      vf[i1] = x1;
+      if (x1 > n) k1end += 2;
+      else if (y1 > m) k1start += 2;
+      else if (front) {
+        const i2 = offset + delta - k1;
+        if (i2 >= 0 && i2 < size && vb[i2] !== -1 && x1 >= n - vb[i2]) return [x1, y1];
+      }
+    }
+    for (let k2 = -d + k2start; k2 <= d - k2end; k2 += 2) {
+      const i2 = offset + k2;
+      let x2 = k2 === -d || (k2 !== d && vb[i2 - 1] < vb[i2 + 1]) ? vb[i2 + 1] : vb[i2 - 1] + 1;
+      let y2 = x2 - k2;
+      while (x2 < n && y2 < m && a[aLo + n - x2 - 1] === b[bLo + m - y2 - 1]) {
+        x2++;
+        y2++;
+      }
+      vb[i2] = x2;
+      if (x2 > n) k2end += 2;
+      else if (y2 > m) k2start += 2;
+      else if (!front) {
+        const i1 = offset + delta - k2;
+        if (i1 >= 0 && i1 < size && vf[i1] !== -1) {
+          const x1 = vf[i1];
+          const y1 = offset + x1 - i1;
+          if (x1 >= n - x2) return [x1, y1];
+        }
+      }
+    }
+  }
+  return null;
 }
 
 function toHunks(lines: Line[]): Hunk[] {

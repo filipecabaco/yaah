@@ -1,14 +1,15 @@
 // The pieces every Settings tab is built from: a page of sections, the
 // two-pane layout (a list on the left, the picked item on the right), list
 // rows, labelled fields, key/value rows and remove-with-confirmation.
-import { useState, type ReactNode } from "react";
-import { AlertTriangle, Loader2, Plus, Trash2, X } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
+import { AlertTriangle, Loader2, Lock, Plus, Trash2, X } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { newPair, type Pair } from "@/components/settings/form-state";
+import { SECRET_MASK } from "@/lib/api";
 import { errorMessage } from "@/lib/narrow";
 import { cn } from "@/lib/utils";
 
@@ -169,41 +170,67 @@ export function Pairs({
 }) {
   // A row added with the button gets focus; rows already there don't.
   const [added, setAdded] = useState<number | null>(null);
+  const hiddenNote = useId();
   const edit = (id: number, patch: Partial<Pair>) => onChange(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="mb-2 text-sm font-medium">{legend}</legend>
-      {rows.map((r) => (
-        <div key={r.id} className="flex gap-2">
-          <Input
-            aria-label={keyLabel}
-            autoFocus={r.id === added}
-            className="w-2/5 font-mono text-xs"
-            value={r.name}
-            placeholder={keyPlaceholder}
-            spellCheck={false}
-            onChange={(e) => edit(r.id, { name: e.target.value })}
-          />
-          <Input
-            aria-label={`Value of ${r.name || keyLabel.toLowerCase()}`}
-            className="flex-1 font-mono text-xs"
-            type={secret(r.name) ? "password" : "text"}
-            autoComplete="off"
-            value={r.value}
-            spellCheck={false}
-            onChange={(e) => edit(r.id, { value: e.target.value })}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon"
-            aria-label={`Remove ${r.name || keyLabel.toLowerCase()}`}
-            onClick={() => onChange(rows.filter((x) => x.id !== r.id))}
-          >
-            <X />
-          </Button>
-        </div>
-      ))}
+      {rows.map((r) => {
+        // A secret Rust sent masked (`••••1234`): shown as it came, kept unless typed over.
+        const hidden = r.value.startsWith(SECRET_MASK);
+        const renamed = hidden && r.from !== undefined && r.name.trim() !== r.from;
+        return (
+          <div key={r.id} className="flex flex-col gap-1">
+            <div className="flex gap-2">
+              <Input
+                aria-label={keyLabel}
+                autoFocus={r.id === added}
+                className="w-2/5 font-mono text-xs"
+                value={r.name}
+                placeholder={keyPlaceholder}
+                spellCheck={false}
+                onChange={(e) => edit(r.id, { name: e.target.value })}
+              />
+              <div className="relative flex-1">
+                {hidden && (
+                  <Lock className="pointer-events-none absolute top-1/2 left-2.5 size-3 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                )}
+                <Input
+                  aria-label={`Value of ${r.name || keyLabel.toLowerCase()}`}
+                  aria-describedby={hidden ? hiddenNote : undefined}
+                  className={cn("font-mono text-xs", hidden && "pl-7 text-muted-foreground")}
+                  type={!hidden && secret(r.name) ? "password" : "text"}
+                  autoComplete="off"
+                  value={r.value}
+                  spellCheck={false}
+                  // One keystroke replaces the hidden value rather than editing the mask.
+                  onFocus={hidden ? (e) => e.currentTarget.select() : undefined}
+                  onChange={(e) => edit(r.id, { value: e.target.value })}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label={`Remove ${r.name || keyLabel.toLowerCase()}`}
+                onClick={() => onChange(rows.filter((x) => x.id !== r.id))}
+              >
+                <X />
+              </Button>
+            </div>
+            {renamed && (
+              <p className="text-xs text-amber-700 dark:text-amber-400" role="status">
+                Renamed from {r.from}: its hidden value can't move with it. Type the value again.
+              </p>
+            )}
+          </div>
+        );
+      })}
+      {rows.some((r) => r.value.startsWith(SECRET_MASK)) && (
+        <p id={hiddenNote} className="text-xs text-muted-foreground">
+          Values shown as {SECRET_MASK} are saved but never shown here. Leave one as it is to keep it, or type over it to replace it.
+        </p>
+      )}
       <div className="flex items-center gap-3">
         <Button
           type="button"
@@ -244,16 +271,5 @@ export function RemoveButton({ name, disabled, onRemove }: { name: string; disab
         Keep
       </Button>
     </span>
-  );
-}
-
-/** Shown while a tab's code loads. */
-export function TabSkeleton() {
-  return (
-    <div className="flex flex-col gap-3 p-6" role="status" aria-label="Loading">
-      <div className="h-4 w-40 animate-pulse rounded bg-muted" />
-      <div className="h-3 w-72 animate-pulse rounded bg-muted" />
-      <div className="h-24 max-w-2xl animate-pulse rounded-lg bg-muted" />
-    </div>
   );
 }

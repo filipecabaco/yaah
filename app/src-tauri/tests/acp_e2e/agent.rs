@@ -213,6 +213,7 @@ impl Agent {
                 );
                 update(&sid, &json!({ "sessionUpdate": "current_mode_update", "currentModeId": "code" }));
             }
+            "long" => long(&sid, &text),
             "permissions" => {
                 // Several at once, as agents do, then one more after the answers.
                 update(&sid, &json!({ "sessionUpdate": "tool_call", "toolCallId": "ls", "title": "Run ls", "status": "pending" }));
@@ -300,5 +301,16 @@ impl Agent {
         self.ask("session/request_permission", &json!({ "sessionId": sid, "options": "not a list" }));
         let got = self.wait(&[fs.clone(), lost.clone()], false);
         chunk(sid, &format!("fs: {}; lost: {}", got[&fs.to_string()]["error"]["code"], chosen(&got[&lost.to_string()])));
+    }
+}
+
+/// `long <n>`: one message in n chunks, back to back, with text that isn't ASCII.
+fn long(sid: &str, text: &str) {
+    let n: usize = text.split_whitespace().nth(1).and_then(|n| n.parse().ok()).unwrap_or(500);
+    update(sid, &json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": "Plan: ü" } }));
+    update(sid, &json!({ "sessionUpdate": "agent_thought_chunk", "content": { "type": "text", "text": "ber 🧠" } }));
+    for i in 0..n {
+        let part = format!("{i}: héllo 👋 𝄞 ");
+        update(sid, &json!({ "sessionUpdate": "agent_message_chunk", "messageId": "long", "content": { "type": "text", "text": part } }));
     }
 }

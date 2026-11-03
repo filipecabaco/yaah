@@ -1,0 +1,19 @@
+sources	5 identical concurrent github.issue reads: HTTP requests	5.000	requests
+sources	a 6th read 1 s later: HTTP requests in all	6.000	requests
+disk	integrations token read (connected())	77.817	us
+disk	agents.json Store::find	72.601	us
+disk	~/.claude.json read (200 KB)	0.094	ms
+disk	~/.claude.json read (2 MB)	0.963	ms
+sources	docker.stats: reads by 4 pollers in 12 s	24.000	reads
+sources	docker.stats: `docker stats` processes run for those reads	4.000	runs
+library	ui_catalog JSON (723 components)	12.058	ms
+library	component_names (guide index)	10.988	ms
+library	ui_guide text (yaah-ui skill)	10.601	ms
+library	prepare a local component	0.868	ms
+library	validate a tree with 200 local refs	11.755	ms
+library	guide.deliver() for a Claude session/new	21.671	ms
+sources	postgres.query end to end	4.246	ms
+startup	run() blocked on the login-shell PATH	1186.250	ms
+startup	path() after that	0.000	ms
+startup	Library load in setup (723 components): time on the setup thread	45.421	ms
+startup	Sources::new in setup	6.507	ms

@@ -33,7 +33,6 @@ use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::rc::Rc;
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -606,12 +605,12 @@ impl Resolve for Scope<'_> {
                 Resolved::Missing(format!("`{name}` isn't a component name; components from a library are named `library/name`"))
             }
             Some((lib, short)) if lib == self.id => match self.siblings.get(short) {
-                Some(c) => Resolved::Found(Rc::new(c.clone())),
+                Some(c) => Resolved::Found(Arc::new(c.clone())),
                 None => Resolved::Missing(format!("unknown type `{name}`: this library has no component `{short}`")),
             },
             Some(_) => Resolved::Unchecked,
             None => match self.bundled.get(name) {
-                Ok(Some(c)) => Resolved::Found(Rc::new(c)),
+                Ok(Some(c)) => Resolved::Found(Arc::new(c)),
                 _ => Resolved::Missing(format!(
                     "unknown type `{name}`: inside a library, unqualified names are yaah's own components only. \
                      Refer to this library's components as `{}/{name}`; the user's own components can't be used, they differ from user to user",
@@ -947,6 +946,7 @@ impl Library {
         let mut packs: Vec<Arc<Pack>> = store.records().into_iter().map(|r| Arc::new(Pack::load(store, r))).collect();
         sort_packs(&mut packs);
         *self.packs.write().unwrap_or_else(PoisonError::into_inner) = packs;
+        self.changed();
     }
 
     /// Reload the folder libraries whose files changed since they were read.
@@ -964,6 +964,8 @@ impl Library {
             }
         }
         sort_packs(&mut packs);
+        drop(packs);
+        self.changed();
     }
 
     fn info(&self, id: &str) -> Result<LibraryInfo, String> {
@@ -1623,7 +1625,12 @@ mod tests {
         let mut fixed = badge();
         fixed["name"] = "broken".into();
         std::fs::write(dir.join("broken.json"), fixed.to_string()).unwrap();
-        assert!(lib.get("acme/broken").unwrap().is_some());
+        // Noticed within the library's recheck window (it isn't looked for on every read).
+        let edited = Instant::now();
+        while lib.get("acme/broken").unwrap().is_none() && edited.elapsed() < ui::RECHECK + Duration::from_secs(1) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(lib.get("acme/broken").unwrap().is_some(), "an edit to a folder library shows within {:?}", ui::RECHECK);
         let up = lib.update("acme").await.unwrap();
         assert_eq!((up.from, up.to), (None, None));
         // The folder isn't deleted with the library.

@@ -23,7 +23,7 @@ pub mod sources;
 mod ui_files;
 mod ui_libraries;
 mod ui_library;
-mod ui_mcp;
+pub mod ui_mcp;
 mod work_items;
 
 use login::Logins;
@@ -36,7 +36,8 @@ use ui_library::Library;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(clippy::too_many_lines, reason = "the list of every command")]
 pub fn run() {
-    path_env::adopt_login_shell();
+    // Read in the background: only spawning a program waits for it (path_env.rs).
+    path_env::start_login_shell();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -45,7 +46,8 @@ pub fn run() {
         .manage(Logins::default())
         .setup(|app| {
             let hub = Arc::new(Hub::with_store(commands::emitter(app.handle().clone()), accounts::home().join(".yaah/sessions")));
-            let library = Arc::new(Library::local());
+            // Both read in the background; their first use waits for them (ui_library.rs, sources.rs).
+            let library = Library::local();
             let sources = Arc::new(sources::Sources::new());
             match ui_mcp::start(Arc::new(ui_mcp::UiHost::new(hub.clone(), library.clone(), sources.clone()))) {
                 Ok(port) => hub.set_ui_port(port),
@@ -144,6 +146,7 @@ pub fn run() {
             commands::promote_chat,
             commands::list_sessions,
             commands::get_transcript,
+            commands::get_entries,
             commands::send_prompt,
             commands::answer_ui,
             commands::edit_ui,

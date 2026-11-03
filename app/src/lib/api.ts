@@ -242,11 +242,23 @@ export type IntegrationStatus = {
   via: "" | "oauth" | "key" | "env";
   account: string | null;
   needsReauth: boolean;
+  /**
+   * What Settings shows. "refused": the service refused the stored credential on a real call
+   * (HTTP 401, a token without the scope), so it isn't working whatever `connected` says, until
+   * a call works again or the user reconnects. "needsReauth": the sign-in expired.
+   */
+  state?: IntegrationState;
+  /** Why, for "refused" and "needsReauth". Never a token. */
+  message?: string | null;
   keyEnv: string;
   keyUrl: string;
   /** GitLab only: the instance it's on (`https://gitlab.com` unless self-managed). */
   baseUrl?: string;
 };
+export type IntegrationState = "connected" | "refused" | "needsReauth" | "disconnected";
+/** The integration's state; from the older fields when Rust doesn't send one. */
+export const integrationState = (s: IntegrationStatus): IntegrationState =>
+  s.state ?? (s.needsReauth ? "needsReauth" : s.connected ? "connected" : "disconnected");
 export type IntegrationStart =
   { flow: "device"; userCode: string; verificationUri: string; expiresIn: number } | { flow: "browser"; authUrl: string };
 
@@ -313,6 +325,26 @@ export type Entry =
     }
   | { type: "error"; message: string; loginAccount: string | null }
   | { type: "notices"; items: Notice[] };
+
+/** A page of a transcript (`get_entries`). */
+export type EntryPage = { entries: Entry[]; from: number; total: number };
+
+/** A new entry at `index`, or one replaced in place. */
+export type SessionEntryEvent = { sessionId: string; index: number; entry: Entry };
+/**
+ * `text` appended to the `field` ("text") of the agent message or thought at `index`.
+ * `len` is that field's length afterwards, in UTF-16 code units (JS string length):
+ * it is applied only when the shown text is `len - text.length` long; otherwise the
+ * entry is fetched again (docs/research/streaming-contract.md).
+ */
+export type SessionAppendEvent = { sessionId: string; index: number; field: "text" | (string & {}); text: string; len: number };
+/** Only the draft of the form at `index` changed; the rest of the UI entry is as shown. */
+export type SessionDraftEvent = {
+  sessionId: string;
+  index: number;
+  draft: Record<string, unknown>;
+  draftBy?: Record<string, "user" | "agent">;
+};
 
 /** Something the agent flagged outside its reply (ACP `notice`). */
 export type Notice = { severity: "info" | "warning" | "error" | (string & {}); title: string; description?: string; mcpServer?: string };
@@ -522,6 +554,12 @@ export const api = {
   /** Make a project from a chat's folder and file the chat under it. */
   promoteChat: (sessionId: string, name: string) => invoke<[Project, SessionInfo]>("promote_chat", { sessionId, name }),
   getTranscript: (sessionId: string) => invoke<{ info: SessionInfo; entries: Entry[] }>("get_transcript", { sessionId }),
+  /**
+   * A page of a transcript: `entries` are the ones at `from`, `from + 1`… of `total`.
+   * Without `from` and `limit`, the last 200 (see docs/research/streaming-contract.md).
+   */
+  getEntries: (sessionId: string, from?: number, limit?: number) =>
+    invoke<EntryPage>("get_entries", { sessionId, from: from ?? null, limit: limit ?? null }),
   /** `mentions`: absolute paths referenced with @, sent to the agent as file links. */
   /** Submit the form in the UI entry at `index`. */
   answerUi: (sessionId: string, index: number, values: Record<string, unknown>) => invoke<void>("answer_ui", { sessionId, index, values }),
@@ -559,7 +597,11 @@ export const libraryApi = {
 };
 
 export const events = {
-  sessionEntry: (cb: (e: { sessionId: string; index: number; entry: Entry }) => void) => on("session-entry", cb),
+  sessionEntry: (cb: (e: SessionEntryEvent) => void) => on("session-entry", cb),
+  /** Text appended to an agent message or a thought (see `SessionAppendEvent`). */
+  sessionAppend: (cb: (e: SessionAppendEvent) => void) => on("session-append", cb),
+  /** A form's shared draft changed (the user's edit or the agent's `ui_set_values`). */
+  sessionDraft: (cb: (e: SessionDraftEvent) => void) => on("session-draft", cb),
   sessionInfo: (cb: (info: SessionInfo) => void) => on("session-info", cb),
   accountsChanged: (cb: () => void) => on("accounts-changed", cb),
   loginOutput: (cb: (e: { accountId: string; line: string }) => void) => on("login-output", cb),
@@ -596,7 +638,15 @@ export type McpServerInfo = McpServer & {
   problem: string | null;
   /** Saved agents whose last `initialize` said they can't use this transport. */
   unsupportedBy: string[];
+  /**
+   * Env vars and headers whose value Rust sent masked (`••••`, or `••••1234` for a long one):
+   * the real value never reaches the interface. Sending the masked value back unchanged keeps it.
+   */
+  secretEnv?: string[];
+  secretHeaders?: string[];
 };
+/** How a masked secret starts (mcp_servers.rs `MASK`). */
+export const SECRET_MASK = "••••";
 export type McpServerDraft = {
   /** The saved name, when editing (allows renaming). */
   original: string | null;

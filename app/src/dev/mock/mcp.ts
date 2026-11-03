@@ -1,7 +1,15 @@
 // Settings → MCP servers (mcp_servers.rs). Three saved servers (one off, with
 // a command that isn't installed) and a few to import. Test answers after a
 // moment; a server named "*fail*" (or run with uvx) fails.
-import type { McpImportCandidate, McpList, McpServer, McpServerDraft, McpServerInfo, McpTestReport } from "@/lib/api";
+import {
+  SECRET_MASK as MASK,
+  type McpImportCandidate,
+  type McpList,
+  type McpServer,
+  type McpServerDraft,
+  type McpServerInfo,
+  type McpTestReport,
+} from "@/lib/api";
 import { home, need, type Mock, type Replies } from "./context";
 
 export function seedMcp() {
@@ -11,7 +19,7 @@ export function seedMcp() {
       transport: "stdio",
       command: "npx",
       args: ["-y", "@modelcontextprotocol/server-filesystem", `${home}/notes`],
-      env: {},
+      env: { NOTES_API_KEY: "ntk_5f2c9a8e7d1b", LOG_LEVEL: "info" },
       url: "",
       headers: {},
       enabled: true,
@@ -81,12 +89,69 @@ const candidates = [
 /** Shell-like words: quotes group, and are dropped. */
 const split = (line: string) => (line.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((w) => w.replace(/^['"]|['"]$/g, ""));
 
-const info = (s: McpServer): McpServerInfo => ({
-  ...s,
-  commandLine: s.command ? [s.command, ...s.args].join(" ") : "",
-  problem: s.transport === "stdio" && s.command === "uvx" ? "`uvx` isn't on your PATH, so agents won't get this server" : null,
-  unsupportedBy: s.transport === "sse" ? ["Gemini CLI"] : [],
-});
+// Secrets, as mcp_servers.rs handles them: the interface only ever gets them masked.
+const mask = (v: string) => ([...v].length >= 12 ? `${MASK}${[...v].slice(-4).join("")}` : MASK);
+const SECRET_WORDS = [
+  "KEY",
+  "TOKEN",
+  "SECRET",
+  "PASSWORD",
+  "PASSWD",
+  "PASS",
+  "PWD",
+  "AUTH",
+  "CREDENTIAL",
+  "CREDENTIALS",
+  "COOKIE",
+  "SESSION",
+  "PRIVATE",
+  "BEARER",
+  "DSN",
+];
+const PLAIN_HEADERS = ["accept", "accept-language", "content-type", "user-agent", "mcp-protocol-version", "x-request-id"];
+function secretEnv(name: string, value: string) {
+  const byName = name
+    .toUpperCase()
+    .split(/[_-]/)
+    .some((part) => SECRET_WORDS.some((w) => part.endsWith(w)));
+  const urlWithPassword = /^[^:]+:\/\/[^/]*:[^/]*@/.test(value);
+  const tokenish =
+    value.length >= 20 && !value.includes("://") && !/^[/~.@]/.test(value) && !/\s/.test(value) && /\d/.test(value) && /[a-z]/i.test(value);
+  return byName || urlWithPassword || tokenish;
+}
+const secretHeader = (name: string) => !PLAIN_HEADERS.includes(name.toLowerCase());
+function masked(values: Record<string, string>, secret: (k: string, v: string) => boolean): [Record<string, string>, string[]] {
+  const keys = Object.entries(values).flatMap(([k, v]) => (secret(k, v) ? [k] : []));
+  return [Object.fromEntries(Object.entries(values).map(([k, v]) => [k, keys.includes(k) ? mask(v) : v])), keys];
+}
+/** The draft with masked values sent back unchanged replaced by the stored ones (`Store::unmask`). */
+function unmask(d: McpServerDraft, stored: McpServer | undefined): McpServerDraft {
+  const back = (sent: Record<string, string>, kept: Record<string, string> | undefined, what: string) =>
+    Object.fromEntries(
+      Object.entries(sent).map(([k, v]) => {
+        if (!v.startsWith(MASK)) return [k, v];
+        const old = kept?.[k.trim()];
+        if (old === undefined || mask(old) !== v) throw new Error(`the ${what} \`${k.trim()}\` was hidden; type its value again`);
+        return [k, old];
+      }),
+    );
+  return { ...d, env: back(d.env, stored?.env, "environment variable"), headers: back(d.headers, stored?.headers, "header") };
+}
+
+const info = (s: McpServer): McpServerInfo => {
+  const [env, secretEnvKeys] = masked(s.env, secretEnv);
+  const [headers, secretHeaders] = masked(s.headers, secretHeader);
+  return {
+    ...s,
+    env,
+    headers,
+    secretEnv: secretEnvKeys,
+    secretHeaders,
+    commandLine: s.command ? [s.command, ...s.args].join(" ") : "",
+    problem: s.transport === "stdio" && s.command === "uvx" ? "`uvx` isn't on your PATH, so agents won't get this server" : null,
+    unsupportedBy: s.transport === "sse" ? ["Gemini CLI"] : [],
+  };
+};
 
 /** A server from the editor's draft, checked as mcp_servers.rs checks it. */
 function fromDraft(d: McpServerDraft): McpServer {
@@ -115,6 +180,7 @@ function fromDraft(d: McpServerDraft): McpServer {
 export function mcpReplies(m: Mock): Replies {
   const { state } = m;
   const taken = (name: string) => state.mcpServers.some((s) => s.name === name);
+  const stored = (d: McpServerDraft) => state.mcpServers.find((s) => s.name === (d.original ?? d.name.trim()));
   return {
     list_mcp_servers: (): McpList => ({
       servers: state.mcpServers.map(info),
@@ -126,7 +192,7 @@ export function mcpReplies(m: Mock): Replies {
       path: `${home}/.config/yaah/mcp.json`,
     }),
     save_mcp_server: ({ draft }: { draft: McpServerDraft }): McpServerInfo => {
-      const s = fromDraft(draft);
+      const s = fromDraft(unmask(draft, stored(draft)));
       if (s.name !== draft.original && taken(s.name)) throw new Error(`there's already a server named \`${s.name}\``);
       const i = state.mcpServers.findIndex((x) => x.name === draft.original);
       if (i >= 0) state.mcpServers[i] = s;
@@ -146,7 +212,7 @@ export function mcpReplies(m: Mock): Replies {
       return info(s);
     },
     test_mcp_server: async ({ draft }: { draft: McpServerDraft }): Promise<McpTestReport> => {
-      const s = fromDraft(draft);
+      const s = fromDraft(unmask(draft, stored(draft)));
       await m.wait(900);
       if (s.name.includes("fail") || s.command === "uvx") throw new Error(`\`${s.command || s.url}\` didn't start: command not found`);
       return {

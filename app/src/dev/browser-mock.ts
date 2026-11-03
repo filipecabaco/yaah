@@ -16,6 +16,7 @@ import { skillReplies } from "./mock/skills";
 import { sourceReplies } from "./mock/sources";
 import { createState } from "./mock/state";
 import { workItemReplies } from "./mock/work-items";
+import { flushTranscripts } from "@/lib/transcripts";
 
 export type BrowserMockOptions = {
   /** Multiplies every artificial wait (default 1). 0: no waiting, only a macrotask between events. */
@@ -27,7 +28,10 @@ export type BrowserMockOptions = {
 /** Stops the previous install's replays and timers, so a reinstall starts clean. */
 let disposePrevious: (() => void) | undefined;
 
-/** Answers every command the UI invokes, from fresh state each time it is called. */
+/**
+ * Answers every command the UI invokes, from fresh state each time it is called.
+ * Returns that state, so a test can set up what Rust would have (e.g. a transcript on disk).
+ */
 export function installBrowserMock(options: BrowserMockOptions = {}) {
   disposePrevious?.();
   const delay = options.delay ?? 1;
@@ -64,6 +68,8 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     "plugin:opener|reveal_item_in_dir": () => null,
   };
 
+  // The performance harness applies queued transcript events at once instead of waiting for a frame.
+  (window as { __yaahFlush?: () => void }).__yaahFlush = flushTranscripts;
   mockWindows("main");
   mockIPC(
     async (cmd, args) => {
@@ -81,6 +87,7 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     },
     { shouldMockEvents: true },
   );
+  return state;
 }
 
 /** What `invoke` rejects with: a failed Rust command rejects with its error string, not an Error. */

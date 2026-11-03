@@ -2,7 +2,7 @@
 // ones as a summary card. Any of them opens a full-screen review that takes
 // over the view. Inside a chat, hunks can be asked about (drafted into the
 // composer with an @mention of the file).
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { ChevronRight, FileMinus, FilePen, FilePlus, Maximize2, MessageSquareText, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
 import { menuActions } from "@/lib/menu-actions";
-import { changed, hunkRange, type DiffFile, type Hunk } from "@/components/diff/model";
+import { changed, hunkRange, type DiffFile, type Hunk, type Line } from "@/components/diff/model";
 import { plural } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { cn } from "@/lib/utils";
@@ -168,47 +168,49 @@ function FileBlock({ file, folded, onReview }: { file: DiffFile; folded: boolean
   );
 }
 
-function HunkView({ file, hunk, id, onAsked }: { file: DiffFile; hunk: Hunk; id?: string; onAsked?: () => void }) {
-  const chat = useChat();
+type ChatInfo = NonNullable<ReturnType<typeof useChat>>;
+
+/** Draft "About @file lines a–b: " into the chat's composer, with the file mentioned. */
+function askAbout(chat: ChatInfo, file: DiffFile, hunk: Hunk) {
   const [from, to] = hunkRange(hunk);
-  function ask() {
-    if (!chat) return;
-    const abs = file.path.startsWith("/") ? file.path : `${chat.cwd.replace(/\/$/, "")}/${file.path}`;
-    const label = abs.startsWith(chat.cwd + "/") ? abs.slice(chat.cwd.length + 1) : abs;
-    const range = from === to ? `line ${from}` : `lines ${from}–${to}`;
-    onAsked?.();
-    draftIntoComposer({ text: `About @${label} ${range}: `, mention: { label, path: abs } });
-  }
+  const abs = file.path.startsWith("/") ? file.path : `${chat.cwd.replace(/\/$/, "")}/${file.path}`;
+  const label = abs.startsWith(chat.cwd + "/") ? abs.slice(chat.cwd.length + 1) : abs;
+  const range = from === to ? `line ${from}` : `lines ${from}–${to}`;
+  draftIntoComposer({ text: `About @${label} ${range}: `, mention: { label, path: abs } });
+}
+
+function AskButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="xs"
+      className="h-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+      onClick={onClick}
+      title="Draft a question about these lines in the composer"
+    >
+      <MessageSquareText /> Ask about this
+    </Button>
+  );
+}
+
+const LINE_TONE: Record<Line["kind"], string | undefined> = {
+  "+": "bg-green-500/10 text-green-900 dark:text-green-200",
+  "-": "bg-red-500/10 text-red-900 dark:text-red-200",
+  " ": undefined,
+};
+
+function HunkView({ file, hunk }: { file: DiffFile; hunk: Hunk }) {
+  const chat = useChat();
+  const ask = chat ? () => askAbout(chat, file, hunk) : null;
   return (
     // Right-clicking the hunk offers the same in the enclosing menu (e.g. a tool card's).
-    <div
-      id={id}
-      className="font-mono text-xs"
-      ref={chat ? menuActions([{ label: "Ask about this", icon: <MessageSquareText />, onSelect: ask }]) : undefined}
-    >
+    <div className="font-mono text-xs" ref={ask ? menuActions([{ label: "Ask about this", icon: <MessageSquareText />, onSelect: ask }]) : undefined}>
       <div className="group flex items-center bg-blue-500/10 pr-1 text-muted-foreground">
         <span className="min-w-0 flex-1 truncate px-2 py-0.5">{hunk.header}</span>
-        {chat && (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="h-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-            onClick={ask}
-            title="Draft a question about these lines in the composer"
-          >
-            <MessageSquareText /> Ask about this
-          </Button>
-        )}
+        {ask && <AskButton onClick={ask} />}
       </div>
       {hunk.lines.map((l, i) => (
-        <div
-          key={i}
-          className={cn(
-            "grid grid-cols-[3rem_3rem_1fr]",
-            l.kind === "+" && "bg-green-500/10 text-green-900 dark:text-green-200",
-            l.kind === "-" && "bg-red-500/10 text-red-900 dark:text-red-200",
-          )}
-        >
+        <div key={i} className={cn("grid grid-cols-[3rem_3rem_1fr]", LINE_TONE[l.kind])}>
           <span className="pr-2 text-right text-muted-foreground/60 select-none">{l.old ?? ""}</span>
           <span className="pr-2 text-right text-muted-foreground/60 select-none">{l.new ?? ""}</span>
           <span className="pr-2 break-all whitespace-pre-wrap">
@@ -216,6 +218,106 @@ function HunkView({ file, hunk, id, onAsked }: { file: DiffFile; hunk: Hunk; id?
           </span>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Height of one row in the review (a hunk header or a line); lines don't wrap there, so it's fixed. */
+export const ROW = 20;
+/** Rows drawn above and below what's on screen. */
+const OVERSCAN = 40;
+
+type Row = { hunk: number; line?: Line };
+
+/** A file's hunks as rows: each hunk's header, then its lines. */
+function rowsOf(file: DiffFile): { rows: Row[]; starts: number[] } {
+  const rows: Row[] = [];
+  const starts: number[] = [];
+  file.hunks.forEach((h, i) => {
+    starts.push(rows.length);
+    rows.push({ hunk: i });
+    for (const line of h.lines) rows.push({ hunk: i, line });
+  });
+  return { rows, starts };
+}
+
+/**
+ * The review's diff, windowed: only the rows on screen (and a margin) are in the
+ * DOM, so a 5000-line file opens as fast as a small one.
+ */
+function ReviewRows({
+  file,
+  rows,
+  current,
+  scroller,
+  onAsked,
+}: {
+  file: DiffFile;
+  rows: Row[];
+  current: number;
+  scroller: RefObject<HTMLDivElement | null>;
+  onAsked: () => void;
+}) {
+  const chat = useChat();
+  const box = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState({ top: 0, height: 0 });
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el) return;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      setView({ top: Math.max(0, el.scrollTop - (box.current?.offsetTop ?? 0)), height: el.clientHeight });
+    };
+    const later = () => {
+      frame ||= requestAnimationFrame(update);
+    };
+    update();
+    el.addEventListener("scroll", later, { passive: true });
+    const ro = new ResizeObserver(later);
+    ro.observe(el);
+    return () => {
+      cancelAnimationFrame(frame);
+      el.removeEventListener("scroll", later);
+      ro.disconnect();
+    };
+  }, [scroller, file]);
+  // Before the first layout (or without one), a screenful.
+  const height = view.height || 1000;
+  const first = Math.max(0, Math.floor(view.top / ROW) - OVERSCAN);
+  const last = Math.min(rows.length, Math.ceil((view.top + height) / ROW) + OVERSCAN);
+  const asks = useMemo(() => (chat ? file.hunks.map((h) => () => (onAsked(), askAbout(chat, file, h))) : null), [chat, file, onAsked]);
+  return (
+    <div ref={box} className="relative font-mono text-xs" style={{ height: rows.length * ROW }} data-rows={rows.length}>
+      <div className="absolute inset-x-0 top-0 w-max min-w-full" style={{ transform: `translateY(${first * ROW}px)` }}>
+        {rows.slice(first, last).map((r, k) => {
+          const ask = asks?.[r.hunk];
+          const menu = ask ? menuActions([{ label: "Ask about this", icon: <MessageSquareText />, onSelect: ask }]) : undefined;
+          // The current hunk (n/p) is marked down its left edge.
+          const mark = r.hunk === current && "shadow-[inset_2px_0_0_var(--ring)]";
+          if (!r.line)
+            return (
+              <div key={first + k} ref={menu} className={cn("group flex h-5 items-center bg-blue-500/10 pr-1 text-muted-foreground", mark)}>
+                <span className="sticky left-0 min-w-0 truncate px-2">{file.hunks[r.hunk].header}</span>
+                {ask && (
+                  <span className="sticky right-1 ml-auto">
+                    <AskButton onClick={ask} />
+                  </span>
+                )}
+              </div>
+            );
+          const l = r.line;
+          return (
+            <div key={first + k} ref={menu} className={cn("grid h-5 grid-cols-[3rem_3rem_1fr] leading-5", LINE_TONE[l.kind], mark)}>
+              <span className="pr-2 text-right text-muted-foreground/60 select-none">{l.old ?? ""}</span>
+              <span className="pr-2 text-right text-muted-foreground/60 select-none">{l.new ?? ""}</span>
+              <span className="pr-4 whitespace-pre">
+                <span className="select-none">{l.kind === " " ? " " : l.kind}</span> {l.text}
+              </span>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -231,11 +333,12 @@ function Review({ files, title, open, onOpen }: { files: DiffFile[]; title?: str
   const hunk = at.path === open ? at.hunk : 0;
   const filterRef = useRef<HTMLInputElement>(null);
   const body = useRef<HTMLDivElement>(null);
-  const hunkId = useId();
   const shown = filter ? fuzzyRank(files, filter, (f) => [f.path]) : files;
   const current = files.find((f) => f.path === open) ?? null;
   const max = Math.max(1, ...files.map((f) => f.added + f.removed));
   const { added, removed } = totals(files);
+  const { rows, starts } = useMemo(() => (current ? rowsOf(current) : { rows: [], starts: [] }), [current]);
+  const close = useCallback(() => onOpen(null), [onOpen]);
 
   useEffect(() => {
     body.current?.scrollTo({ top: 0 });
@@ -250,7 +353,11 @@ function Review({ files, title, open, onOpen }: { files: DiffFile[]; title?: str
     if (!current) return;
     const next = Math.max(0, Math.min(current.hunks.length - 1, hunk + by));
     setAt({ path: open, hunk: next });
-    document.getElementById(`${hunkId}-${next}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    // The rows start below the file's sticky header; the hunk's header row goes just under it.
+    const el = body.current;
+    const rowsTop =
+      (el?.querySelector<HTMLElement>("[data-rows]")?.offsetTop ?? 0) - (el?.querySelector<HTMLElement>("[data-sticky]")?.offsetHeight ?? 0);
+    el?.scrollTo({ top: rowsTop + (starts[next] ?? 0) * ROW, behavior: "smooth" });
   }
   function onKeyDown(e: KeyboardEvent) {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -343,7 +450,7 @@ function Review({ files, title, open, onOpen }: { files: DiffFile[]; title?: str
           <div ref={body} tabIndex={-1} className="min-w-0 flex-1 overflow-auto bg-background outline-none">
             {current && (
               <div className="flex flex-col">
-                <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-2">
+                <div data-sticky className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-2">
                   <StatusIcon status={current.status} />
                   <span className="min-w-0 truncate font-mono text-xs">{current.path}</span>
                   {current.status !== "modified" && <Badge variant="outline">{current.status}</Badge>}
@@ -351,11 +458,7 @@ function Review({ files, title, open, onOpen }: { files: DiffFile[]; title?: str
                     hunk {Math.min(hunk + 1, current.hunks.length)} / {current.hunks.length}
                   </span>
                 </div>
-                {current.hunks.map((h, i) => (
-                  <div key={i} className={cn("border-b", i === hunk && "ring-1 ring-ring/40 ring-inset")}>
-                    <HunkView file={current} hunk={h} id={`${hunkId}-${i}`} onAsked={() => onOpen(null)} />
-                  </div>
-                ))}
+                <ReviewRows file={current} rows={rows} current={hunk} scroller={body} onAsked={close} />
               </div>
             )}
           </div>

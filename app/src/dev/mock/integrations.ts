@@ -17,6 +17,7 @@ export function seedIntegrations() {
       via: "oauth",
       account: "ghopper",
       needsReauth: false,
+      state: "connected",
       keyEnv: "GITHUB_TOKEN",
       keyUrl: "https://github.com/settings/tokens",
     },
@@ -29,6 +30,7 @@ export function seedIntegrations() {
       via: "oauth",
       account: "grace@acme.dev",
       needsReauth: false,
+      state: "connected",
       keyEnv: "LINEAR_API_KEY",
       keyUrl: "https://linear.app/settings/api",
     },
@@ -42,6 +44,9 @@ export function seedIntegrations() {
       via: "key",
       account: "grace",
       needsReauth: false,
+      // The saved token was revoked: a call failed with 401, and integrations.rs keeps that on the stored entry.
+      state: "refused",
+      message: "GitLab refused the credential (HTTP 401): reconnect in Settings → Integrations",
       keyEnv: "GITLAB_TOKEN",
       keyUrl: "https://gitlab.com/-/user_settings/personal_access_tokens?name=yaah&scopes=read_api",
       baseUrl: "https://gitlab.com",
@@ -68,8 +73,9 @@ function gitlabBase(input: string | null | undefined): string {
 export function integrationReplies(m: Mock): Replies {
   const { state } = m;
   const service = (id: string) => need(state.integrations[id], `unknown service \`${id}\``);
+  /** A new credential (or none) is no longer refused, as in integrations.rs `store`. */
   const set = (id: string, change: Partial<IntegrationStatus>) => {
-    Object.assign(service(id), change);
+    Object.assign(service(id), change, { state: change.connected ? "connected" : "disconnected", message: null });
     return m.emit("integration-changed", { service: id, ok: true });
   };
   return {

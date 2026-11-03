@@ -1,0 +1,47 @@
+before	edit_form (1000 heavy entries + 1 MB image in the form): Rust time	2959.360	us	
+before	edit_form (1000 heavy entries + 1 MB image in the form): IPC bytes per edit	1001644.719	B	
+before	load_sessions 100 chats x 200 entries (35 MB)	26.169	ms	mean of 5
+before	load_sessions 100 chats x 1000 entries (176 MB)	132.780	ms	mean of 5
+before	chat B chunk latency p50 (uncontended)	10.500	us	3902 chunks
+before	chat B chunk latency p99 (uncontended)	40.500	us	
+before	chat B chunk latency max (uncontended)	88.791	us	
+before	chat B chunk latency p50 (while chat A (5000 heavy entries, 28 MB) takes edits + get_transcript)	9.167	us	2591 chunks
+before	chat B chunk latency p99 (while chat A (5000 heavy entries, 28 MB) takes edits + get_transcript)	14504.583	us	
+before	chat B chunk latency max (while chat A (5000 heavy entries, 28 MB) takes edits + get_transcript)	17688.541	us	
+before	stream 50k chars (40-char chunks): Rust apply+emit, whole message	15.418	ms	
+before	stream 50k chars (40-char chunks): IPC bytes, whole message	31.881	MB	
+before	stream 200k chars (40-char chunks): Rust apply+emit, whole message	205.388	ms	
+before	stream 200k chars (40-char chunks): IPC bytes, whole message	506.836	MB	
+after	edit_form (1000 heavy entries + 1 MB image in the form): Rust time	8.243	us	the save is only marked; written later off the lock
+after	edit_form (1000 heavy entries + 1 MB image in the form): IPC bytes per edit	192.719	B	session-draft
+after	load_sessions 100 chats x 200 entries (35 MB)	1.980	ms	infos only, mean of 5
+after	first get_entries of one of those chats (200 entries)	0.357	ms	reads and parses that chat only; 200 entries returned
+after	load_sessions 100 chats x 1000 entries (176 MB)	3.745	ms	infos only, mean of 5
+after	first get_entries of one of those chats (1000 entries)	1.156	ms	reads and parses that chat only; 200 entries returned
+after	chat B chunk latency p50 (uncontended)	0.208	us	3986 chunks
+after	chat B chunk latency p99 (uncontended)	2.708	us	
+after	chat B chunk latency max (uncontended)	11.458	us	
+after	chat B chunk latency p50 (while chat A (5000 heavy entries, 28 MB) takes edits + get_transcript)	0.209	us	3987 chunks
+after	chat B chunk latency p99 (while chat A (5000 heavy entries, 28 MB) takes edits + get_transcript)	2.542	us	
+after	chat B chunk latency max (while chat A (5000 heavy entries, 28 MB) takes edits + get_transcript)	9.583	us	
+after	chat B chunk latency p50 (same, every edit written at once (save delay 0))	0.250	us	3986 chunks
+after	chat B chunk latency p99 (same, every edit written at once (save delay 0))	2.833	us	
+after	chat B chunk latency max (same, every edit written at once (save delay 0))	15.916	us	
+after	stream 50k chars (40-char chunks), no coalescing (one append per chunk): Rust apply+emit, whole message	0.623	ms	
+after	stream 50k chars (40-char chunks), no coalescing (one append per chunk): IPC bytes, whole message	0.273	MB	
+after	stream 50k chars (40-char chunks), no coalescing (one append per chunk): events	1251.000		
+after	stream 50k chars (40-char chunks), coalesced 33 ms, chunks back to back: Rust apply+emit, whole message	0.144	ms	
+after	stream 50k chars (40-char chunks), coalesced 33 ms, chunks back to back: IPC bytes, whole message	0.051	MB	
+after	stream 50k chars (40-char chunks), coalesced 33 ms, chunks back to back: events	4.000		
+after	stream 50k chars (40-char chunks), coalesced 33 ms, a chunk every ~1 ms: Rust apply+emit, whole message	1.148	ms	
+after	stream 50k chars (40-char chunks), coalesced 33 ms, a chunk every ~1 ms: IPC bytes, whole message	0.060	MB	
+after	stream 50k chars (40-char chunks), coalesced 33 ms, a chunk every ~1 ms: events	52.000		
+after	stream 200k chars (40-char chunks), no coalescing (one append per chunk): Rust apply+emit, whole message	2.635	ms	
+after	stream 200k chars (40-char chunks), no coalescing (one append per chunk): IPC bytes, whole message	1.095	MB	
+after	stream 200k chars (40-char chunks), no coalescing (one append per chunk): events	5001.000		
+after	stream 200k chars (40-char chunks), coalesced 33 ms, chunks back to back: Rust apply+emit, whole message	0.517	ms	
+after	stream 200k chars (40-char chunks), coalesced 33 ms, chunks back to back: IPC bytes, whole message	0.203	MB	
+after	stream 200k chars (40-char chunks), coalesced 33 ms, chunks back to back: events	4.000		
+after	stream 200k chars (40-char chunks), coalesced 33 ms, a chunk every ~1 ms: Rust apply+emit, whole message	4.628	ms	
+after	stream 200k chars (40-char chunks), coalesced 33 ms, a chunk every ~1 ms: IPC bytes, whole message	0.237	MB	
+after	stream 200k chars (40-char chunks), coalesced 33 ms, a chunk every ~1 ms: events	195.000		

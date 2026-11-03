@@ -19,6 +19,11 @@
 //!
 //! Agents never see a token: they read through sources (`sources.rs`), which
 //! call in here. Tokens never go into errors, logs or what Settings is sent.
+//!
+//! A credential the service refuses on a real call (HTTP 401, a GitLab token
+//! without the scope, Linear's authentication error) is marked refused on the
+//! stored entry, so Settings shows it as refused instead of "Connected" until
+//! a call works again or the user reconnects. Nothing polls for it.
 
 use crate::accounts::home;
 use crate::json_file::JsonFile;
@@ -247,6 +252,16 @@ pub(crate) struct Integrations {
     /// The browser sign-in waiting on the port, by its cancel flag. Starting
     /// another (the user closed the tab and clicked Connect again) cancels it.
     pending: Mutex<Option<Arc<AtomicBool>>>,
+    /// Refusals of credentials that aren't stored (env vars), by service: why.
+    env_refused: Mutex<std::collections::HashMap<String, String>>,
+}
+
+/// The words every refused-credential error carries (see [`Integrations::track`]).
+const REFUSED: &str = "refused the credential";
+
+/// Whether an API error says the credential itself was refused.
+pub(crate) fn is_refusal(error: &str) -> bool {
+    error.contains(REFUSED)
 }
 
 impl Integrations {
@@ -261,6 +276,7 @@ impl Integrations {
             client_ids: vec![],
             refreshing: tokio::sync::Mutex::const_new(()),
             pending: Mutex::new(None),
+            env_refused: Mutex::default(),
         })
     }
 
@@ -279,11 +295,83 @@ impl Integrations {
         self.store.read::<Map<String, Value>>().remove(id)
     }
 
-    pub(crate) fn put(&self, id: &str, token: Value) -> Result<(), String> {
+    /// Store a credential. A new one (a sign-in, a key, a refresh) is no longer refused.
+    pub(crate) fn put(&self, id: &str, mut token: Value) -> Result<(), String> {
+        if let Some(t) = token.as_object_mut() {
+            t.remove("refused");
+            t.remove("refused_at");
+        }
+        self.env_refused.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
         self.store.update(|all: &mut Map<String, Value>| {
             all.insert(id.to_owned(), token);
             Ok(())
         })
+    }
+
+    /// Note how a real call with `auth` went: a refusal marks the credential
+    /// refused (if it is still the one stored), a success clears the mark.
+    fn track<T>(&self, id: &str, auth: &Auth, out: Result<T, String>) -> Result<T, String> {
+        match &out {
+            Err(e) if is_refusal(e) => {
+                if let Err(err) = self.mark_refused(id, auth, e) {
+                    eprintln!("[integrations] couldn't note that {id} refused the credential: {err}");
+                }
+            }
+            Ok(_) => self.clear_refused(id),
+            Err(_) => {}
+        }
+        out
+    }
+
+    fn mark_refused(&self, id: &str, auth: &Auth, why: &str) -> Result<(), String> {
+        let secret = match auth {
+            Auth::Bearer(s) | Auth::Key(s) => s.as_str(),
+        };
+        let stored = self.token(id);
+        let is_stored = stored.as_ref().is_some_and(|t| t["api_key"].as_str() == Some(secret) || t["access_token"].as_str() == Some(secret));
+        if !is_stored {
+            // An env var's key, or a credential replaced while this call was out.
+            if stored.is_none() {
+                self.env_refused.lock().unwrap_or_else(PoisonError::into_inner).insert(id.to_owned(), why.to_owned());
+            }
+            return Ok(());
+        }
+        if stored.as_ref().is_some_and(|t| t["refused"].as_str() == Some(why)) {
+            return Ok(());
+        }
+        self.store.update(|all: &mut Map<String, Value>| {
+            if let Some(t) = all.get_mut(id).and_then(Value::as_object_mut)
+                && (t.get("api_key").and_then(Value::as_str) == Some(secret) || t.get("access_token").and_then(Value::as_str) == Some(secret))
+            {
+                t.insert("refused".into(), json!(why));
+                t.insert("refused_at".into(), json!(now()));
+            }
+            Ok(())
+        })
+    }
+
+    fn clear_refused(&self, id: &str) {
+        self.env_refused.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
+        if self.token(id).is_some_and(|t| t.get("refused").is_some()) {
+            let cleared = self.store.update(|all: &mut Map<String, Value>| {
+                if let Some(t) = all.get_mut(id).and_then(Value::as_object_mut) {
+                    t.remove("refused");
+                    t.remove("refused_at");
+                }
+                Ok(())
+            });
+            if let Err(e) = cleared {
+                eprintln!("[integrations] {e}");
+            }
+        }
+    }
+
+    /// Why the service refused the credential for `id` on its last call, if it did.
+    fn refused(&self, id: &str, stored: Option<&Value>) -> Option<String> {
+        match stored {
+            Some(t) => t["refused"].as_str().map(str::to_owned),
+            None => self.env_refused.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned(),
+        }
     }
 
     fn env_key(&self, svc: &Service) -> Option<String> {
@@ -386,6 +474,14 @@ impl Integrations {
                     None => (false, "", false),
                 };
                 let account = t.and_then(|t| t["account"].as_str().map(str::to_owned));
+                // What Settings shows: refused wins over "connected" until a call works or the user reconnects.
+                let refused = if connected { self.refused(s.id, t) } else { None };
+                let (state, message) = match (connected, refused, needs_reauth) {
+                    (false, _, _) => ("disconnected", None),
+                    (true, Some(why), _) => ("refused", Some(why)),
+                    (true, None, true) => ("needsReauth", Some(format!("{} needs reconnecting: the sign-in expired", s.label))),
+                    (true, None, false) => ("connected", None),
+                };
                 let flow = match s.flow {
                     Flow::Device => "device",
                     // No OAuth app to sign in with: a key is the only way.
@@ -396,6 +492,7 @@ impl Integrations {
                     "id": s.id, "label": s.label, "about": s.about,
                     "flow": flow,
                     "connected": connected, "via": via, "account": account, "needsReauth": needs_reauth,
+                    "state": state, "message": message,
                     "keyEnv": s.key_env, "keyUrl": s.key_url,
                 });
                 if s.id == "gitlab" {
@@ -417,6 +514,7 @@ impl Integrations {
 
     fn disconnect(&self, id: &str) -> Result<(), String> {
         service(id)?;
+        self.env_refused.lock().unwrap_or_else(PoisonError::into_inner).remove(id);
         self.store.update(|all: &mut Map<String, Value>| {
             all.remove(id);
             Ok(())
@@ -613,11 +711,17 @@ impl Integrations {
         let status = resp.status();
         let body = read_capped(resp, MAX_RESPONSE).await.map_err(|e| format!("{label}: {e}"))?;
         let r: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
-        if let Some(e) = r["errors"].as_array().and_then(|a| a.first()) {
-            return Err(format!("{label}: {}", e["message"].as_str().unwrap_or("error")));
-        }
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(format!("{label} refused the credential (HTTP 401): reconnect in Settings → Integrations"));
+            return Err(format!("{label} {REFUSED} (HTTP 401): reconnect in Settings → Integrations"));
+        }
+        if let Some(e) = r["errors"].as_array().and_then(|a| a.first()) {
+            let message = e["message"].as_str().unwrap_or("error");
+            // Linear answers a revoked or expired token with HTTP 400 and this error.
+            let ext = &e["extensions"];
+            if ext["code"] == "AUTHENTICATION_ERROR" || ext["type"].as_str().is_some_and(|t| t.eq_ignore_ascii_case("authentication error")) {
+                return Err(format!("{label} {REFUSED} ({message}): reconnect in Settings → Integrations"));
+            }
+            return Err(format!("{label}: {message}"));
         }
         if !status.is_success() {
             return Err(format!("{label}: HTTP {status}{}", r["message"].as_str().map(|m| format!(": {m}")).unwrap_or_default()));
@@ -649,7 +753,7 @@ impl Integrations {
         };
         match status {
             200..=299 => Ok(text),
-            401 => Err("GitHub refused the credential (HTTP 401): reconnect in Settings → Integrations".into()),
+            401 => Err(format!("GitHub {REFUSED} (HTTP 401): reconnect in Settings → Integrations")),
             403 | 429 if text.contains("rate limit") => Err(format!("GitHub: rate limit reached{note}")),
             404 => Err(format!("GitHub: not found{note}")),
             _ => Err(format!("GitHub: HTTP {status}: {}{note}", text.chars().take(200).collect::<String>())),
@@ -658,17 +762,23 @@ impl Integrations {
 
     pub(crate) async fn github_get(&self, path: &str, accept: &str, require_auth: bool) -> Result<String, String> {
         let auth = if require_auth { Some(self.auth("github").await?) } else { self.auth("github").await.ok() };
-        self.github_request(auth.as_ref(), path, accept).await
+        let out = self.github_request(auth.as_ref(), path, accept).await;
+        match &auth {
+            Some(a) => self.track("github", a, out),
+            None => out,
+        }
     }
 
-    async fn github_graphql(&self, query: &str, vars: Value) -> Result<Value, String> {
+    pub(crate) async fn github_graphql(&self, query: &str, vars: Value) -> Result<Value, String> {
         let auth = self.auth("github").await?;
-        self.graphql(service("github")?, &format!("{GITHUB_API}/graphql"), &auth, query, vars).await
+        let out = self.graphql(service("github")?, &format!("{GITHUB_API}/graphql"), &auth, query, vars).await;
+        self.track("github", &auth, out)
     }
 
     pub(crate) async fn linear(&self, query: &str, vars: Value) -> Result<Value, String> {
         let auth = self.auth("linear").await?;
-        self.graphql(service("linear")?, LINEAR_API, &auth, query, vars).await
+        let out = self.graphql(service("linear")?, LINEAR_API, &auth, query, vars).await;
+        self.track("linear", &auth, out)
     }
 
     /// The GitLab instance the connection is on.
@@ -690,7 +800,11 @@ impl Integrations {
         let body = read_capped(resp, MAX_RESPONSE).await.map_err(|e| format!("GitLab: {e}"))?;
         match status {
             200..=299 => serde_json::from_slice(&body).map_err(|_| "GitLab: the answer wasn't JSON".to_owned()),
-            401 => Err("GitLab refused the credential (HTTP 401): reconnect in Settings → Integrations".into()),
+            401 => Err(format!("GitLab {REFUSED} (HTTP 401): reconnect in Settings → Integrations")),
+            // A token without the scope: refused for everything, not just this project.
+            403 if String::from_utf8_lossy(&body).contains("insufficient_scope") => {
+                Err(format!("GitLab {REFUSED} (HTTP 403): the token lacks the read_api scope; make one with read_api and reconnect"))
+            }
             403 => Err("GitLab: forbidden (HTTP 403): the token can't read this (it needs read_api)".into()),
             404 => Err("GitLab: not found".into()),
             429 => Err("GitLab: rate limit reached".into()),
@@ -701,10 +815,11 @@ impl Integrations {
     /// A GitLab REST GET (`path` after `/api/v4`) with the connected account.
     pub(crate) async fn gitlab_get(&self, path: &str) -> Result<Value, String> {
         let auth = self.auth("gitlab").await?;
-        self.gitlab_request(&auth, &self.gitlab_base_url(), path).await
+        let out = self.gitlab_request(&auth, &self.gitlab_base_url(), path).await;
+        self.track("gitlab", &auth, out)
     }
 
-    async fn linear_source(&self, kind: &str, source: &Value) -> Result<Value, String> {
+    pub(crate) async fn linear_source(&self, kind: &str, source: &Value) -> Result<Value, String> {
         match kind {
             "linear.issue" => {
                 let id = linear_key(&source["id"], "issue id")?;
@@ -793,21 +908,11 @@ pub async fn connect(id: &str, base_url: Option<&str>, notify: Notify) -> Result
     Integrations::user().connect(id, base_url, notify).await
 }
 
-/// A GitHub GraphQL query with the connected account (or `GITHUB_TOKEN`).
-pub async fn github_graphql(query: &str, vars: Value) -> Result<Value, String> {
-    Integrations::user().github_graphql(query, vars).await
-}
-
 /// A GitHub REST GET returning text (`accept` picks JSON, a diff, a bare sha…).
 /// Without `require_auth` and without a connection it goes unauthenticated
 /// (public repos only, 60 requests an hour) instead of failing.
 pub async fn github_get(path: &str, accept: &str, require_auth: bool) -> Result<String, String> {
     Integrations::user().github_get(path, accept, require_auth).await
-}
-
-/// A `linear.*` source.
-pub async fn linear(kind: &str, source: &Value) -> Result<Value, String> {
-    Integrations::user().linear_source(kind, source).await
 }
 
 // ── the loopback callback ───────────────────────────────────────────────────
@@ -892,10 +997,12 @@ fn cycle_name(c: &Value) -> Option<String> {
 
 const ISSUE_ROW: &str = "identifier title url priority priorityLabel estimate updatedAt state { name type } assignee { name }";
 
+/// An issue with its newest 30 comments: `orderBy: createdAt` returns them newest first
+/// (checked against the real API); `newest` puts them back in order.
 pub(crate) const ISSUE_QUERY: &str = "query($id: String!) { issue(id: $id) { identifier title description url priority priorityLabel estimate dueDate createdAt updatedAt \
     state { name type } assignee { name } creator { name } team { key name } cycle { number name } project { name } \
     labels { nodes { name } } children { nodes { identifier title state { name type } } } \
-    attachments { nodes { title url } } comments(first: 30) { nodes { body createdAt user { name } } } } }";
+    attachments { nodes { title url } } comments(first: 30, orderBy: createdAt) { nodes { body createdAt user { name } } } } }";
 
 const BOARD_TEAM_QUERY: &str = "query($key: String!) { teams(filter: { key: { eq: $key } }, first: 1) { nodes { key name activeCycle { number name } states { nodes { name type position } } } } }";
 
@@ -1090,6 +1197,7 @@ pub(crate) mod tests {
             client_ids: vec![("gitlab", "gl-test-client".into())],
             refreshing: tokio::sync::Mutex::const_new(()),
             pending: Mutex::new(None),
+            env_refused: Mutex::default(),
         }))
     }
 
@@ -1301,6 +1409,7 @@ pub(crate) mod tests {
             client_ids: vec![("gitlab", String::new())],
             refreshing: tokio::sync::Mutex::const_new(()),
             pending: Mutex::new(None),
+            env_refused: Mutex::default(),
         }));
         assert_eq!(i.status()[2]["flow"], "key");
         assert_eq!(i.status()[2]["baseUrl"], GITLAB_COM);
@@ -1366,6 +1475,89 @@ pub(crate) mod tests {
         assert!(i.status()[1]["needsReauth"] == false, "still refreshable as far as anyone knows");
         assert_eq!(i.auth("linear").await.unwrap_err(), "Linear needs reconnecting: open Settings → Integrations");
         assert_eq!(i.status()[1]["needsReauth"], true, "a refused refresh token is dropped, so Settings asks to reconnect");
+    }
+
+    /// A token the service refuses on a real call shows as refused in Settings
+    /// (not "Connected") until a call works again or the user reconnects.
+    #[tokio::test]
+    async fn refused_credentials_show_as_refused_until_a_call_works_or_a_reconnect() {
+        let revoked = Arc::new(AtomicBool::new(true));
+        let r = revoked.clone();
+        let (base, _) = mock(move |req| {
+            let off = r.load(Ordering::SeqCst);
+            match (req.path.as_str(), req.auth.as_deref()) {
+                ("/gitlab.com/api/v4/user", Some("Bearer glpat-new")) => (200, json!({ "username": "ada" })),
+                ("/gitlab.com/api/v4/issues", Some("Bearer glpat-new")) => (200, json!([])),
+                ("/gitlab.com/api/v4/issues", _) if off => (401, json!({ "message": "401 Unauthorized" })),
+                ("/gitlab.com/api/v4/issues", _) => (200, json!([])),
+                ("/gitlab.com/api/v4/projects/a%2Fb/issues/1", _) => (403, json!({ "message": "403 Forbidden" })),
+                ("/gitlab.com/api/v4/projects/a%2Fb/issues/2", _) => {
+                    (403, json!({ "error": "insufficient_scope", "error_description": "needs read_api" }))
+                }
+                ("/api.github.com/graphql", _) if off => (401, json!({ "message": "Bad credentials" })),
+                ("/api.github.com/graphql", _) => (200, json!({ "data": { "viewer": { "login": "ada" } } })),
+                ("/api.linear.app/graphql", _) if off => (
+                    400,
+                    json!({ "errors": [{ "message": "Authentication required, not authenticated", "extensions": { "type": "authentication error", "code": "AUTHENTICATION_ERROR" } }] }),
+                ),
+                ("/api.linear.app/graphql", _) => (200, json!({ "data": { "viewer": { "name": "Ada" } } })),
+                _ => (500, json!("oops")),
+            }
+        });
+        let i = instance(&base, 0);
+        let state = |n: usize| {
+            let v = &i.status()[n];
+            (v["state"].as_str().unwrap_or_default().to_owned(), v["message"].as_str().unwrap_or_default().to_owned(), v["connected"] == true)
+        };
+        assert_eq!(state(2).0, "disconnected");
+        i.put("gitlab", json!({ "api_key": "glpat-old", "account": "ada" })).unwrap();
+        assert_eq!(state(2), ("connected".into(), String::new(), true));
+
+        // GitLab: a revoked token.
+        let e = i.gitlab_get("/issues").await.unwrap_err();
+        assert!(is_refusal(&e), "{e}");
+        let (st, message, connected) = state(2);
+        assert_eq!((st.as_str(), connected), ("refused", true), "refused, though a credential is still stored");
+        assert!(message.contains("GitLab refused the credential (HTTP 401)"), "{message}");
+        assert!(!serde_json::to_string(&i.status()).unwrap().contains("glpat"), "the token never reaches Settings");
+        // A project the token can't see isn't a refusal of the token...
+        assert!(!is_refusal(&i.gitlab_get("/projects/a%2Fb/issues/1").await.unwrap_err()));
+        assert_eq!(state(2).0, "refused", "...and doesn't clear one either");
+        // ...but a token without the scope is.
+        assert!(i.gitlab_get("/projects/a%2Fb/issues/2").await.unwrap_err().contains("lacks the read_api scope"));
+        // The service takes it again: connected, nothing left to say.
+        revoked.store(false, Ordering::SeqCst);
+        i.gitlab_get("/issues").await.unwrap();
+        assert_eq!(state(2), ("connected".into(), String::new(), true));
+        // Refused again, then the user reconnects with a new key: connected.
+        revoked.store(true, Ordering::SeqCst);
+        i.gitlab_get("/issues").await.unwrap_err();
+        assert_eq!(state(2).0, "refused");
+        i.set_key("gitlab", "glpat-new", None).await.unwrap();
+        assert_eq!(state(2).0, "connected", "a reconnect clears it");
+        // A late failure of the old token doesn't mark the new one.
+        let late: Result<(), String> = Err(format!("GitLab {REFUSED} (HTTP 401)"));
+        let _ = i.track("gitlab", &Auth::Key("glpat-old".into()), late);
+        assert_eq!(state(2).0, "connected");
+        i.gitlab_get("/issues").await.unwrap();
+
+        // GitHub's 401 and Linear's authentication error (HTTP 400) are refusals too.
+        i.put("github", json!({ "access_token": "gho_x", "account": "ada" })).unwrap();
+        i.put("linear", json!({ "api_key": "lin_api_x", "account": "ada" })).unwrap();
+        assert!(i.github_graphql("{ viewer { login } }", json!({})).await.is_err());
+        assert!(
+            i.linear("query { viewer { name } }", json!({})).await.unwrap_err().contains("Linear refused the credential (Authentication required")
+        );
+        assert_eq!((state(0).0.as_str(), state(1).0.as_str()), ("refused", "refused"));
+        revoked.store(false, Ordering::SeqCst);
+        i.linear("query { viewer { name } }", json!({})).await.unwrap();
+        assert_eq!((state(0).0.as_str(), state(1).0.as_str()), ("refused", "connected"), "each service on its own");
+        // Disconnecting forgets it all.
+        i.disconnect("github").unwrap();
+        assert_eq!(state(0).0, "disconnected");
+        // An expired sign-in that can't be refreshed is its own state.
+        i.put("linear", json!({ "access_token": "lin_oauth", "expires_at": 1, "account": "ada" })).unwrap();
+        assert_eq!(state(1).0, "needsReauth");
     }
 
     #[tokio::test]

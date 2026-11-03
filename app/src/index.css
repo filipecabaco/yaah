@@ -135,6 +135,12 @@
     @apply font-sans;
   }
 }
+/* Transcript entries off screen skip layout and paint until scrolled to, so long chats open fast.
+   `auto` keeps an entry's last drawn height once it has been on screen. */
+.transcript-entry {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
 /* Agent messages are markdown; keep spacing close to body text. */
 .markdown > * + * {
   margin-top: 0.6em;

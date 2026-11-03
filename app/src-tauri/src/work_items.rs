@@ -1063,11 +1063,6 @@ pub(crate) fn unlink(projects: &Projects, project_id: &str) -> Result<Project, S
 
 // ── live sources ────────────────────────────────────────────────────────────
 
-/// `github.issue`, `github.issues`, `gitlab.issue`, `gitlab.issues` and `linear.project`.
-pub(crate) async fn source(kind: &str, source: &Value) -> Result<Value, String> {
-    source_with(Integrations::user(), kind, source).await
-}
-
 fn number(v: &Value, what: &str) -> Result<u64, String> {
     v.as_u64()
         .or_else(|| v.as_str().and_then(|s| s.trim_start_matches('#').parse().ok()))
@@ -1075,7 +1070,9 @@ fn number(v: &Value, what: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("needs an issue `{what}`"))
 }
 
-async fn source_with(i: &Integrations, kind: &str, source: &Value) -> Result<Value, String> {
+/// `github.issue`, `github.issues`, `gitlab.issue`, `gitlab.issues` and `linear.project`,
+/// read through `i` (`Sources` shares and caches them).
+pub(crate) async fn source_with(i: &Integrations, kind: &str, source: &Value) -> Result<Value, String> {
     let text = |k: &str, hint: &str| source[k].as_str().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| format!("{kind} needs `{k}`: {hint}"));
     match kind {
         "github.issue" => github_issue(i, text("repo", "\"owner/name\"")?, number(&source["number"], "number")?).await,

@@ -24,7 +24,12 @@ let appearance: Appearance = "system";
 let themes: ThemeChoice = { light: "yaah", dark: "yaah" };
 let preview: string | null = null;
 const customPalettes = new Map<string, Palette>();
-let applied: string[] = [];
+/** CSS variables set on the root: at first, the ones public/theme-boot.js restored from the last run. */
+const rootStyle = document.documentElement.style;
+let applied: string[] = Array.from({ length: rootStyle.length }, (_, i) => rootStyle.item(i)).filter((k) => k.startsWith("--"));
+/** Where the last applied theme is kept for public/theme-boot.js, which applies it before the app loads. */
+export const THEME_CACHE = "yaah:theme";
+export type CachedTheme = { dark: boolean; tokens: Record<string, string> };
 /** What theme-map produces: `rgb(r g b)` with integer channels. */
 const SAFE_COLOR = /^rgb\(\d{1,3} \d{1,3} \d{1,3}\)$/;
 
@@ -57,19 +62,33 @@ async function apply() {
   const root = document.documentElement;
   for (const k of applied) root.style.removeProperty(k);
   applied = [];
+  const tokens: Record<string, string> = {};
   if (palette) {
     for (const [k, v] of Object.entries(toTokens(palette))) {
       // Only ever a plain colour: a theme file can't smuggle other CSS into a variable.
       if (!SAFE_COLOR.test(v)) continue;
       root.style.setProperty(`--${k}`, v);
       applied.push(`--${k}`);
+      tokens[`--${k}`] = v;
     }
   }
   // A theme's own polarity wins (a dark theme stays dark); yaah's follows the mode.
   const isDark = palette ? palette.dark : dark;
   root.classList.toggle("dark", isDark);
   root.style.colorScheme = isDark ? "dark" : "light";
+  root.dataset.theme = isDark ? "dark" : "light";
+  // For the next start (not while the picker previews one).
+  if (preview == null) {
+    try {
+      localStorage.setItem(THEME_CACHE, JSON.stringify({ dark: isDark, tokens } satisfies CachedTheme));
+    } catch {
+      // Storage full or off: the next start follows the OS until the settings arrive.
+    }
+  }
 }
+
+/** public/theme-boot.js applied a theme from the last run. */
+const restored = () => document.documentElement.dataset.theme != null;
 
 export function setAppearance(a: Appearance) {
   appearance = a;
@@ -87,7 +106,15 @@ export function previewTheme(id: string | null) {
   void apply();
 }
 
+/**
+ * Follow the OS light/dark setting. Without a theme from the last run, apply yaah's own
+ * now; with one (public/theme-boot.js put it up before any script), keep it until the
+ * saved settings arrive (`setThemes`/`setAppearance`), so the start never flashes another.
+ */
 export function followTheme() {
-  void apply();
+  if (!restored()) void apply();
   os.addEventListener("change", () => void apply());
 }
+
+/** The saved settings couldn't be read: show yaah's own colours, following the OS. */
+export const settingsUnavailable = () => void apply();

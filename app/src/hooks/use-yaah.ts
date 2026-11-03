@@ -2,8 +2,8 @@
 // either fetched from a Rust command or applied from a Rust event.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, events, type AgentProfile, type Entry, type Project, type SessionInfo, type WorkItem } from "@/lib/api";
-import { errorMessage } from "@/lib/narrow";
+import { api, events, type AgentProfile, type Project, type SessionInfo, type WorkItem } from "@/lib/api";
+import { TranscriptStore } from "@/lib/transcripts";
 
 /** Sidebar order: archived projects sink to the bottom; otherwise newest first. */
 export function sortProjects(projects: Project[]): Project[] {
@@ -22,7 +22,8 @@ export function useYaah() {
   const [pickedAgentId, setAgentId] = useState<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [sessions, setSessions] = useState<Record<string, SessionInfo>>({});
-  const [entries, setEntries] = useState<Record<string, Entry[]>>({});
+  // Transcripts live outside React state: a chunk re-renders only its chat (use-transcript.ts).
+  const [transcripts] = useState(() => new TranscriptStore((id, from, limit) => api.getEntries(id, from, limit)));
   const [selection, setSelection] = useState<Selection>(null);
   /** Why the first load (agents, projects, chats) failed, if it did. */
   const [loadError, setLoadError] = useState<unknown>(null);
@@ -45,13 +46,9 @@ export function useYaah() {
     ]).catch(setLoadError);
 
     const unlisten = [
-      events.sessionEntry(({ sessionId, index, entry }) =>
-        setEntries((prev) => {
-          const list = [...(prev[sessionId] ?? [])];
-          list[index] = entry;
-          return { ...prev, [sessionId]: list };
-        }),
-      ),
+      events.sessionEntry((e) => transcripts.entry(e)),
+      events.sessionAppend((e) => transcripts.append(e)),
+      events.sessionDraft((e) => transcripts.draft(e)),
       events.sessionInfo((info) => setSessions((prev) => ({ ...prev, [info.sessionId]: info }))),
       events.accountsChanged(() => {
         refreshAgents().catch((e: unknown) => console.error("could not reload agents", e));
@@ -62,7 +59,7 @@ export function useYaah() {
       }),
     ];
     return () => unlisten.forEach((p) => void p.then((f) => f()));
-  }, [refreshAgents, refreshProjects]);
+  }, [refreshAgents, refreshProjects, transcripts]);
 
   const agents = useMemo(() => agentList ?? [], [agentList]);
   // A picked agent that was removed falls back to the default.
@@ -91,11 +88,12 @@ export function useYaah() {
   const newChat = useCallback(
     async (projectId: string) => {
       const info = await api.newSession(projectId, agentId);
+      transcripts.created(info.sessionId);
       setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
       setSelection({ kind: "chat", id: info.sessionId });
       return info.sessionId;
     },
-    [agentId],
+    [agentId, transcripts],
   );
 
   /**
@@ -122,11 +120,12 @@ export function useYaah() {
   const newQuickChat = useCallback(
     async (dir?: string) => {
       const info = await api.newQuickChat(agentId, dir);
+      transcripts.created(info.sessionId);
       setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
       setSelection({ kind: "chat", id: info.sessionId });
       return info.sessionId;
     },
-    [agentId],
+    [agentId, transcripts],
   );
 
   /** A quick chat in a folder the user picks (e.g. one holding the data to analyse). Nothing if they cancel. */
@@ -157,13 +156,16 @@ export function useYaah() {
   }, []);
 
   /** Drops the chat; if it was open, its project (if any) opens instead. */
-  const deleteChat = useCallback(async (chat: SessionInfo) => {
-    const id = chat.sessionId;
-    await api.deleteSession(id);
-    setSessions(({ [id]: _, ...rest }) => rest);
-    setEntries(({ [id]: _, ...rest }) => rest);
-    setSelection((sel) => (sel?.kind === "chat" && sel.id === id ? (chat.projectId ? { kind: "project", id: chat.projectId } : null) : sel));
-  }, []);
+  const deleteChat = useCallback(
+    async (chat: SessionInfo) => {
+      const id = chat.sessionId;
+      await api.deleteSession(id);
+      setSessions(({ [id]: _, ...rest }) => rest);
+      transcripts.remove(id);
+      setSelection((sel) => (sel?.kind === "chat" && sel.id === id ? (chat.projectId ? { kind: "project", id: chat.projectId } : null) : sel));
+    },
+    [transcripts],
+  );
 
   const orderedProjects = useMemo(() => sortProjects(projects), [projects]);
 
@@ -184,21 +186,6 @@ export function useYaah() {
     () => [...quickChats, ...orderedProjects.flatMap((p) => chatsByProject[p.id] ?? [])],
     [quickChats, orderedProjects, chatsByProject],
   );
-
-  // Chats restored from disk have no events yet: load their transcript when opened.
-  const missingTranscript = selection?.kind === "chat" && !entries[selection.id] ? selection.id : null;
-  useEffect(() => {
-    if (!missingTranscript) return;
-    const id = missingTranscript;
-    api
-      .getTranscript(id)
-      .then((t) => setEntries((prev) => (prev[id] ? prev : { ...prev, [id]: t.entries })))
-      .catch((e: unknown) =>
-        setEntries((prev) =>
-          prev[id] ? prev : { ...prev, [id]: [{ type: "error", message: `Couldn't load this chat: ${errorMessage(e)}`, loginAccount: null }] },
-        ),
-      );
-  }, [missingTranscript]);
 
   const activeChat = selection?.kind === "chat" ? (sessions[selection.id] ?? null) : null;
   const activeProjectId = selection?.kind === "project" ? selection.id : (activeChat?.projectId ?? null);
@@ -224,7 +211,8 @@ export function useYaah() {
     selection,
     setSelection,
     activeChat,
-    activeChatEntries: activeChat ? (entries[activeChat.sessionId] ?? []) : [],
+    /** Every chat's transcript; a chat reads its own with `useTranscript`. */
+    transcripts,
     activeProject: projects.find((p) => p.id === activeProjectId) ?? null,
     newChat,
     newQuickChat,

@@ -50,10 +50,8 @@ pub const ATTACHMENT: &str = "yaah UI guide";
 // ── Text ─────────────────────────────────────────────────────────────────────
 
 /// Component names, yaah's own first, then the user's, then installed libraries'.
-pub(crate) fn component_names(library: &Library) -> Vec<String> {
-    let mut all = library.list().unwrap_or_default();
-    all.sort_by_key(|c| (u8::from(c.source != "yaah") + u8::from(c.source != "yaah" && c.source != "local"), c.name.clone()));
-    all.into_iter().map(|c| c.name).collect()
+pub fn component_names(library: &Library) -> Vec<String> {
+    library.component_names().as_ref().clone()
 }
 
 /// The names on one line, at most [`INDEX_CAP`] of them.
@@ -74,7 +72,12 @@ pub fn guide_text(names: &[String]) -> String {
 }
 
 /// One line per primitive: its props (`*` required) and the first sentence of what it is.
-fn primitive_index() -> String {
+fn primitive_index() -> &'static str {
+    static INDEX: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    INDEX.get_or_init(build_primitive_index)
+}
+
+fn build_primitive_index() -> String {
     let Some(all) = crate::ui_library::primitives()["primitives"].as_object() else { return String::new() };
     all.iter()
         .map(|(name, p)| {
@@ -90,7 +93,29 @@ fn primitive_index() -> String {
 
 /// A skill's `SKILL.md`, filled in.
 pub fn skill_text(skill: &Skill, names: &[String]) -> String {
-    skill.template.replace("{{primitives}}", &primitive_index()).replace("{{components}}", &component_index(names))
+    skill.template.replace("{{tools}}", &tool_names()).replace("{{primitives}}", primitive_index()).replace("{{components}}", &component_index(names))
+}
+
+/// [`skill_text`] for the library's current names, kept while they don't change
+/// (`ui_guide`, the skills as MCP resources and prompts).
+pub fn skill_text_cached(skill: &'static Skill, names: &Arc<Vec<String>>) -> Arc<String> {
+    type Texts = std::collections::HashMap<&'static str, TextFor>;
+    static TEXTS: std::sync::LazyLock<Mutex<Texts>> = std::sync::LazyLock::new(Mutex::default);
+    let mut texts = TEXTS.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((for_names, text)) = texts.get(skill.name)
+        && (Arc::ptr_eq(for_names, names) || for_names == names)
+    {
+        return text.clone();
+    }
+    let text = Arc::new(skill_text(skill, names));
+    texts.insert(skill.name, (names.clone(), text.clone()));
+    text
+}
+
+/// Every yaah-ui tool by the name agents see: `mcp__yaah-ui__<tool>` where MCP
+/// tools are prefixed by server (Claude Code), the bare name where they aren't.
+pub fn tool_names() -> String {
+    crate::ui_mcp::TOOL_NAMES.iter().map(|t| format!("- `{}` (bare: `{t}`)", crate::ui_mcp::full_tool_name(t))).collect::<Vec<_>>().join("\n")
 }
 
 /// The skill for a `ui_guide` topic or a name (`ui`, `yaah-ui`, …); `None` if there is none.
@@ -240,14 +265,19 @@ fn object_at<'a>(v: &'a mut Value, path: &[&str]) -> &'a mut Map<String, Value> 
 
 // ── The app's guide ──────────────────────────────────────────────────────────
 
+/// A text and the component names it was built for.
+type TextFor = (Arc<Vec<String>>, Arc<String>);
+
 /// The guide and skills as they are now, and where yaah writes them.
 pub struct Guide {
     /// `~/.yaah`.
     home: PathBuf,
-    components: Box<dyn Fn() -> Vec<String> + Send + Sync>,
+    components: Box<dyn Fn() -> Arc<Vec<String>> + Send + Sync>,
     enabled: Box<dyn Fn() -> bool + Send + Sync>,
     /// One write at a time.
     writing: Mutex<()>,
+    /// The guide text for the names it was last built for.
+    text: Mutex<Option<TextFor>>,
 }
 
 impl Guide {
@@ -257,12 +287,21 @@ impl Guide {
         components: impl Fn() -> Vec<String> + Send + Sync + 'static,
         enabled: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Self {
-        Self { home, components: Box::new(components), enabled: Box::new(enabled), writing: Mutex::new(()) }
+        Self::with_names(home, move || Arc::new(components()), enabled)
+    }
+
+    /// Like [`new`](Self::new), with names the caller already shares (the library's, kept in memory).
+    pub(crate) fn with_names(
+        home: PathBuf,
+        components: impl Fn() -> Arc<Vec<String>> + Send + Sync + 'static,
+        enabled: impl Fn() -> bool + Send + Sync + 'static,
+    ) -> Self {
+        Self { home, components: Box::new(components), enabled: Box::new(enabled), writing: Mutex::new(()), text: Mutex::new(None) }
     }
 
     /// The app's: `~/.yaah`, the app's library, and Settings → Chat.
     pub(crate) fn for_app(library: Arc<Library>) -> Self {
-        Self::new(crate::accounts::home().join(".yaah"), move || component_names(&library), crate::settings::teach_agents)
+        Self::with_names(crate::accounts::home().join(".yaah"), move || library.component_names(), crate::settings::teach_agents)
     }
 
     /// `~/.yaah/agent-skills`: `<name>/SKILL.md` for each skill.
@@ -280,7 +319,21 @@ impl Guide {
     }
 
     pub fn text(&self) -> String {
-        guide_text(&(self.components)())
+        self.shared_text().as_ref().clone()
+    }
+
+    /// The guide for the components now, built again only when they change.
+    fn shared_text(&self) -> Arc<String> {
+        let names = (self.components)();
+        let mut cached = self.text.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((for_names, text)) = cached.as_ref()
+            && (Arc::ptr_eq(for_names, &names) || *for_names == names)
+        {
+            return text.clone();
+        }
+        let text = Arc::new(guide_text(&names));
+        *cached = Some((names, text.clone()));
+        text
     }
 
     /// Bring the skill files and the plugin up to date; writes only what changed.
@@ -313,17 +366,17 @@ impl Guide {
         if routes.len() <= 1 {
             return None;
         }
-        let text = self.text();
+        let text = self.shared_text();
         let mut first_prompt = None;
         for route in routes {
             match route {
                 Route::Mcp => {}
                 Route::AcpSystemPrompt => {
-                    params["systemPrompt"] = json!({ "mode": "append", "content": [{ "type": "text", "text": text }] });
+                    params["systemPrompt"] = json!({ "mode": "append", "content": [{ "type": "text", "text": text.as_str() }] });
                 }
-                Route::FirstPrompt => first_prompt = Some(text.clone()),
+                Route::FirstPrompt => first_prompt = Some(text.as_str().to_owned()),
                 Route::ClaudeSystemPrompt => {
-                    object_at(params, &["_meta", "systemPrompt"]).insert("append".into(), json!(text));
+                    object_at(params, &["_meta", "systemPrompt"]).insert("append".into(), json!(text.as_str()));
                 }
                 Route::ClaudePlugin => match self.sync() {
                     Ok(_) => {
@@ -470,12 +523,14 @@ mod tests {
             "`live`",
             "ui_ask",
             "ui_guide",
+            "`mcp__yaah-ui__ui_catalog`",
+            "bare `ui_catalog`",
         ] {
             assert!(text.contains(must), "the guide mentions {must}");
         }
-        // About 4 characters a token: 250-400 tokens for the guide itself.
+        // About 4 characters a token: 250-460 tokens for the guide itself.
         let own = guide_text(&[]).len() / 4;
-        assert!((250..=400).contains(&own), "the guide is about {own} tokens");
+        assert!((250..=460).contains(&own), "the guide is about {own} tokens");
         assert!(!text.contains("{{"), "every placeholder is filled");
     }
 
@@ -516,6 +571,22 @@ mod tests {
         let primitives = crate::ui_library::primitives()["primitives"].as_object().unwrap().len();
         assert_eq!(primitive_index().lines().count(), primitives, "every primitive is indexed");
         assert!(skill("yaah-components").is_some() && skill("nope").is_none());
+    }
+
+    /// Agents called `ui_catalog` where their tool list had `mcp__yaah-ui__ui_catalog`
+    /// and got "No such tool": the skills spell out both names of every tool.
+    #[test]
+    fn the_skills_name_every_tool_both_ways() {
+        let ui = skill_text(skill("ui").unwrap(), &[]);
+        for t in crate::ui_mcp::TOOL_NAMES {
+            assert!(ui.contains(&format!("- `mcp__yaah-ui__{t}` (bare: `{t}`)")), "yaah-ui names {t}");
+        }
+        assert!(!ui.contains("{{tools}}"));
+        let components = skill_text(skill("components").unwrap(), &[]);
+        for t in ["ui_save_component", "ui_get_component", "ui_catalog", "ui_render"] {
+            assert!(components.contains(&format!("`mcp__yaah-ui__{t}`")) && components.contains(&format!("`{t}`")), "yaah-components names {t}");
+        }
+        assert!(components.contains("examples[0].title is required"), "and says how save errors read");
     }
 
     /// The JSON examples in the skills are real: trees render and the saved component saves.
