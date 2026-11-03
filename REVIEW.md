@@ -44,11 +44,11 @@ experiments [before](docs/experiments/2026-11-03-component-model-live-test/) and
 
 Claude's plugin is an optional extra on top.
 
-- [ ] **PDF is the one miss.** The agent said yaah has no PDF viewer and rendered nothing. Fixed by item 2.2 below.
-- [ ] **Unprefixed tool names.** The agent called `ui_catalog`/`ui_guide` without the `mcp__yaah-ui__` prefix and got "No such tool" twice. Should the guide spell out the full names, or is this agent-specific?
-- [ ] **Gemini not measured.** Gemini CLI 0.63 gets the first-prompt fallback but wasn't measured, because it needs a yaah agent profile. Add one and run the live test (`src-tauri/src/live_ui_review.rs`, `#[ignore]`).
-- [ ] **Codex skills.** Codex can only load skills from `<extra dir>/.agents/skills`, which would make that folder a trusted, writable root. It was not done; Codex uses the generic routes. Decide whether that's acceptable.
-- [ ] **Save-component errors** are still raw serde messages. The guide avoided them in the test, but they're unfixed ([review](docs/research/component-model-review.md), item 2).
+- [ ] **PDF is the one miss.** The agent said yaah has no PDF viewer and rendered nothing. Fixed by item 2.2 below (not in this round).
+- [x] **Full tool names.** The guide, the MCP instructions and both skills give every tool as `mcp__yaah-ui__ui_catalog` and as `ui_catalog`; the list is generated from `ui_mcp::TOOL_NAMES`.
+- [ ] **Gemini not measured:** Gemini CLI isn't signed in on this machine. How to run it is in [gemini.md](docs/experiments/2026-11-03-agent-guide-live-test/gemini.md) (`run_turns_as`, temp profile store).
+- [x] **Codex skills: decided to stay on the generic routes** (no `.agents/skills` trusted root). Written up in the README, "What agents are told".
+- [x] **Save-component errors** name the field (`examples[0].title is required…`). JSON sent as strings is accepted, a plain-string `tree` is refused clearly, and every tool error also returns `structuredContent.errors: [{path, message}]`.
 
 ## 2. Component model: what to build next
 
@@ -79,10 +79,7 @@ Source: [component-model-review.md → Prior art](docs/research/component-model-
 
 Source: [integrations-shortlist.md](docs/research/integrations-shortlist.md).
 
-- [ ] **Pick what comes next.** Recommended: **Sentry issues** (device flow, S–M) and **GitHub Actions runs and logs** (existing token, S).
-- [ ] **Decide:** a generic MCP OAuth client (DCR + PKCE). It would unlock Notion, Atlassian (Jira, Confluence) and Datadog through their hosted MCP servers, since their REST APIs have no public client.
-- [ ] **Jira:** API token now, or wait for Rovo MCP?
-- [ ] **PagerDuty / Vercel / Slack:** each has an auth caveat; see the table.
+- [x] **Decided (2026-11-03): no new integrations for now.** The focus is **GitHub, GitLab and Linear**, done well. The shortlist (Sentry, GitHub Actions, Jira, PagerDuty, Vercel, Notion, Slack, a generic MCP OAuth client) stays as research for later.
 
 ## 5. Projects from tracker items
 
@@ -91,10 +88,10 @@ Sources: [codrift-issue-import.md](docs/research/codrift-issue-import.md), [work
 
 **Built:** GitHub issues, Linear issues and projects, GitLab issues; pasting a URL or id works; local clones are matched; a chat opens with the prompt drafted; a live item on the project page; refresh and unlink. No branches (your choice).
 
-- [ ] **First real run against Linear.** Four GraphQL assumptions are untested (`ProjectFilter.status.type`, `members.some.isMe`, `project(id:)` taking a slugId, `Project.content`). The newest comments may be missing on issues with more than 30.
-- [ ] **A revoked GitLab token still shows "Connected"** in Settings, while the picker says the token was refused. Show the refusal in Settings too?
-- [ ] **`owner/repo#12` is ambiguous** between GitHub and GitLab. It means GitHub unless only GitLab is connected. OK?
-- [ ] **Relation filter:** "Assigned" includes Linear projects you lead; projects where you're only a member appear only under "All". OK?
+- [x] **Real run against Linear** (read-only, your connection, `live_linear_queue_resolve_and_sources`, `#[ignore]`). All four GraphQL assumptions hold, and the queue returned 62 issues. Comments come newest first; that order is now explicit (`orderBy: createdAt`).
+- [x] **Refused credentials show as refused.** A 401 (GitLab: 403 `insufficient_scope`; Linear: `AUTHENTICATION_ERROR`) on GitHub, GitLab or Linear marks the credential refused. Settings then shows a "Credential refused" badge, the reason, and Reconnect, until a call works or you reconnect.
+- [x] **`owner/repo#12`** stays GitHub unless only GitLab is connected (kept).
+- [x] **Relation filter** kept as is.
 - [ ] **GitLab OAuth needs an app.** Register one (redirect `http://127.0.0.1:43117/oauth/callback/gitlab`, not confidential, scopes `read_api read_user`) and set `YAAH_GITLAB_CLIENT_ID`. Tokens work today without it.
 
 ## 6. Component libraries
@@ -109,10 +106,13 @@ Source: [component-libraries-contract.md](docs/research/component-libraries-cont
 Source: [security-review.md](docs/research/security-review.md). All 9 findings are fixed in `2695665`.
 
 - [ ] **OAuth client ids** for GitHub and Linear are codrift's registered apps. Register yaah's own before shipping.
-- [ ] **CSP is untested in a release build** (`pnpm tauri build`); dev builds don't apply a CSP.
-- [ ] **`localhost` dev servers in `browser`** are probably blocked in release (`frame-src` only allows `127.0.0.1`).
-- [ ] **Previewed pages share one origin**, so their storage is shared. Fix this before any third-party widget (item 3).
-- [ ] **Other informational items:** the broad GitHub `repo` scope, MCP secrets over IPC, UI tokens that never expire, unpinned npx dependencies, image-URL leaks from previews.
+- [x] **Release CSP tested.** `app/scripts/csp-serve.exs` serves a build with the policy rebuilt the way Tauri does it (script hashes). No violations across recorded chats, agent UI (Mermaid, charts, maps, CodeMirror, diffs), Settings, the Component library and diff review.
+  - **Found and fixed:** Tauri's default style-src nonce would have broken inline styles (Mermaid SVG) in release only, so it's disabled (`dangerousDisableAssetCspModification: ["style-src"]`). A test guards it.
+- [x] **`localhost` dev servers** are allowed in `frame-src`, because Vite often binds only `::1`. Tested against the real config.
+- [x] **One preview origin per chat:** each chat gets its own `127.0.0.1` port, opened on first preview and closed when the chat is deleted.
+- [x] **UI tokens expire** when a chat is deleted (scoped to the chat's own hub).
+- [x] **MCP secrets reach Settings masked** (`••••1234`); an unchanged masked value keeps the secret.
+- [ ] **Still informational:** the broad GitHub `repo` scope, unpinned transitive adapter dependencies (now `npm audit`ed), image-URL leaks from previews.
 - [ ] **Your `shop` Postgres connection** signs in as a superuser and is now refused. Create the `yaah_ro` role (README → Live sources).
 
 ## 8. Brand and interface: needs a look in the real app
@@ -120,10 +120,10 @@ Source: [security-review.md](docs/research/security-review.md). All 9 findings a
 Screenshots of earlier UI checks: [earlier-ui-checks](docs/experiments/earlier-ui-checks/).
 
 - [ ] **Brand:** the four-tile mark (sidebar, home, app icon from `src-tauri/icons/source/icon.svg`) and the start-up sliding-logo loader (`index.html`). The loader is meant for the website later. Approve the mark and colour?
-- [ ] **The "Assembling UI" card:** a spinner while an agent builds UI or stores a component, then the UI's title. Check it in a live chat (only unit-tested so far).
-- [ ] **"Quote in reply"** reads the selection at right-click. Check it in WebKit, which selects the word under the pointer.
-- [ ] **The Component library page** is cramped below about 700 px wide (two fixed-width side columns).
-- [ ] **Streamed messages** slow down as a reply gets long (cost grows with the square of its length).
+- [x] **The "Assembling UI" card,** checked through a recorded `ui_render` (pending → in progress → done) in the mock, with a test. "Assembling UI" with a spinner, then "Deploys".
+- [ ] **"Quote in reply"** quoted exactly a real mouse selection in Chrome. Still to check in WebKit, the real app, which selects the word under the pointer.
+- [x] **The Component library page below 700 px** shows one pane at a time, with "All components" to go back (a container query).
+- [x] **Streamed messages no longer slow down** as a reply grows (see 9.1).
 
 ## 9. Performance
 
@@ -132,18 +132,26 @@ evidence in [docs/experiments/2026-11-03-performance/](docs/experiments/2026-11-
 
 yaah is fast at rest (0 % CPU idle, first paint about 20 ms, smooth scrolling, no leaks). The costs grow with use:
 
-- [ ] **9.1 Long replies cost O(n²).** A 200k-character reply sends 507 MB from Rust to the interface, and each chunk re-parses all the Markdown (about 21 ms per chunk at 50k). Fix: emit only the new text, coalesce emits, and use Markdown memoised per block. **Highest impact.** (M, both sides)
-- [ ] **9.2 Saves block every chat.** The whole transcript is serialised under one global lock (another chat's p99 goes from 18 µs to 12 ms). Fix: per-session locks and lazy saves. (M)
-- [ ] **9.3 Launch waits 0.7–1.3 s for the login-shell PATH.** Fix: read it in the background, and load transcripts lazily. (S/M)
-- [ ] **9.4 Opening a chat redraws everything** (heavy chat 868 ms, mostly Mermaid). Fix: an SVG cache and `content-visibility`. (S–M)
-- [ ] **9.5 Every chunk re-renders the whole app,** even for background chats. Fix: a per-session store. (M)
-- [ ] **9.6 First visit to a Settings tab or lazy UI waits 300 ms.** Fix: preload. (S)
-- [ ] **9.7 The component library is re-read on every call** (catalog 15 ms, `session/new` +22 ms with a large library). Fix: an in-memory cache. (M)
-- [ ] **9.8 Agents start through `npx -y`** (+280 ms, +115 MB each). Fix: run the cached binary. (S–M)
-- [ ] **9.9 Live sources over-poll** (offscreen nodes, duplicate API reads, `docker.stats` takes 2 s but is shared for 1 s), and **Postgres connects per query** (+3.3 ms). (S each)
-- [ ] **9.10 Large diffs are wrong above the LCS cap** (+4999 −4999) and slow to review. Fix: Myers diff and windowing. (M)
-- [ ] **9.11 Smaller items:** palette search per keystroke, theme flash at startup, transcripts never evicted, bundle trims. (S each)
-- [ ] **Bug:** "stay at bottom" is shared across chats (`chat.tsx:77-79`). Fix: key `Transcript` by session. (S)
+All done on `feat/review-1-5-7-8-9`. Measured results are in [after/](docs/experiments/2026-11-03-performance/after/)
+(`rust-sessions.md`, `rust-sources.md`, `frontend.md`); the event shapes are in [streaming-contract.md](docs/research/streaming-contract.md).
+
+| Item | Before | After |
+|---|---|---|
+| 9.1: IPC / Rust time for a 200k-character reply | 507 MB / 205 ms | **0.24 MB / 4.6 ms** (`session-append` deltas, coalesced to about 30/s) |
+| 9.1: interface cost per chunk at 50k characters | 21.5 ms | **0.99 ms** (Markdown memoised per block, updates once per frame) |
+| 9.2: another chat's p99 while a 28 MB chat takes edits | 14.5 ms | **2.5 µs** (per-chat locks, lazy saves; form edits send only the draft: 1 MB → 193 B) |
+| 9.3: launch blocked on the login-shell PATH | 1.2–1.5 s | **≈ 0** (read in the background); loading 100 chats 133 → 3.7 ms (lazy transcripts) |
+| 9.4: opening a heavy agent-UI chat / a 1000-entry chat | 928 / 436 ms | **72 / 55 ms** (Mermaid SVG cache, `content-visibility`, last 200 entries) |
+| 9.5: a background chat's chunk, 300 chats in the sidebar | 9.84 ms | **0.04 ms** (a store per chat with `useSyncExternalStore`; zero App commits) |
+| 9.6: first visit to a Settings tab | 318 ms | **22 ms** (preloading) |
+| 9.7: `ui_catalog`, guide per Claude chat | 12 ms, 22 ms | **< 1 µs, 0.1 ms** (in-memory library, checked every 2 s) |
+| 9.8: agent start | 808 ms | **129 ms** (done earlier: installed once, run with node) |
+| 9.9: 5 identical GitHub reads; Postgres query; offscreen live views | 5 requests; 4.2 ms; kept polling | **1 request** (dedup + 5 s cache); **1.2 ms** (pool); **paused off screen**, read at once when back |
+| 9.10: 5000-line diff | wrong (+4999 −4999), 445 ms | **exact (+715 −715), 20 ms** (Myers, windowed review) |
+| 9.11: palette per keystroke; theme flash; memory; startup JS | 11.7 ms; flash; unbounded; 838 kB | **3.0 ms; none; 8 transcripts kept; 776 kB** |
+| Bug: "stay at bottom" shared across chats | shared | **per chat** (`Transcript` keyed by session; a test fails without it) |
+
+- [x] 9.1–9.11 and the bug, each with tests: 201 Rust unit tests plus the e2e, Docker and Postgres suites; 199 frontend tests.
 
 ## 10. Agent adapters: installs, versions and conformance
 
