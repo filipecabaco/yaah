@@ -338,12 +338,20 @@ pub struct Sandbox {
     root: PathBuf,
 }
 
+/// Codex's config in the sandbox (see [`Sandbox::new`]).
+const CODEX_SANDBOX_CONFIG: &str = "[features]\nplugins = false\nremote_plugin = false\n";
+
 impl Sandbox {
     pub fn new() -> Result<Self, String> {
         let root = std::env::temp_dir().join(format!("yaah-conformance-{}", crate::random::token()));
         for sub in ["home/.claude", "home/.codex", "home/.config", "home/.local/share", "home/.local/state", "home/.cache", "work", "tmp"] {
             std::fs::create_dir_all(root.join(sub)).map_err(|e| format!("can't create {}: {e}", root.display()))?;
         }
+        // Codex refreshes its plugin marketplace at startup with a `git ls-remote` of
+        // github.com/openai/plugins that it doesn't wait for. On CI runners that fetch can outlive
+        // the agent and fail the shutdown check, which is about processes the adapter leaks, not
+        // Codex's own plugin sync. Plugins are off here so any other leftover process still shows.
+        std::fs::write(root.join("home/.codex/config.toml"), CODEX_SANDBOX_CONFIG).map_err(|e| format!("can't write Codex's sandbox config: {e}"))?;
         // Agents see the resolved path (macOS's /var is /private/var).
         let root = root.canonicalize().unwrap_or(root);
         Ok(Self { root })
