@@ -4,6 +4,7 @@ import { preloadable, preloadAll } from "@/lib/preload";
 
 const GeneralSettings = preloadable(() => import("@/components/settings/general-settings").then((m) => m.GeneralSettings));
 const AgentsSettings = preloadable(() => import("@/components/settings/agents-settings").then((m) => m.AgentsSettings));
+const ProvidersSettings = preloadable(() => import("@/components/settings/providers-settings").then((m) => m.ProvidersSettings));
 const ChatSettings = preloadable(() => import("@/components/settings/chat-settings").then((m) => m.ChatSettings));
 const McpSettings = preloadable(() => import("@/components/settings/mcp-settings").then((m) => m.McpSettings));
 const SkillsSettings = preloadable(() => import("@/components/settings/skills-settings").then((m) => m.SkillsSettings));
@@ -15,6 +16,7 @@ const KeyboardSettings = preloadable(() => import("@/components/settings/keyboar
 export const TAB_CODE = {
   general: GeneralSettings,
   agents: AgentsSettings,
+  providers: ProvidersSettings,
   chat: ChatSettings,
   mcp: McpSettings,
   skills: SkillsSettings,

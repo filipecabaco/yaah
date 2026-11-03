@@ -3,6 +3,7 @@
 // from `cargo run --example agent_probe -- opencode`; the others are illustrative).
 import type { AgentDraft, AgentPreset, AgentProfile, AgentReport, AuthMethod, ConformanceCheck, ConformanceReport } from "@/lib/api";
 import { home, need, now, type Mock, type Replies } from "./context";
+import { boundProfiles, withProvider } from "./providers";
 
 const claudeAdapter = "npx -y @agentclientprotocol/claude-agent-acp@0.99.1";
 
@@ -216,6 +217,7 @@ function seedPresets(): AgentPreset[] {
     path,
     install: via === "missing" ? `See the ${label} docs for install options.` : "",
     draft: { id: null, label: id === "custom" ? "My agent" : label, preset: id, commandLine, env: {}, configDir: null },
+    providers: ["claude", "goose", "opencode"].includes(id) ? (["bedrock", "openrouter"] as const).slice() : [],
     ...noVersions,
     ...versionsOf(id, commandLine),
   }));
@@ -245,6 +247,7 @@ export function seedAgents(firstRun: boolean) {
         { ...claudeProfile("default", "Claude", null, "dev@example.com"), report: { ...reports.claude, checkedAt: now() - 3600 } },
         claudeProfile("work", "Claude (work)", `${home}/.claude-work`, "dev@work.example"),
         claudeProfile("personal", "Claude (personal)", `${home}/.claude-personal`, null),
+        ...boundProfiles(),
       ];
   return { profiles, defaultAgent: firstRun ? null : ("default" as string | null), presets: seedPresets() };
 }
@@ -273,7 +276,10 @@ export function agentReplies(m: Mock): Replies {
   const { state } = m;
   const changed = () => m.emit("accounts-changed", null);
   return {
-    list_agents: () => ({ profiles: state.profiles, defaultId: state.defaultAgent ?? state.profiles[0]?.id ?? null }),
+    list_agents: () => ({
+      profiles: state.profiles.map((p) => withProvider(state, p)),
+      defaultId: state.defaultAgent ?? state.profiles[0]?.id ?? null,
+    }),
     list_agent_presets: async (): Promise<AgentPreset[]> => {
       await m.wait(400);
       return state.presets;
@@ -347,11 +353,15 @@ export function agentReplies(m: Mock): Replies {
       for (let n = 2; !d.id && state.profiles.some((p) => p.id === id); n++) id = `${base}-${n}`;
       const old = state.profiles.find((p) => p.id === id);
       // A test result stays valid while the command doesn't change.
-      const p = { ...fromDraft(d, id, state.presets), report: old && old.commandLine === d.commandLine.trim() ? old.report : null };
+      const p: AgentProfile = {
+        ...fromDraft(d, id, state.presets),
+        report: old && old.commandLine === d.commandLine.trim() ? old.report : null,
+        ...(old?.provider ? { provider: old.provider } : {}),
+      };
       state.profiles = old ? state.profiles.map((x) => (x.id === id ? p : x)) : [...state.profiles, p];
       state.defaultAgent ??= id;
       await changed();
-      return p;
+      return withProvider(state, p);
     },
     remove_agent: async ({ id }: { id: string }) => {
       state.profiles = state.profiles.filter((p) => p.id !== id);

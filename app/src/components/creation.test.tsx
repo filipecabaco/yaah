@@ -153,6 +153,9 @@ describe("quick chats", () => {
       expect.stringMatching(/^Claudedev@example\.com/),
       expect.stringMatching(/^Claude \(work\)dev@work\.example$/),
       expect.stringMatching(/^Claude \(personal\)not logged in$/),
+      // Profiles on a model provider say where they run, or what to fix.
+      expect.stringMatching(/^OpenCode · OpenRouterOpenRouter · yaah-dev$/),
+      expect.stringMatching(/^Claude · Bedrockfix in Settings → Model providers$/),
     ]);
     await user.click(within(menu).getByRole("menuitem", { name: /^Claude \(work\)/ }));
     await waitFor(() => expect(quick()).toEqual(["work"]));

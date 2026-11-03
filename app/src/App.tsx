@@ -42,8 +42,13 @@ function useOnceOn(on: boolean): boolean {
 
 export default function App() {
   const y = useYaah();
-  const [loginFor, setLoginFor] = useState<AgentProfile | null>(null);
+  const [loginFor, setLoginAgent] = useState<AgentProfile | null>(null);
   const [setup, setSetup] = useState<SettingsTarget | null>(null);
+  // A profile on a model provider has no login of its own: its provider is fixed in Settings → Model providers.
+  const setLoginFor = useCallback(
+    (a: AgentProfile | null) => (a?.provider ? setSetup({ kind: "providers", id: a.provider.providerId }) : setLoginAgent(a)),
+    [],
+  );
   // The New project dialog, open on a mode (null: closed).
   const [creatingProject, setCreatingProject] = useState<NewProjectMode | null>(null);
   const [addingRepos, setAddingRepos] = useState(false);
@@ -65,7 +70,7 @@ export default function App() {
   const clearShowComponent = useCallback(() => setShowComponent(null), []);
   const agents = y.agents;
   // Stable, so finished chat entries (which get it) don't re-render with the app.
-  const loginById = useCallback((id: string) => setLoginFor(agents.find((a) => a.id === id) ?? null), [agents]);
+  const loginById = useCallback((id: string) => setLoginFor(agents.find((a) => a.id === id) ?? null), [agents, setLoginFor]);
   /** Start a chat if its agent (`id`, else the sidebar's) can; otherwise log it in, or add one. */
   const withAgent = useCallback(
     (start: () => Promise<unknown>, id?: string) => {
@@ -74,7 +79,7 @@ export default function App() {
       if (!canChat(a)) return setLoginFor(a);
       start().catch(console.error);
     },
-    [agent, agents],
+    [agent, agents, setLoginFor],
   );
   // Everything below acts on the focused pane: selecting shows it there.
   const panes = y.panes;

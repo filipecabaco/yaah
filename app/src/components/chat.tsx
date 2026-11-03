@@ -75,7 +75,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
           className="shrink-0 rounded-4xl focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           onClick={() => openAgentSwitch(session.sessionId)}
           aria-label={`Agent: ${agent?.label ?? session.accountId}. Switch the agent for the next message`}
-          title={agent ? `${agent.email ?? agent.commandLine}\nClick to switch the agent for the next message` : undefined}
+          title={agent ? `${agent.detail ?? agent.email ?? agent.commandLine}\nClick to switch the agent for the next message` : undefined}
         >
           <Badge variant="outline" className="gap-1 hover:bg-muted">
             {agent?.label ?? session.accountId}

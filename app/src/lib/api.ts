@@ -50,9 +50,16 @@ export type AgentProfile = {
   presetLabel: string;
   /** Claude: the logged-in account. */
   email: string | null;
-  /** false when the agent needs a login; null when yaah can't tell yet. */
+  /**
+   * false when the agent needs a login; null when yaah can't tell yet. A profile bound to a model
+   * provider whose last check passed is true; one whose check failed is false (fix the provider, not a login).
+   */
   loggedIn: boolean | null;
   installed: boolean;
+  /** The model provider it runs on (Settings → Model providers); absent: the agent's own sign-in. */
+  provider?: ProviderBinding | null;
+  /** Where it runs, shown where the email would be ("Bedrock · us-east-1 · work-sso", "OpenRouter · yaah-dev"). */
+  detail?: string | null;
 };
 
 /** What the setup screen edits, saves and tests. */
@@ -90,10 +97,15 @@ export type AgentPreset = {
   blurb: string;
   docs: string;
   install: string;
-  /** "installed": yaah installed its npm package and runs it with Node; "npx": not yet, so the first start goes through npx. */
-  via: "binary" | "installed" | "npx" | "missing" | "custom";
+  /**
+   * "installed": yaah installed its npm package and runs it with Node; "npx": not yet, so the first start goes through npx;
+   * "download": yaah downloads its release archive from the ACP registry on first start (goose, OpenCode).
+   */
+  via: "binary" | "installed" | "npx" | "download" | "missing" | "custom";
   path: string | null;
   draft: AgentDraft;
+  /** The model providers it can run on (`agent_routes.rs`); empty: only its own sign-in. */
+  providers?: ProviderKind[];
   // npm-based presets only (null/false/[] otherwise).
   package: string | null;
   /** The version yaah was tested with. */
@@ -121,8 +133,125 @@ export type AgentPreset = {
   } | null;
 };
 
-/** Chats can start unless the agent is known to need a login. */
+/** Chats can start unless the agent is known to need a login (or its model provider's check failed). */
 export const canChat = (agent: AgentProfile | undefined | null): agent is AgentProfile => !!agent && agent.loggedIn !== false;
+
+/** A bound profile whose provider's last check failed: fixed in Settings → Model providers, not by logging in. */
+export const needsProviderFix = (agent: AgentProfile | undefined | null): boolean => !!agent?.provider && agent.loggedIn === false;
+
+/** What tells an agent apart in a list: its login state, where it runs, its account or its preset. */
+export const agentDetail = (a: AgentProfile): string =>
+  needsProviderFix(a)
+    ? "fix in Settings → Model providers"
+    : a.loggedIn === false
+      ? "not logged in"
+      : (a.detail ?? a.email ?? (a.label === a.presetLabel ? "" : a.presetLabel));
+
+// ── Model providers (Settings → Model providers). Mirrors `src-tauri/src/providers.rs`. ──
+// docs/research/model-providers-contract.md. Secrets (the OpenRouter key) live in the OS keychain and never come back.
+
+export type ProviderKind = "openrouter" | "bedrock";
+export const PROVIDER_KINDS: { kind: ProviderKind; label: string }[] = [
+  { kind: "openrouter", label: "OpenRouter" },
+  { kind: "bedrock", label: "Bedrock" },
+];
+/** Bedrock's cross-region inference-profile prefix. */
+export type BedrockPrefix = "us" | "eu" | "apac" | "global";
+export type BedrockConfig = { profile: string; region: string; prefix?: BedrockPrefix | null };
+/** A provider's last check (`test_provider`; providers.rs `Check`). */
+export type ProviderCheck = {
+  ok: boolean;
+  /**
+   * What happened, in words: `Key "x" works · $14.20 of $20.00 left · free tier`,
+   * `Signed in as <arn> (account 1234…) in us-east-1`, or why it failed.
+   */
+  detail: string;
+  /** Who the credential is: OpenRouter's key label, the AWS account. */
+  identity?: string | null;
+  /** A fix yaah can run: "ssoLogin" runs `aws sso login --profile P` (`provider_sso_login`). */
+  action?: "ssoLogin" | (string & {}) | null;
+};
+export type ProviderInfo = {
+  id: string;
+  kind: ProviderKind;
+  label: string;
+  bedrock?: BedrockConfig | null;
+  /** An OpenRouter key is in the keychain. The key itself never reaches the interface. */
+  hasSecret: boolean;
+  /** Unix seconds of the last check. */
+  checkedAt?: number | null;
+  check?: ProviderCheck | null;
+  /** One line, as bound profiles show it: "Bedrock · us-east-1 · work", "OpenRouter · my key". */
+  summary: string;
+};
+export type ProviderDraft = {
+  /** Absent: a new provider. */
+  id?: string | null;
+  kind: ProviderKind;
+  label: string;
+  bedrock?: BedrockConfig | null;
+  /** The OpenRouter key; omitted keeps the stored one. */
+  secret?: string | null;
+};
+export type ProviderModel = { id: string; label: string; contextLength?: number | null; tools: boolean };
+export type ProviderModels = { models: ProviderModel[]; cachedAt: number };
+/** A profile in ~/.aws/config or ~/.aws/credentials (names only). */
+export type AwsProfile = { name: string; region?: string | null; sso: boolean };
+/** An agent profile's model provider. Translated into the agent's env at spawn, never stored in its env. */
+export type ProviderBinding = { providerId: string; model: string; smallModel?: string | null };
+/** How a background `aws sso login` ended ("provider-sso-login"); `provider` is tested again. */
+export type SsoLoginDone = { id: string; ok: boolean; provider?: ProviderInfo; error?: string };
+
+/** The presets `agent_routes.rs` translates, for a Rust that doesn't send `AgentPreset.providers` yet. */
+const ROUTED: Record<string, ProviderKind[]> = {
+  goose: ["bedrock", "openrouter"],
+  opencode: ["bedrock", "openrouter"],
+  claude: ["bedrock", "openrouter"],
+};
+export const providerKindsOf = (preset: string, presets?: AgentPreset[] | null): ProviderKind[] =>
+  presets?.find((p) => p.id === preset)?.providers ?? ROUTED[preset] ?? [];
+
+/** An expired AWS SSO login, which "Sign in with AWS SSO" fixes. */
+export const ssoExpired = (check: ProviderCheck | null | undefined): boolean =>
+  !!check && !check.ok && (check.action === "ssoLogin" || /aws sso login/.test(check.detail));
+
+export const providersApi = {
+  list: () => invoke<ProviderInfo[]>("list_providers"),
+  save: (draft: ProviderDraft) =>
+    invoke<ProviderInfo>("save_provider", {
+      id: draft.id ?? null,
+      kind: draft.kind,
+      label: draft.label,
+      bedrock: draft.bedrock ?? null,
+      ...(draft.secret ? { secret: draft.secret } : {}),
+    }),
+  /** Refused while a profile is bound to it; the message names those profiles. */
+  remove: (id: string) => invoke<void>("delete_provider", { id }),
+  /** Check it now; the result is kept as its `check`. */
+  test: (id: string) => invoke<ProviderInfo>("test_provider", { id }),
+  /**
+   * `aws sso login --profile P` for a Bedrock provider: the CLI opens the browser and Rust tests
+   * the provider again when it's done. Resolves with the tested provider; rejects with why it didn't finish.
+   */
+  ssoLogin: async (id: string): Promise<ProviderInfo> => {
+    let settle: (done: SsoLoginDone) => void = () => {};
+    const done = new Promise<SsoLoginDone>((resolve) => (settle = resolve));
+    const unlisten = await listen<SsoLoginDone>("provider-sso-login", (e) => e.payload.id === id && settle(e.payload));
+    try {
+      await invoke<void>("provider_sso_login", { id });
+      const result = await done;
+      if (!result.provider) throw new Error(result.error ?? "The AWS SSO sign-in didn't finish.");
+      return result.provider;
+    } finally {
+      unlisten();
+    }
+  },
+  /** The models `preset` can use through the provider, cached for a day (`refresh` skips the cache). */
+  models: (id: string, preset: string, refresh = false) => invoke<ProviderModels>("provider_models", { id, preset, refresh }),
+  awsProfiles: () => invoke<AwsProfile[]>("aws_profiles"),
+  /** Bind an agent profile to a provider and model, or back to the agent's own sign-in (null). */
+  setProfileProvider: (accountId: string, binding: ProviderBinding | null) => invoke<AgentProfile>("set_profile_provider", { accountId, binding }),
+};
 
 /** What a new project may start with besides its name and folders. */
 export type NewProjectOptions = { agentId?: string; statementOfWork?: string };
@@ -653,6 +782,8 @@ export const events = {
   librariesChanged: (cb: () => void) => on("libraries-changed", cb),
   /** A project was started from, refreshed from or unlinked from a tracker item. */
   projectsChanged: (cb: (e: { projectId: string }) => void) => on("projects-changed", cb),
+  /** A model provider was added, changed, tested or removed. */
+  providersChanged: (cb: () => void) => on("providers-changed", cb),
 };
 
 // ── MCP servers (Settings → MCP servers). Mirrors `src-tauri/src/mcp_servers.rs`. ──

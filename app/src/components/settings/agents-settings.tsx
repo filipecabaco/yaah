@@ -28,10 +28,28 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { fromPairs, toPairs, useAction, type Pair } from "@/components/settings/form-state";
+import { ModelPicker } from "@/components/settings/model-picker";
 import { ErrorAlert, Field, NavHeading, NavNote, NavRow, Pairs, PanelHeader, RemoveButton, TwoPane } from "@/components/settings/parts";
-import { api, type AgentDraft, type AgentPreset, type AgentProfile, type AgentReport, type ConformanceReport } from "@/lib/api";
+import {
+  api,
+  events,
+  needsProviderFix,
+  PROVIDER_KINDS,
+  providerKindsOf,
+  providersApi,
+  type AgentDraft,
+  type AgentPreset,
+  type AgentProfile,
+  type AgentReport,
+  type ConformanceReport,
+  type ProviderBinding,
+  type ProviderInfo,
+  type ProviderModel,
+} from "@/lib/api";
+import { openSettings } from "@/lib/app-events";
 import { compactPath, formatAgo } from "@/lib/format";
 import { openExternal } from "@/lib/links";
 
@@ -63,9 +81,14 @@ const SECRET = /key|token|secret|password/i;
 export function AgentsSettings({ agents, defaultId, target, onLogin, onSaved }: AgentsProps) {
   const [presets, setPresets] = useState<AgentPreset[] | null>(null);
   const [picked, setPicked] = useState<Selected | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
 
   useEffect(() => {
     api.listAgentPresets().then(setPresets, console.error);
+    const load = () => providersApi.list().then(setProviders, console.error);
+    void load();
+    const off = events.providersChanged(() => void load());
+    return () => void off.then((f) => f());
   }, []);
 
   // Until something is picked: the requested agent, the first saved one, or the first installed preset.
@@ -93,11 +116,18 @@ export function AgentsSettings({ agents, defaultId, target, onLogin, onSaved }: 
                   onClick={() => setPicked({ kind: "profile", id: a.id })}
                   label={a.label}
                   hint={a.label === a.presetLabel ? undefined : a.presetLabel}
-                  note={[a.id === defaultId && "default", a.loggedIn === false && "needs a login"].filter(Boolean).join(", ") || undefined}
+                  note={
+                    [
+                      a.id === defaultId && "default",
+                      needsProviderFix(a) ? "its model provider's check failed" : a.loggedIn === false && "needs a login",
+                    ]
+                      .filter(Boolean)
+                      .join(", ") || undefined
+                  }
                   end={
                     <>
                       {a.id === defaultId && <Star className="size-3.5 fill-current text-muted-foreground" />}
-                      {a.loggedIn === false && <Badge variant="destructive">log in</Badge>}
+                      {a.loggedIn === false && <Badge variant="destructive">{needsProviderFix(a) ? "fix provider" : "log in"}</Badge>}
                     </>
                   }
                 />
@@ -128,6 +158,7 @@ export function AgentsSettings({ agents, defaultId, target, onLogin, onSaved }: 
           profile={profile}
           preset={preset}
           agents={agents}
+          providers={providers}
           onPresets={setPresets}
           isDefault={!!profile && profile.id === defaultId}
           onLogin={onLogin}
@@ -148,6 +179,7 @@ export function AgentsSettings({ agents, defaultId, target, onLogin, onSaved }: 
 function Via({ via }: { via: AgentPreset["via"] }) {
   if (via === "binary" || via === "installed") return <Badge variant="secondary">installed</Badge>;
   if (via === "npx") return <Badge variant="outline">npx</Badge>;
+  if (via === "download") return <Badge variant="outline">downloads</Badge>;
   if (via === "missing")
     return (
       <Badge variant="outline" className="text-muted-foreground">
@@ -162,6 +194,7 @@ function Editor({
   profile,
   preset,
   agents,
+  providers,
   onPresets,
   isDefault,
   onLogin,
@@ -172,6 +205,7 @@ function Editor({
   profile: AgentProfile | undefined;
   preset: AgentPreset | undefined;
   agents: AgentProfile[];
+  providers: ProviderInfo[] | null;
   onPresets: (presets: AgentPreset[]) => void;
   isDefault: boolean;
   onLogin: (agent: AgentProfile) => void;
@@ -189,8 +223,28 @@ function Editor({
   // yaah picks the version only when the agent runs from its npm package (not a binary on PATH, not a custom command).
   const fromNpm = !!preset?.pinned && /^(\S*\/)?npx (-y|--yes) /.test(initial.commandLine);
 
+  // The model provider it runs on (null: the agent's own sign-in). Stored apart from the draft (`set_profile_provider`).
+  const savedBinding = profile?.provider ?? null;
+  const [binding, setBinding] = useState<ProviderBinding | null>(savedBinding);
+  const bindingDirty = JSON.stringify(binding) !== JSON.stringify(savedBinding);
+  // The name yaah last suggested ("Goose · Bedrock"), replaced while the user hasn't typed their own.
+  const [suggested, setSuggested] = useState<string | null>(null);
+  const pickBinding = (next: ProviderBinding | null) => {
+    setBinding(next);
+    if (profile || (draft.label !== initial.label && draft.label !== suggested)) return;
+    const kind = providers?.find((p) => p.id === next?.providerId)?.kind;
+    const name = next && kind ? `${shortName(preset?.label ?? draft.label)} · ${PROVIDER_KINDS.find((k) => k.kind === kind)?.label}` : initial.label;
+    setSuggested(name);
+    setDraft((d) => ({ ...d, label: name }));
+  };
+
   const test = () => void run("test", async () => setTested(await api.testAgent(current)));
-  const save = () => void run("save", async () => onSaved(await api.saveAgent(current), !profile));
+  const save = () =>
+    void run("save", async () => {
+      let saved = profile && !dirty ? profile : await api.saveAgent(current);
+      if (bindingDirty) saved = await providersApi.setProfileProvider(saved.id, binding);
+      onSaved(saved, !profile);
+    });
 
   return (
     <form
@@ -205,7 +259,7 @@ function Editor({
         extra={
           <>
             {isDefault && <Badge variant="secondary">default</Badge>}
-            {profile?.email && <Badge variant="outline">{profile.email}</Badge>}
+            {(profile?.detail ?? profile?.email) && <Badge variant="outline">{profile.detail ?? profile.email}</Badge>}
             {preset?.docs && (
               <Button type="button" variant="link" size="sm" className="ml-auto h-auto p-0 text-xs" onClick={() => openExternal(preset.docs)}>
                 Docs <ExternalLink />
@@ -237,6 +291,14 @@ function Editor({
             onChange={(e) => setDraft({ ...draft, commandLine: e.target.value })}
           />
         </Field>
+        <ProviderChoice
+          preset={draft.preset}
+          presetLabel={preset?.label ?? profile?.presetLabel ?? "This agent"}
+          kinds={providerKindsOf(draft.preset, preset ? [preset] : null)}
+          providers={providers}
+          binding={binding}
+          onChange={pickBinding}
+        />
         {fromNpm && preset && <Versions preset={preset} agents={agents} onPresets={onPresets} />}
         {draft.preset === "claude" && (
           <Field id="agent-config" label="Claude config folder" hint="Each folder is a separate Claude login. Empty uses Claude Code's default.">
@@ -276,15 +338,33 @@ function Editor({
           {busy === "test" ? <Loader2 className="animate-spin" /> : <Plug />}
           Test connection
         </Button>
-        <Button type="submit" disabled={busy !== null || !draft.label.trim() || !draft.commandLine.trim() || (!!profile && !dirty)}>
+        <Button
+          type="submit"
+          disabled={
+            busy !== null ||
+            !draft.label.trim() ||
+            !draft.commandLine.trim() ||
+            (!!profile && !dirty && !bindingDirty) ||
+            (!!binding && !binding.model)
+          }
+        >
           {busy === "save" ? <Loader2 className="animate-spin" /> : <Check />}
           {profile ? "Save changes" : "Add agent"}
         </Button>
         {profile && (
           <>
-            <Button type="button" variant="outline" onClick={() => onLogin(profile)} disabled={busy !== null}>
-              <LogIn /> Log in…
-            </Button>
+            {/* On a model provider there's no login of its own: a failed check is fixed in Model providers. */}
+            {!profile.provider ? (
+              <Button type="button" variant="outline" onClick={() => onLogin(profile)} disabled={busy !== null}>
+                <LogIn /> Log in…
+              </Button>
+            ) : (
+              needsProviderFix(profile) && (
+                <Button type="button" variant="outline" onClick={() => onLogin(profile)} disabled={busy !== null}>
+                  <AlertTriangle /> Fix in Settings → Model providers
+                </Button>
+              )
+            )}
             {!isDefault && (
               <Button
                 type="button"
@@ -342,8 +422,140 @@ function Found({ preset }: { preset: AgentPreset }) {
         Not installed yet. Its first start runs through npx while yaah installs it once; later starts run it directly with Node.
       </p>
     );
+  if (preset.via === "download") return <p className="text-sm text-muted-foreground">Not on your PATH. {preset.install}</p>;
   if (preset.via === "missing") return <p className="text-sm text-muted-foreground">Not found on your PATH. {preset.install}</p>;
   return null;
+}
+
+/** "Claude Code" → "Claude", "goose" → "Goose": the start of a suggested profile name. */
+const shortName = (presetLabel: string) => {
+  const s = presetLabel.replace(/ Code$/, "");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+};
+
+const OWN = "own";
+
+/**
+ * Where the agent gets its model: its own sign-in, or one of your model providers
+ * (Settings → Model providers) with a model picked from what the provider offers it.
+ */
+function ProviderChoice({
+  preset,
+  presetLabel,
+  kinds,
+  providers,
+  binding,
+  onChange,
+}: {
+  preset: string;
+  presetLabel: string;
+  kinds: string[];
+  providers: ProviderInfo[] | null;
+  binding: ProviderBinding | null;
+  onChange: (b: ProviderBinding | null) => void;
+}) {
+  const [models, setModels] = useState<{ providerId: string; list: ProviderModel[] } | null>(null);
+  const [failed, setFailed] = useState<{ providerId: string; error: unknown } | null>(null);
+  const providerId = binding?.providerId ?? null;
+
+  useEffect(() => {
+    if (!providerId) return;
+    let live = true;
+    providersApi.models(providerId, preset).then(
+      (r) => live && setModels({ providerId, list: r.models }),
+      (error: unknown) => live && setFailed({ providerId, error }),
+    );
+    return () => {
+      live = false;
+    };
+  }, [providerId, preset]);
+
+  if (kinds.length === 0)
+    return (
+      <div className="flex flex-col gap-1.5" role="group" aria-label="Model provider">
+        <span className="text-sm font-medium">Model provider</span>
+        <p className="text-sm text-muted-foreground">{presetLabel} can't use Bedrock or OpenRouter: it runs on its own sign-in.</p>
+      </div>
+    );
+
+  const usable = providers?.filter((p) => kinds.includes(p.kind)) ?? [];
+  const chosen = usable.find((p) => p.id === providerId);
+  const list = models?.providerId === providerId ? models.list : null;
+  const error = failed?.providerId === providerId ? failed.error : null;
+  const kindNames = (k: string) => PROVIDER_KINDS.find((x) => x.kind === k)?.label ?? k;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Field
+        id="agent-provider"
+        label="Model provider"
+        hint="yaah hands the agent its provider and model when it starts; nothing goes into its environment below."
+      >
+        <Select
+          value={providerId ?? OWN}
+          onValueChange={(v) =>
+            onChange(v === OWN ? null : { providerId: v, model: v === providerId ? (binding?.model ?? "") : "", smallModel: null })
+          }
+        >
+          <SelectTrigger id="agent-provider" className="w-full sm:w-80" aria-label="Model provider">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={OWN}>The agent's own sign-in</SelectItem>
+            {usable.map((p) => (
+              <SelectItem key={p.id} value={p.id}>
+                <span>{p.label}</span>
+                <span className="text-xs text-muted-foreground in-data-[slot=select-value]:hidden">{kindNames(p.kind)}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Field>
+      {providers && usable.length === 0 && (
+        <p className="-mt-2 text-xs text-muted-foreground">
+          Run it on your own Bedrock or OpenRouter account:{" "}
+          <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={() => openSettings("providers")}>
+            add one in Settings → Model providers
+          </Button>
+          .
+        </p>
+      )}
+      {chosen && chosen.check && !chosen.check.ok && (
+        <p className="-mt-2 flex items-center gap-1.5 text-xs text-destructive" role="status">
+          <AlertTriangle className="size-3.5" /> Its last check failed.{" "}
+          <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={() => openSettings("providers")}>
+            Fix in Settings → Model providers
+          </Button>
+        </p>
+      )}
+      {binding && (
+        <>
+          {error != null && <ErrorAlert title="Couldn't list the provider's models" error={error} />}
+          <ModelPicker
+            id="agent-model"
+            label="Model"
+            hint={preset === "claude" ? "Claude Code runs Anthropic models only." : "Models that can call tools, which agents need."}
+            models={list}
+            loading={!list && error == null}
+            value={binding.model || null}
+            onChange={(model) => onChange({ ...binding, model: model ?? "" })}
+          />
+          {preset === "claude" && (
+            <ModelPicker
+              id="agent-small-model"
+              label="Small, fast model (optional)"
+              hint="For Claude Code's quick background work."
+              models={list}
+              loading={!list && error == null}
+              value={binding.smallModel ?? null}
+              none="None: Claude Code's default"
+              onChange={(smallModel) => onChange({ ...binding, smallModel })}
+            />
+          )}
+        </>
+      )}
+    </div>
+  );
 }
 
 const STATUS: Record<NonNullable<AgentPreset["activeStatus"]>, string> = {

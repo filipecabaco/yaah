@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { api, PROJECT_STATUSES, canChat, type AgentProfile, type Project, type ProjectStatus, type SessionInfo } from "@/lib/api";
+import { api, PROJECT_STATUSES, canChat, needsProviderFix, type AgentProfile, type Project, type ProjectStatus, type SessionInfo } from "@/lib/api";
 import { baseName, compactPath } from "@/lib/format";
 import { ErrorText } from "@/components/error-text";
 import { ProjectLinkPill, ProjectLinkSection } from "@/components/project-link";
@@ -235,9 +235,9 @@ export function ProjectView({
           </div>
           {account?.loggedIn === false && (
             <p className="text-sm text-muted-foreground">
-              “{account.label}” isn't logged in.{" "}
+              {needsProviderFix(account) ? `“${account.label}”'s model provider failed its check. ` : `“${account.label}” isn't logged in. `}
               <Button variant="link" className="h-auto p-0" onClick={() => onLogin(account)}>
-                Log in
+                {needsProviderFix(account) ? "Fix in Settings → Model providers" : "Log in"}
               </Button>{" "}
               or pick another agent for the project above.
             </p>

@@ -11,11 +11,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import type { AgentProfile } from "@/lib/api";
+import { agentDetail, type AgentProfile } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-/** What tells an agent apart in a list: its login state, account or preset. */
-const agentDetail = (a: AgentProfile) => (a.loggedIn === false ? "not logged in" : (a.email ?? (a.label === a.presetLabel ? "" : a.presetLabel)));
 
 export function AgentSelect({
   agents,
