@@ -176,7 +176,7 @@ Tier A results (pinned and latest):
 Sources: [CI in Docker](docs/experiments/2026-11-03-ci-docker/), `ci/`, `app/mise.toml`.
 
 - [x] **Local CI:** `mise run ci` (rust, web, conformance), the same commands in an Ubuntu 24.04 container (`mise run ci:docker`). Green; 65 s warm, about 3 min cold.
-- [x] **GitHub CI is on**: move `.github/workflows/ci.yml` into `.github/workflows/`. Its actions are verified on node24: checkout v7, mise-action v5 (mise pinned), rust-cache v2, upload-artifact v7. It includes a nightly conformance run against the latest adapters.
+- [x] **GitHub CI is on** (`.github/workflows/ci.yml`), green on the first push. Its actions are verified on node24: checkout v7, mise-action v5 (mise pinned), rust-cache v2, upload-artifact v7. It includes a nightly conformance run against the latest adapters.
 - [ ] **Docker/Postgres tests are skipped** in the container (no daemon or database there). Add service containers in GitHub CI?
 - [ ] **The container is arm64 on this Mac,** while GitHub's `ubuntu-latest` is x86_64; x86_64 has only been checked on GitHub's side in theory.
 - [x] **Installer built and tested locally** ([results](docs/experiments/2026-11-03-installer/)):
