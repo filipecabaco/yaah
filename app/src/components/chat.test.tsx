@@ -23,7 +23,8 @@ describe("a quick chat", () => {
 
     // The rest of the recording: the reply, as Markdown, and the turn ends.
     expect(await within(log).findByText(/it contains exactly/)).toBeInTheDocument();
-    expect(within(log).getByText("hi from yaah").tagName).toBe("CODE");
+    // The reply streams in: wait for its inline code (the diff line above also says "hi from yaah", as a span).
+    expect(await within(log).findByText("hi from yaah", { selector: "code" })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Send" })).toBeInTheDocument();
   });
 
