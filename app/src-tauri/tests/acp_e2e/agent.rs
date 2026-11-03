@@ -84,6 +84,12 @@ fn options() -> Value {
     ])
 }
 
+/// An MCP tool call as claude-agent-acp asks about it: its name `mcp__<server>__<tool>`, also the title.
+fn claude_mcp(id: &str, tool: &str) -> Value {
+    let name = format!("mcp__linear__{tool}");
+    json!({ "toolCallId": id, "title": name, "kind": "other", "name": name, "rawInput": { "id": "ENG-1" } })
+}
+
 /// The option a permission response chose, or "cancelled".
 fn chosen(response: &Value) -> String {
     let outcome = &response["result"]["outcome"];
@@ -255,11 +261,6 @@ impl Agent {
                 let outcomes: Vec<String> = ids.iter().map(|i| chosen(&got[&i.to_string()])).collect();
                 chunk(&sid, &format!("outcomes: {}", outcomes.join(",")));
             }
-            "ask-again" => {
-                let ask = self.permission(&sid, &json!({ "toolCallId": "ls2", "title": "Run ls" }));
-                let got = self.wait(std::slice::from_ref(&ask), false);
-                chunk(&sid, &format!("outcomes: {}", chosen(&got[&ask.to_string()])));
-            }
             "unnamed" => {
                 let mut outcomes = vec![];
                 for _ in 0..2 {
@@ -268,6 +269,7 @@ impl Agent {
                 }
                 chunk(&sid, &format!("outcomes: {}", outcomes.join(",")));
             }
+            word @ ("ask-again" | "kinds" | "mcp" | "mcp-again") => self.permission_shapes(&sid, word, &text),
             "notices" => {
                 let notice = json!({ "sessionUpdate": "notice", "severity": "warning", "title": "MCP server \"github\" failed to start", "description": "exit 1" });
                 update(&sid, &notice);
@@ -314,6 +316,112 @@ impl Agent {
             }
         }
         Self::respond(id, &json!({ "stopReason": stop }));
+    }
+
+    /// Permission requests in the shapes yaah judges itself (`session/permissions.rs`):
+    /// - `kinds <folder>`: one of each kind about files in and around the chat's folder, all at once;
+    /// - `mcp`: MCP tools in Claude Code's and Codex's shapes, and lookalikes;
+    /// - `mcp-again`: one more MCP request, as a later turn would ask;
+    /// - `ask-again`: `Run ls` once more (what "don't ask again" remembers).
+    fn permission_shapes(&mut self, sid: &str, word: &str, text: &str) {
+        match word {
+            "kinds" => self.kinds(sid, text.split_whitespace().nth(1).unwrap_or_default()),
+            "mcp" => self.mcp(sid),
+            "ask-again" => {
+                let ask = self.permission(sid, &json!({ "toolCallId": "ls2", "title": "Run ls" }));
+                let got = self.wait(std::slice::from_ref(&ask), false);
+                chunk(sid, &format!("outcomes: {}", chosen(&got[&ask.to_string()])));
+            }
+            _ => {
+                let ask = self.permission(sid, &claude_mcp("c3", "get_issue"));
+                let got = self.wait(std::slice::from_ref(&ask), false);
+                chunk(sid, &format!("mcp-again: {}", chosen(&got[&ask.to_string()])));
+            }
+        }
+    }
+
+    /// Ask all of `asks` (label, tool call, options) at once, as agents do, and report what each got:
+    /// `<what>: label=option,…`.
+    fn ask_all(&mut self, sid: &str, what: &str, asks: &[(&str, Value, Value)]) {
+        let ids: Vec<Value> = asks
+            .iter()
+            .map(|(_, tool_call, options)| {
+                self.ask("session/request_permission", &json!({ "sessionId": sid, "toolCall": tool_call, "options": options }))
+            })
+            .collect();
+        let got = self.wait(&ids, false);
+        let outcomes: Vec<String> = asks.iter().zip(&ids).map(|((label, ..), id)| format!("{label}={}", chosen(&got[&id.to_string()]))).collect();
+        chunk(sid, &format!("{what}: {}", outcomes.join(",")));
+    }
+
+    /// One request of each kind, about `<dir>/inside.txt`, `<dir>-other/x.txt` (a sibling whose
+    /// name starts the same) and `<dir>/link` (a symlink the test points at that sibling).
+    fn kinds(&mut self, sid: &str, dir: &str) {
+        let base = std::path::Path::new(dir).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let inside = format!("{dir}/inside.txt");
+        let at = |p: &str| json!([{ "path": p }]);
+        let read = |id: &str, path: &str| json!({ "toolCallId": id, "title": format!("Read {path}"), "kind": "read", "locations": at(path) });
+        let no_once = json!([{ "optionId": "always", "name": "Always allow", "kind": "allow_always" }, { "optionId": "no", "name": "Reject", "kind": "reject_once" }]);
+        let asks = vec![
+            (
+                "read-in",
+                json!({ "toolCallId": "k1", "title": "Read inside.txt", "kind": "read", "locations": at(&inside), "rawInput": { "file_path": inside } }),
+                options(),
+            ),
+            (
+                "search-in",
+                json!({ "toolCallId": "k2", "title": "Find *.txt", "kind": "search", "locations": at(dir), "rawInput": { "path": dir, "pattern": "*.txt" } }),
+                options(),
+            ),
+            ("read-out", read("k3", &format!("{dir}-other/x.txt")), options()),
+            ("read-dotdot", read("k4", &format!("{dir}/../{base}-other/x.txt")), options()),
+            ("read-link", read("k5", &format!("{dir}/link/x.txt")), options()),
+            ("read-nopath", json!({ "toolCallId": "k6", "title": "Read something", "kind": "read" }), options()),
+            (
+                "glob-out",
+                json!({ "toolCallId": "k7", "title": "Find ../**", "kind": "search", "locations": at(dir), "rawInput": { "path": dir, "pattern": "../**/*.txt" } }),
+                options(),
+            ),
+            (
+                "execute",
+                json!({ "toolCallId": "k8", "title": "cat inside.txt >> out.txt", "kind": "execute", "rawInput": { "command": "cat inside.txt >> out.txt" } }),
+                options(),
+            ),
+            ("edit", json!({ "toolCallId": "k9", "title": "Edit inside.txt", "kind": "edit", "locations": at(&inside) }), options()),
+            (
+                "fetch",
+                json!({ "toolCallId": "k10", "title": "Fetch example.com", "kind": "fetch", "rawInput": { "url": "https://example.com" } }),
+                options(),
+            ),
+            ("read-no-once", read("k11", &inside), no_once),
+        ];
+        self.ask_all(sid, "kinds", &asks);
+    }
+
+    /// MCP tool requests in each agent's shape, for server `linear`, and two that only look like it.
+    fn mcp(&mut self, sid: &str) {
+        // Codex: the tool call first, titled `mcp.<server>.<tool>`; the approval names only its id.
+        update(
+            sid,
+            &json!({ "sessionUpdate": "tool_call", "toolCallId": "x1", "title": "mcp.linear.update_issue", "kind": "execute", "status": "pending",
+                     "rawInput": { "server": "linear", "tool": "update_issue", "arguments": { "id": "ENG-1" } } }),
+        );
+        let asks = vec![
+            ("claude", claude_mcp("c1", "get_issue"), options()),
+            ("claude-2", claude_mcp("c2", "list_comments"), options()),
+            ("codex", json!({ "toolCallId": "x1", "kind": "execute", "status": "pending" }), options()),
+            (
+                "lookalike",
+                json!({ "toolCallId": "l1", "title": "mcp__linear2__get_issue", "kind": "other", "name": "mcp__linear2__get_issue" }),
+                options(),
+            ),
+            (
+                "bash",
+                json!({ "toolCallId": "b1", "title": "mcp__linear__get_issue", "kind": "execute", "name": "Bash", "rawInput": { "command": "mcp__linear__get_issue" } }),
+                options(),
+            ),
+        ];
+        self.ask_all(sid, "mcp", &asks);
     }
 
     /// Everything a broken agent might print, then a request yaah doesn't serve and one for a chat it doesn't know.

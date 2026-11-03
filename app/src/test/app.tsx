@@ -6,10 +6,16 @@ import { expect } from "vitest";
 import App from "@/App";
 import { installBrowserMock, type BrowserMockOptions } from "@/dev/browser-mock";
 import { setCardRules } from "@/lib/tool-cards";
+import { setGroupToolCalls } from "@/lib/tool-groups";
 
-export function renderApp(options: BrowserMockOptions = {}) {
+/**
+ * `groupToolCalls`: draw runs of tool calls as one row, as the app does by default. Off unless a
+ * test asks, so tests about single cards see every card (tool-groups.test.tsx turns it on).
+ */
+export function renderApp({ groupToolCalls = false, ...options }: BrowserMockOptions & { groupToolCalls?: boolean } = {}) {
   const mock = installBrowserMock({ delay: 0, ...options });
   setCardRules({});
+  setGroupToolCalls(groupToolCalls);
   const user = userEvent.setup();
   const view = render(<App />);
   return { user, mock, ...view };

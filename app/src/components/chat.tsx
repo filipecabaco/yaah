@@ -9,9 +9,11 @@ import {
   FolderPlus,
   Repeat,
   RotateCw,
+  ShieldCheck,
   SquareSlash,
   Square,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark } from "@/components/brand/mark";
@@ -30,7 +32,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type AgentProfile, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
+import { api, type AgentProfile, type Entry, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
 import { openInTerminalApp } from "@/lib/terminal-api";
 import { onOpenAddRepos, openAddRepos, openAgentSwitch } from "@/lib/app-events";
 import { baseName, compactPath, elapsedText, plural, startingText } from "@/lib/format";
@@ -39,6 +41,9 @@ import type { Starting } from "@/hooks/use-yaah";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { ChatContext, isFocusedPane, onDraft } from "@/components/chat-context";
 import { TranscriptEntry } from "@/components/entries";
+import { ToolGroup } from "@/components/tool-group";
+import { foldedPermissions } from "@/lib/permissions";
+import { isRunning, transcriptRows, useGroupToolCalls } from "@/lib/tool-groups";
 import { FolderMenu } from "@/components/menus";
 import { useTranscript, useTranscripts } from "@/hooks/use-transcript";
 
@@ -58,10 +63,13 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
   const agent = agents.find((a) => a.id === session.accountId);
   const roots = [session.cwd, ...session.additionalDirs.filter((d) => d !== project?.contextDir)];
   // Only what deep components need; a stable object, so they don't re-render on every entry.
+  const inProject = project != null;
   const chat = useMemo(
-    () => ({ sessionId: session.sessionId, cwd: session.cwd, busy: session.running, pane }),
-    [session.sessionId, session.cwd, session.running, pane],
+    () => ({ sessionId: session.sessionId, cwd: session.cwd, busy: session.running, pane, inProject }),
+    [session.sessionId, session.cwd, session.running, pane, inProject],
   );
+  // MCP servers whose tools run without asking here: the project's, or a quick chat's own.
+  const trusted = project ? (project.trustedMcpServers ?? []) : (session.trustedMcpServers ?? []);
   // "Add repositories…" (⌘K, `/repos`, the folder menu) opens the picker in the pane it came from.
   const [addingRepos, setAddingRepos] = useState(false);
   useEffect(
@@ -114,6 +122,14 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
           </span>
         </FolderMenu>
         <ChatFolders roots={roots} pending={!!session.dirsChanged} inProject={!!project} onAdd={() => openAddRepos(session.sessionId, pane)} />
+        {trusted.length > 0 && (
+          <TrustedServers
+            servers={trusted}
+            inProject={!!project}
+            onRemove={(server) => (project ? api.untrustProjectMcpServer(project.id, server) : api.untrustChatMcpServer(session.sessionId, server))}
+            onManage={project ? () => onOpenProject(project.id) : undefined}
+          />
+        )}
       </header>
       {addingRepos && (
         <Suspense>
@@ -133,6 +149,55 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
       </ChatContext.Provider>
       <Composer key={session.sessionId} session={session} agentLabel={agent?.label} pane={pane} />
     </div>
+  );
+}
+
+/** The MCP servers trusted here (the project's, or a quick chat's), each with a way to stop trusting it. */
+function TrustedServers({
+  servers,
+  inProject,
+  onRemove,
+  onManage,
+}: {
+  servers: string[];
+  inProject: boolean;
+  onRemove: (server: string) => Promise<unknown>;
+  onManage?: () => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          aria-label={`${plural(servers.length, "trusted MCP server")} in this ${inProject ? "project" : "chat"}`}
+        >
+          <ShieldCheck className="size-3.5" aria-hidden />
+          <span className="tabular-nums">{servers.length}</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-w-96 min-w-64">
+        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+          All tools of these MCP servers run without asking in this {inProject ? "project" : "chat"}, including ones that change things
+        </DropdownMenuLabel>
+        {servers.map((s) => (
+          <DropdownMenuItem
+            key={s}
+            onSelect={() => void onRemove(s).catch((e: unknown) => console.error("could not stop trusting", s, e))}
+            aria-label={`Stop trusting ${s}`}
+          >
+            <span className="min-w-0 flex-1 truncate font-mono text-xs">{s}</span>
+            <X className="text-muted-foreground" aria-hidden />
+          </DropdownMenuItem>
+        ))}
+        {onManage && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={onManage}>Project settings…</DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -181,6 +246,8 @@ function ChatFolders({ roots, pending, inProject, onAdd }: { roots: string[]; pe
   );
 }
 
+type ToolEntry = Extract<Entry, { type: "tool" }>;
+
 /** Entries drawn when a chat opens; earlier ones are added as the user scrolls up to them. */
 export const SHOWN = 200;
 /** Entries at the end that are always laid out (the rest skip layout while off screen). */
@@ -204,6 +271,26 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
     for (const e of entries) if (e?.type === "tool" && e.rawInput != null) m.set(e.toolCallId, e.rawInput);
     return m;
   }, [entries]);
+  // Allowed requests fold into their tool card as a chip; runs of tool calls into one row.
+  const folded = useMemo(() => foldedPermissions(entries), [entries]);
+  const grouping = useGroupToolCalls();
+  const rows = useMemo(() => transcriptRows(entries, first, folded, grouping), [entries, first, folded, grouping]);
+  const inTurnAt = (i: number) => running && i > turnStart;
+  const entryAt = (i: number) => {
+    const entry = entries[i];
+    if (!entry) return null;
+    return (
+      <TranscriptEntry
+        entry={entry}
+        index={i}
+        inTurn={inTurnAt(i)}
+        live={inTurnAt(i) && i === entries.length - 1}
+        toolInput={entry.type === "permission" && entry.toolCallId ? toolInputs.get(entry.toolCallId) : undefined}
+        permission={entry.type === "tool" ? folded.get(entry.toolCallId) : undefined}
+        onLogin={onLogin}
+      />
+    );
+  };
 
   // Follow the stream only while the user is already at the bottom.
   useEffect(() => {
@@ -271,22 +358,27 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
         ) : (
           entries.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Send a message to start.</p>
         )}
-        {entries.slice(first).map((entry, k) => {
-          const i = first + k;
+        {rows.map((row) => {
           // Rust addresses entries by index and only ever appends or replaces in place, so the index is a stable key.
-          if (!entry) return null;
-          const inTurn = running && i > turnStart;
-          const toolInput = entry.type === "permission" && entry.toolCallId ? toolInputs.get(entry.toolCallId) : undefined;
+          const i = row.kind === "entry" ? row.index : row.indices[0];
+          const last = row.kind === "entry" ? row.index : row.indices[row.indices.length - 1];
+          // Off-screen entries skip layout and paint (content-visibility), so long chats open fast.
+          const offScreen = last < entries.length - LIVE_TAIL ? "transcript-entry" : undefined;
+          if (row.kind === "entry")
+            return (
+              <div key={i} className={offScreen}>
+                {entryAt(i)}
+              </div>
+            );
+          const tools = row.indices.map((j) => entries[j]).filter((e): e is ToolEntry => e?.type === "tool");
           return (
-            // Off-screen entries skip layout and paint (content-visibility), so long chats open fast.
-            <div key={i} className={i < entries.length - LIVE_TAIL ? "transcript-entry" : undefined}>
-              <TranscriptEntry
-                entry={entry}
-                index={i}
-                inTurn={inTurn}
-                live={inTurn && i === entries.length - 1}
-                toolInput={toolInput}
-                onLogin={onLogin}
+            <div key={`g${i}`} className={offScreen}>
+              <ToolGroup
+                id={`${sessionId}:${i}`}
+                tools={tools}
+                running={row.indices.map((j, k) => isRunning(tools[k], inTurnAt(j)))}
+                autoAllowed={tools.filter((t) => ["readOnly", "trustedServer"].includes(folded.get(t.toolCallId)?.auto?.reason ?? "")).length}
+                card={(k) => entryAt(row.indices[k])}
               />
             </div>
           );

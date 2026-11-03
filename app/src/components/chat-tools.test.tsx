@@ -85,7 +85,7 @@ describe("tool cards", () => {
       .getByText(/Discounts now apply before tax/)
       .closest("[data-align]");
     expect(prose).toHaveAttribute("data-align", "start");
-    expect(prose?.className).toContain("max-w-[80ch]");
+    expect(prose?.className).toContain("max-w-[min(140ch,100%)]");
     expect(prose?.className).not.toContain("ml-auto");
   });
 });

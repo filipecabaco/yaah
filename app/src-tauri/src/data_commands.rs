@@ -212,6 +212,12 @@ pub fn set_tool_card(key: String, mode: Option<String>) -> Result<(), String> {
     settings::set_tool_card(&key, mode.as_deref())
 }
 
+/// Settings → Chat, "Group consecutive tool calls".
+#[tauri::command]
+pub fn set_group_tool_calls(enabled: bool) -> Result<(), String> {
+    settings::set_group_tool_calls(enabled)
+}
+
 #[tauri::command]
 pub fn set_theme(light: String, dark: String) -> Result<(), String> {
     settings::set_theme(&light, &dark)

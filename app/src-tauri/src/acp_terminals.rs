@@ -145,8 +145,16 @@ fn strings(v: &Value, what: &str) -> Result<Vec<String>, String> {
 /// `dir`, resolved, if it is one of `roots` or inside one (compared as real paths).
 pub fn within(roots: &[PathBuf], dir: &str) -> Result<PathBuf, String> {
     let real = terminals::checked_dir(dir)?;
-    let inside = roots.iter().filter_map(|r| Path::new(r).canonicalize().ok()).any(|r| real.starts_with(&r));
-    if inside { Ok(real) } else { Err(format!("{dir} isn't one of this chat's folders")) }
+    inside(roots, &real).ok_or_else(|| format!("{dir} isn't one of this chat's folders"))
+}
+
+/// `path` (a file or a folder), resolved, if it is one of `roots` or inside one. Both
+/// are compared as real paths, component by component: a symlink or `..` out of a
+/// folder lands outside it, and `/repo-other` isn't inside `/repo`. A path that
+/// doesn't exist can't be resolved, so it isn't inside anything.
+pub fn inside(roots: &[PathBuf], path: &Path) -> Option<PathBuf> {
+    let real = path.canonicalize().ok()?;
+    roots.iter().filter_map(|r| r.canonicalize().ok()).any(|r| real.starts_with(&r)).then_some(real)
 }
 
 #[cfg(test)]

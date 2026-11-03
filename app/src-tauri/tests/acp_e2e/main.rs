@@ -41,6 +41,8 @@ fn main() {
         ("project_chats_send_the_brief_and_folders_once", project_chats_send_the_brief_and_folders_once),
         ("dont_ask_again_answers_waiting_and_later_requests_in_that_chat_only", dont_ask_again_answers_waiting_and_later_requests_in_that_chat_only),
         ("unnamed_requests_are_never_remembered", unnamed_requests_are_never_remembered),
+        ("reads_inside_the_chats_folders_are_allowed_and_everything_else_asks", reads_inside_the_chats_folders_are_allowed_and_everything_else_asks),
+        ("trusted_mcp_servers_and_always_survive_a_restart", trusted_mcp_servers_and_always_survive_a_restart),
         ("notices_and_the_mcp_status_fallback_make_one_card", notices_and_the_mcp_status_fallback_make_one_card),
         ("cancel_answers_waiting_permissions_and_tells_the_agent", cancel_answers_waiting_permissions_and_tells_the_agent),
         ("a_crashed_agent_is_restarted_and_the_chat_reattached", a_crashed_agent_is_restarted_and_the_chat_reattached),
@@ -413,6 +415,7 @@ fn project_chats_send_the_brief_and_folders_once() {
         context_dir: ctx.to_string_lossy().into(),
         link: None,
         agent_id: None,
+        trusted_mcp_servers: vec![],
     };
     let info = tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Project(&project), ACCOUNT)).unwrap();
     assert_eq!((info.project_id.as_deref(), info.cwd.as_str()), (Some("p1"), repo.to_str().unwrap()));
@@ -446,9 +449,10 @@ fn dont_ask_again_answers_waiting_and_later_requests_in_that_chat_only() {
     assert!(f.hub.respond_permission(&sid, waiting[1], Some("no")).unwrap_err().contains("already answered"));
     f.hub.respond_permission(&sid, waiting[3], Some("no")).unwrap();
 
-    // The agent asks about ls again later (by tool call id only): answered without asking.
+    // The agent asks about ls again later (by tool call id only): answered without asking. Only the
+    // user's own click sent `always`; yaah's replays use the one-off option.
     let t = f.finished(&sid);
-    assert_eq!(last_agent_text(&t), "outcomes: always,always,always,no,always", "what the agent got, in order");
+    assert_eq!(last_agent_text(&t), "outcomes: always,once,once,no,once", "what the agent got, in order");
     let marks = chosen(&t);
     assert_eq!(marks.len(), 5);
     assert_eq!(marks[0].as_deref(), Some("Always allow"));
@@ -462,8 +466,125 @@ fn dont_ask_again_answers_waiting_and_later_requests_in_that_chat_only() {
     let w = f.until(&other, "the other chat asks", |t| waiting_permissions(t).first().copied());
     f.hub.respond_permission(&other, w, Some("once")).unwrap();
     let t = f.turn(&sid, "ask-again");
-    assert_eq!(last_agent_text(&t), "outcomes: always", "…while the first chat still remembers");
+    assert_eq!(last_agent_text(&t), "outcomes: once", "…while the first chat still remembers");
     assert_eq!(last_agent_text(&f.hub.transcript(&other).unwrap()), "outcomes: once");
+}
+
+/// The title of each permission request still waiting for the user.
+fn waiting_titles(t: &Transcript) -> Vec<String> {
+    waiting_permissions(t)
+        .into_iter()
+        .filter_map(|i| if let Entry::Permission { title, .. } = &t.entries[i] { Some(title.clone()) } else { None })
+        .collect()
+}
+
+fn reads_inside_the_chats_folders_are_allowed_and_everything_else_asks() {
+    let f = Fixture::new(&[]);
+    let dir = f.dir.to_string_lossy().into_owned();
+    let other = PathBuf::from(format!("{dir}-other"));
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("x.txt"), "not the chat's").unwrap();
+    std::fs::write(f.dir.join("inside.txt"), "the chat's").unwrap();
+    std::os::unix::fs::symlink(&other, f.dir.join("link")).unwrap();
+    let sid = f.chat();
+
+    f.prompt(&sid, &format!("kinds {dir}"));
+    let waiting = f.until(&sid, "nine requests wait", |t| Some(waiting_permissions(t)).filter(|w| w.len() == 9));
+    let t = f.hub.transcript(&sid).unwrap();
+    let mut asked = waiting_titles(&t);
+    asked.sort();
+    let mut expected: Vec<String> = [
+        format!("Read {dir}-other/x.txt"),
+        format!("Read {dir}/../{}-other/x.txt", f.dir.file_name().unwrap().to_string_lossy()),
+        format!("Read {dir}/link/x.txt"),
+        "Read something".into(),
+        "Find ../**".into(),
+        "cat inside.txt >> out.txt".into(),
+        "Edit inside.txt".into(),
+        "Fetch example.com".into(),
+        format!("Read {dir}/inside.txt"),
+    ]
+    .into();
+    expected.sort();
+    assert_eq!(asked, expected, "what reached the user");
+    let auto: Vec<(String, String)> = t
+        .entries
+        .iter()
+        .filter_map(|e| match e {
+            Entry::Permission { title, auto: Some(a), answer, .. } => {
+                Some((title.clone(), format!("{}/{}", a.reason, answer.as_deref().unwrap_or("?"))))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(auto, [("Read inside.txt".to_owned(), "readOnly/allow_once".to_owned()), ("Find *.txt".to_owned(), "readOnly/allow_once".to_owned())]);
+    for w in waiting {
+        f.hub.respond_permission(&sid, w, Some("no")).unwrap();
+    }
+    let t = f.finished(&sid);
+    assert_eq!(
+        last_agent_text(&t),
+        "kinds: read-in=once,search-in=once,read-out=no,read-dotdot=no,read-link=no,read-nopath=no,glob-out=no,execute=no,edit=no,fetch=no,read-no-once=no",
+        "the option id each request got back: `once`, never `always`"
+    );
+
+    // With the setting off, every one asks.
+    f.hub.set_trust_read_only(false);
+    f.prompt(&sid, &format!("kinds {dir}"));
+    let waiting = f.until(&sid, "all eleven wait", |t| Some(waiting_permissions(t)).filter(|w| w.len() == 11));
+    for w in waiting {
+        f.hub.respond_permission(&sid, w, Some("no")).unwrap();
+    }
+    assert!(last_agent_text(&f.finished(&sid)).starts_with("kinds: read-in=no,search-in=no,"));
+    assert_eq!(sent_always(&f), 0, "yaah never picked `always`");
+    std::fs::remove_dir_all(other).unwrap();
+}
+
+fn trusted_mcp_servers_and_always_survive_a_restart() {
+    let mut f = Fixture::new(&[]);
+    let sid = f.chat();
+    f.prompt(&sid, "mcp");
+    let waiting = f.until(&sid, "five MCP requests wait", |t| Some(waiting_permissions(t)).filter(|w| w.len() == 5));
+    let t = f.hub.transcript(&sid).unwrap();
+    let servers: Vec<Option<String>> = waiting
+        .iter()
+        .map(|&i| if let Entry::Permission { mcp_server, .. } = &t.entries[i] { mcp_server.as_ref().map(|m| m.id.clone()) } else { None })
+        .collect();
+    let named = |v: &str| Some(v.to_owned());
+    assert_eq!(
+        servers,
+        [named("linear"), named("linear"), named("linear"), named("linear2"), None],
+        "Claude's and Codex's shapes; a Bash command is no server's"
+    );
+
+    // "Always allow tools from linear in this chat" on the first: Claude's and Codex's linear requests are answered.
+    f.hub.trust_server(&sid, waiting[0], |_, _| unreachable!("a quick chat keeps it itself")).unwrap();
+    let left = f.until(&sid, "the lookalikes still wait", |t| Some(waiting_permissions(t)).filter(|w| w.len() == 2));
+    for w in left {
+        f.hub.respond_permission(&sid, w, Some("no")).unwrap();
+    }
+    assert_eq!(last_agent_text(&f.finished(&sid)), "mcp: claude=once,claude-2=once,codex=once,lookalike=no,bash=no");
+    assert_eq!(f.hub.session_info(&sid).unwrap().trusted_mcp_servers, ["linear"]);
+
+    // "Don't ask again" on a command.
+    f.prompt(&sid, "ask-again");
+    let ls = f.until(&sid, "ls asks", |t| waiting_permissions(t).first().copied());
+    f.hub.respond_permission(&sid, ls, Some("always")).unwrap();
+    assert_eq!(last_agent_text(&f.finished(&sid)), "outcomes: always");
+
+    // After a restart the chat still trusts linear and remembers ls, and answers with the one-off option.
+    f.restart();
+    let t = f.turn(&sid, "mcp-again");
+    assert_eq!(last_agent_text(&t), "mcp-again: once");
+    assert!(t.entries.iter().any(|e| matches!(e, Entry::Permission { auto: Some(a), .. } if a.why == "trusted server: linear")));
+    let t = f.turn(&sid, "ask-again");
+    assert_eq!(last_agent_text(&t), "outcomes: once", "never `always` on the user's behalf");
+    assert_eq!(sent_always(&f), 1, "only the user's own click sent `always`");
+}
+
+/// How many permission answers yaah sent with the scripted agent's `always` option.
+fn sent_always(f: &Fixture) -> usize {
+    f.received().iter().filter(|(_, m)| m.get("method").is_none() && m["result"]["outcome"]["optionId"] == "always").count()
 }
 
 fn unnamed_requests_are_never_remembered() {
@@ -1005,6 +1126,7 @@ fn other_chats_in_the_project_pick_up_added_repos_on_their_next_prompt() {
         context_dir: r[1].clone(),
         link: None,
         agent_id: None,
+        trusted_mcp_servers: vec![],
     };
     let start = |p: &Project| tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Project(p), ACCOUNT)).unwrap().session_id;
     let (one, two) = (start(&project), start(&project));
@@ -1348,6 +1470,7 @@ fn resume_files_a_session_under_the_project_that_holds_its_folder() {
         context_dir: ctx.to_string_lossy().into(),
         link: None,
         agent_id: None,
+        trusted_mcp_servers: vec![],
     };
     let info = f.import(&personal, "cli-2", &dirs[1], None, std::slice::from_ref(&project)).unwrap();
     assert_eq!((info.project_id.as_deref(), info.cwd.as_str()), (Some("p1"), dirs[1].as_str()), "it keeps the session's folder");

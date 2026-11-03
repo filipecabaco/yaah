@@ -199,6 +199,7 @@ fn merges_dedupes_and_tags_the_queue() {
             synced_at: 0,
         }),
         agent_id: None,
+        trusted_mcp_servers: vec![],
     };
     tag(&mut items, &[linked]);
     let tagged: Vec<(&str, Option<&str>)> = items.iter().map(|i| (i.service.as_str(), i.project_id.as_deref())).collect();

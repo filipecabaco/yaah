@@ -55,6 +55,12 @@ pub fn run() {
         .manage(Logins::default())
         .setup(|app| {
             let hub = Arc::new(Hub::with_store(commands::emitter(app.handle().clone()), accounts::home().join(".yaah/sessions")));
+            // What permission requests yaah may answer itself (session/permissions.rs): the setting, and each project's trusted MCP servers.
+            hub.set_trust_read_only(settings::trust_read_only());
+            match app.state::<Projects>().list() {
+                Ok(projects) => hub.load_project_trust(&projects),
+                Err(e) => eprintln!("[projects] trusted MCP servers not read: {e}"),
+            }
             // Both read in the background; their first use waits for them (ui_library.rs, sources.rs).
             let library = Library::local();
             let sources = Arc::new(sources::Sources::new());
@@ -109,6 +115,7 @@ pub fn run() {
             data_commands::set_appearance,
             data_commands::set_theme,
             data_commands::set_tool_card,
+            data_commands::set_group_tool_calls,
             agent_guide::agent_guide,
             agent_guide::set_teach_agents,
             data_commands::read_custom_theme,
@@ -182,6 +189,10 @@ pub fn run() {
             commands::search_files,
             commands::cancel_turn,
             commands::respond_permission,
+            commands::trust_mcp_server,
+            commands::untrust_project_mcp_server,
+            commands::untrust_chat_mcp_server,
+            commands::set_trust_read_only,
             terminal_commands::terminal_open,
             terminal_commands::terminal_attach,
             terminal_commands::terminal_detach,

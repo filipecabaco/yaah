@@ -22,7 +22,9 @@ import {
   Quote,
   Repeat,
   Search,
+  ShieldCheck,
   ShieldQuestion,
+  ShieldX,
   SquareTerminal,
   Trash2,
   Wrench,
@@ -40,6 +42,7 @@ import { ToolTerminal } from "@/components/terminal/tool-terminal";
 import { FolderRequestEntry, UiEntry } from "@/components/ui-entry";
 import { api, type Entry, type ToolContent } from "@/lib/api";
 import { openSettings } from "@/lib/app-events";
+import { permissionAnswer, permissionChip, type PermissionEntry } from "@/lib/permissions";
 import { baseName, compactPath, elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
 import { readToolText, toolTextLayout } from "@/lib/tool-output";
@@ -57,11 +60,13 @@ type EntryProps = {
   live: boolean;
   /** For a permission: the input of the tool call it asks about, if known. */
   toolInput?: unknown;
+  /** For a tool call: the allowed permission request folded into its card, shown as a chip. */
+  permission?: PermissionEntry;
   onLogin: (accountId: string) => void;
 };
 
 /** One transcript entry. Re-renders only when its own entry or position in the turn changes. */
-export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inTurn, live, toolInput, onLogin }: EntryProps) {
+export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inTurn, live, toolInput, permission, onLogin }: EntryProps) {
   switch (entry.type) {
     case "user":
       return <UserMessage entry={entry} />;
@@ -70,7 +75,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inT
     case "thought":
       return <Thought entry={entry} live={live} />;
     case "tool":
-      return <ToolCall entry={entry} turnActive={inTurn} />;
+      return <ToolCall entry={entry} turnActive={inTurn} permission={permission} />;
     case "plan":
       return <Plan entry={entry} />;
     case "permission":
@@ -121,8 +126,17 @@ function UserMessage({ entry }: { entry: Of<"user"> }) {
   );
 }
 
+/**
+ * The agent's text in a soft bubble on the left, mirroring the user's on the right: a muted fill
+ * with no border, so it reads as conversation rather than another card. Each text run is its own
+ * entry, so a reply split around tool calls gets one bubble per run. It fills the column up to a
+ * readable measure (a fixed width, so it doesn't widen as text streams in, and charts or diagrams
+ * inside have a width to fill); `.agent-reply` in index.css loosens the prose spacing inside.
+ */
 function AgentMessage({ entry }: { entry: Of<"agent"> }) {
   const pane = useChat()?.pane;
+  // A run that hasn't streamed any text yet would be an empty bubble.
+  if (!entry.text.trim()) return null;
   return (
     <CopyMenu
       // The selected part of this message, if any; else all of it.
@@ -131,7 +145,10 @@ function AgentMessage({ entry }: { entry: Of<"agent"> }) {
       ]}
       actions={[{ label: "Copy text", text: () => entry.text }]}
     >
-      <div data-align="start" className="max-w-[80ch] text-sm">
+      <div
+        data-align="start"
+        className="agent-reply w-fit max-w-[min(140ch,100%)] rounded-lg bg-muted/50 px-4 py-3 text-sm leading-relaxed [overflow-wrap:anywhere]"
+      >
         <Markdown>{entry.text}</Markdown>
       </div>
     </CopyMenu>
@@ -220,7 +237,7 @@ const RULE_ACTIONS: { mode: CardMode; label: (like: string) => string; icon: typ
 ];
 
 /** A tool call. How its card opens is a rule per kind of tool (Settings → Chat): `auto` opens it while its turn runs. */
-function ToolCall({ entry, turnActive }: { entry: Of<"tool">; turnActive: boolean }) {
+function ToolCall({ entry, turnActive, permission }: { entry: Of<"tool">; turnActive: boolean; permission?: PermissionEntry }) {
   const key = cardKey(entry.title, entry.kind);
   const mode = cardMode(useCardRules(), key);
   const wanted = mode === "expanded" || (mode === "auto" && turnActive);
@@ -262,6 +279,7 @@ function ToolCall({ entry, turnActive }: { entry: Of<"tool">; turnActive: boolea
             <span className={cn("truncate", !label && "font-mono")}>{label ? label.text : entry.title}</span>
             {label?.detail && <span className="truncate text-muted-foreground">{label.detail}</span>}
           </span>
+          {permission && <AllowedChip entry={permission} />}
           {label?.busy ? (
             <>
               <Elapsed id={entry.toolCallId} />
@@ -383,6 +401,25 @@ const OPTION_VARIANT: Record<string, "default" | "secondary" | "outline" | "dest
   reject_always: "destructive",
 };
 
+/**
+ * "Allowed", "Always allowed" or "Auto-allowed" on a tool card whose permission request was
+ * allowed: the request itself isn't drawn then. The reason (auto, always) shows beside it when
+ * there is room, and in the tooltip.
+ */
+function AllowedChip({ entry }: { entry: PermissionEntry }) {
+  const chip = permissionChip(entry);
+  if (!chip) return null;
+  const said = chip.reason ? `${chip.label}: ${chip.reason}` : chip.label;
+  return (
+    <span className="flex min-w-0 shrink items-center gap-1 text-[11px] text-muted-foreground" title={`${said}\n${entry.chosen ?? ""}`.trim()}>
+      <ShieldCheck className="size-3 shrink-0" aria-hidden />
+      <span className="shrink-0">{chip.label}</span>
+      {chip.reason && <span className="hidden truncate @2xl:inline">· {chip.reason}</span>}
+      <span className="sr-only">{chip.reason ? `: ${chip.reason}` : ""}</span>
+    </span>
+  );
+}
+
 function Permission({ entry, index, toolInput }: { entry: Of<"permission">; index: number; toolInput?: unknown }) {
   const chat = useChat();
   const [sending, setSending] = useState<string | null>(null);
@@ -397,14 +434,23 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
       .catch(setError)
       .finally(() => setSending(null));
   };
+  const trust = () => {
+    if (!chat) return;
+    setSending("trust");
+    setError(null);
+    api
+      .trustMcpServer(chat.sessionId, index)
+      .catch(setError)
+      .finally(() => setSending(null));
+  };
   const request = () => (toolInput == null ? entry.title : `${entry.title}\n\n${JSON.stringify(toolInput, null, 2)}`);
+  if (!pending) return <AnsweredPermission entry={entry} request={request} />;
+  // Trusting answers with the one-off option, so it is offered only when there is one.
+  const server = entry.options.some((o) => o.kind === "allow_once") ? entry.mcpServer : undefined;
+  const scope = chat?.inProject ? "project" : "chat";
   return (
     <CopyMenu actions={[{ label: "Copy request", text: request }]}>
-      <div
-        role="group"
-        aria-label="Permission requested"
-        className={cn("rounded-lg border px-3 py-2", pending && "border-amber-500/60 bg-amber-500/5")}
-      >
+      <div role="group" aria-label="Permission requested" className="rounded-lg border border-amber-500/60 bg-amber-500/5 px-3 py-2">
         <div className="flex items-start gap-2 text-sm">
           <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600" />
           <div className="min-w-0 flex-1">
@@ -414,25 +460,62 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
             </div>
           </div>
         </div>
-        {pending ? (
-          <div className="mt-2 flex flex-wrap gap-2">
-            {entry.options.map((o) => (
-              <Button
-                key={o.optionId}
-                size="sm"
-                variant={OPTION_VARIANT[o.kind] ?? "outline"}
-                disabled={!chat || sending != null}
-                onClick={() => respond(o.optionId)}
-              >
-                {sending === o.optionId && <Loader2 className="animate-spin" />}
-                {o.name}
-              </Button>
-            ))}
+        <div className="mt-2 flex flex-wrap gap-2">
+          {entry.options.map((o) => (
+            <Button
+              key={o.optionId}
+              size="sm"
+              variant={OPTION_VARIANT[o.kind] ?? "outline"}
+              disabled={!chat || sending != null}
+              onClick={() => respond(o.optionId)}
+            >
+              {sending === o.optionId && <Loader2 className="animate-spin" />}
+              {o.name}
+            </Button>
+          ))}
+        </div>
+        {server && (
+          <div className="mt-2 flex flex-col items-start gap-0.5 border-t pt-2">
+            <Button size="sm" variant="ghost" className="-ml-2" disabled={!chat || sending != null} onClick={trust}>
+              {sending === "trust" ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+              Always allow tools from {server.label} in this {scope}
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Covers every {server.label} tool, including ones that change things: yaah can&apos;t tell which only read.
+            </p>
           </div>
-        ) : (
-          <div className="mt-1 text-xs text-muted-foreground">→ {entry.chosen}</div>
         )}
         <ErrorText error={error} className="mt-1" />
+      </div>
+    </CopyMenu>
+  );
+}
+
+/**
+ * An answered request drawn on its own, one line: a denial or a cancel (which stay in sight), or an
+ * allowed one whose tool call isn't in the transcript. An allowed one with a tool card isn't drawn:
+ * the card carries its chip.
+ */
+function AnsweredPermission({ entry, request }: { entry: Of<"permission">; request: () => string }) {
+  const answer = permissionAnswer(entry);
+  const chip = permissionChip(entry);
+  const what = chip ? chip.label : answer === "cancelled" ? "Cancelled" : answer?.startsWith("reject") ? "Denied" : "Answered";
+  const Icon = chip ? ShieldCheck : ShieldX;
+  return (
+    <CopyMenu actions={[{ label: "Copy request", text: request }]}>
+      <div
+        role="group"
+        aria-label={`Permission ${what.toLowerCase()}`}
+        className="flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs text-muted-foreground"
+      >
+        <Icon className="size-3.5 shrink-0" aria-hidden />
+        <span className="shrink-0 font-medium text-foreground">{what}</span>
+        <span className="min-w-0 truncate font-mono" title={entry.title}>
+          {entry.title}
+        </span>
+        <span className="ml-auto shrink-0 truncate" title={entry.chosen ?? undefined}>
+          {chip?.reason ?? `→ ${entry.chosen}`}
+        </span>
       </div>
     </CopyMenu>
   );

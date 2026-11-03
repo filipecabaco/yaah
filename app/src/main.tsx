@@ -6,6 +6,7 @@ import "./index.css";
 import { followTheme, setAppearance, setThemes, settingsUnavailable } from "./lib/theme";
 import { api } from "./lib/api";
 import { setCardRules } from "./lib/tool-cards";
+import { setGroupToolCalls } from "./lib/tool-groups";
 import { installDragFallback, overlayTitlebar } from "./hooks/use-titlebar";
 
 // The OS light/dark setting, unless Settings → General picked one.
@@ -34,6 +35,7 @@ async function start() {
       setThemes(s.theme);
       setAppearance(s.appearance);
       setCardRules(s.toolCards.rules);
+      setGroupToolCalls(s.groupToolCalls ?? true);
     },
     (e: unknown) => {
       console.error("could not read settings", e);

@@ -62,6 +62,30 @@ pub fn set_teach_agents(on: bool) -> Result<(), String> {
     set("teachAgents", json!(on))
 }
 
+// ── permissions ──────────────────────────────────────────────────────────────
+/// Whether yaah allows an agent's reads and searches inside the chat's folders
+/// without asking (`session/permissions.rs`). On unless turned off.
+fn trust_read_only_in(s: &Map<String, Value>) -> bool {
+    s.get("trustReadOnly").and_then(Value::as_bool).unwrap_or(true)
+}
+
+pub fn trust_read_only() -> bool {
+    trust_read_only_in(&load())
+}
+
+pub fn set_trust_read_only(on: bool) -> Result<(), String> {
+    set("trustReadOnly", json!(on))
+}
+
+/// Whether a chat draws two or more tool calls in a row as one row that opens on a click. On unless turned off.
+fn group_tool_calls_in(s: &Map<String, Value>) -> bool {
+    s.get("groupToolCalls").and_then(Value::as_bool).unwrap_or(true)
+}
+
+pub fn set_group_tool_calls(on: bool) -> Result<(), String> {
+    set("groupToolCalls", json!(on))
+}
+
 /// The versions the user holds npm-based agents at ("Hold at vX"): preset id →
 /// exact version. A preset without one runs what `agent_versions::choose` picks.
 fn agent_versions_in(s: &Map<String, Value>) -> BTreeMap<String, String> {
@@ -396,6 +420,8 @@ pub fn general() -> Value {
         "theme": theme_in(&s),
         "toolCards": tool_cards_in(&s),
         "teachAgents": teach_agents_in(&s),
+        "trustReadOnly": trust_read_only_in(&s),
+        "groupToolCalls": group_tool_calls_in(&s),
         "terminalApp": terminal_app_in(&s),
         "terminalApps": crate::terminal_apps::detected(),
         "customThemes": custom_themes(),
@@ -430,6 +456,18 @@ mod tests {
         assert!(valid_theme_id("yaah") && valid_theme_id("shiki:github-dark") && valid_theme_id("custom:night-owl.json"));
         assert!(!valid_theme_id("shiki:../x") && !valid_theme_id("custom:../x.json") && !valid_theme_id("vscode:x"));
         assert!(set_theme("shiki:../x", "yaah").is_err());
+    }
+
+    #[test]
+    fn trusting_reads_is_on_unless_turned_off() {
+        assert!(trust_read_only_in(&Map::new()), "on by default");
+        let off: Map<String, Value> = serde_json::from_value(json!({ "trustReadOnly": false })).unwrap();
+        assert!(!trust_read_only_in(&off));
+        let odd: Map<String, Value> = serde_json::from_value(json!({ "trustReadOnly": "no" })).unwrap();
+        assert!(trust_read_only_in(&odd), "a value that isn't a bool is the default");
+        assert!(group_tool_calls_in(&Map::new()), "grouping tool calls is on by default");
+        let off: Map<String, Value> = serde_json::from_value(json!({ "groupToolCalls": false })).unwrap();
+        assert!(!group_tool_calls_in(&off));
     }
 
     #[test]

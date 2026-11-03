@@ -13,6 +13,7 @@ import { Page, Section } from "@/components/settings/parts";
 import { api, type AgentGuide } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { cardKeyLabel, saveCardRule, setCardRules, useCardRules, type CardMode } from "@/lib/tool-cards";
+import { setGroupToolCalls } from "@/lib/tool-groups";
 
 const MODES: { id: CardMode; label: string }[] = [
   { id: "auto", label: "Open while it runs" },
@@ -122,6 +123,64 @@ function AgentGuideSection() {
   );
 }
 
+/** What yaah answers itself when an agent asks permission (session/permissions.rs), and how tool runs are drawn. */
+function PermissionsSection() {
+  const [trustReads, setTrustReads] = useState<boolean | null>(null);
+  const [grouping, setGrouping] = useState<boolean | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  useEffect(() => {
+    api.generalSettings().then((s) => {
+      setTrustReads(s.trustReadOnly ?? true);
+      setGrouping(s.groupToolCalls ?? true);
+    }, setError);
+  }, []);
+  const save = async (set: (on: boolean) => void, write: (on: boolean) => Promise<void>, on: boolean) => {
+    setError(null);
+    set(on);
+    try {
+      await write(on);
+    } catch (e) {
+      set(!on);
+      setError(e);
+    }
+  };
+  return (
+    <Section
+      title="Permissions"
+      about="When an agent asks to read or search files, yaah answers Allow once if every path is inside the chat's folders. Edits, commands, web fetches and anything outside the folders still ask. MCP servers you trust are listed in each project, and in a quick chat's header."
+    >
+      <div className="flex items-center gap-3">
+        <Switch
+          id="trust-read-only"
+          checked={trustReads ?? true}
+          disabled={trustReads == null}
+          onCheckedChange={(on) => void save(setTrustReads, api.setTrustReadOnly, on)}
+        />
+        <Label htmlFor="trust-read-only">Allow reads in the chat&apos;s folders without asking</Label>
+      </div>
+      <div className="flex items-center gap-3">
+        <Switch
+          id="group-tool-calls"
+          checked={grouping ?? true}
+          disabled={grouping == null}
+          onCheckedChange={(on) =>
+            void save(
+              (v) => {
+                setGrouping(v);
+                setGroupToolCalls(v);
+              },
+              api.setGroupToolCalls,
+              on,
+            )
+          }
+        />
+        <Label htmlFor="group-tool-calls">Group consecutive tool calls</Label>
+      </div>
+      <ErrorText error={error} className="text-sm" />
+    </Section>
+  );
+}
+
 export function ChatSettings() {
   const rules = useCardRules();
   const [defaults, setDefaults] = useState<Record<string, string>>({});
@@ -154,6 +213,7 @@ export function ChatSettings() {
   return (
     <Page>
       <AgentGuideSection />
+      <PermissionsSection />
       <Section
         title="Tool calls"
         about="How each kind of tool call's card opens in a chat. Anything not listed opens while it runs and closes when the turn ends. Right-click a card to set its kind from there."

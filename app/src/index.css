@@ -174,7 +174,7 @@
 /* A chat's column: the transcript and the composer share it, so their edges line up. It scales
    with its pane (each split pane is its own `@container`): gutters from 1rem in a narrow pane to
    3rem in a wide one, and up to 2048px wide, so a full-screen window isn't mostly margin. Inside,
-   user messages hug its right edge, agent prose keeps its left edge, and cards take its width. */
+   user bubbles hug its right edge, agent bubbles its left edge, and cards take its width. */
 .chat-column {
   --chat-gutter: clamp(1rem, 3cqi, 3rem);
   width: 100%;
@@ -250,6 +250,29 @@
 .markdown td {
   border: 1px solid var(--border);
   padding: 0.25rem 0.5rem;
+}
+/* The agent's reply bubble (entries.tsx) is long-form reading: more room between paragraphs and
+   list items, and code blocks set on the page colour so they stand out from the muted fill. */
+.agent-reply .markdown > * + * {
+  margin-top: 0.85em;
+}
+.agent-reply .markdown > :is(h1, h2, h3) + * {
+  margin-top: 0.4em;
+}
+.agent-reply .markdown > * + :is(h1, h2, h3) {
+  margin-top: 1.25em;
+}
+.agent-reply .markdown li + li {
+  margin-top: 0.3em;
+}
+.agent-reply .markdown pre {
+  background: var(--background);
+  border: 1px solid var(--border);
+}
+/* A short reply fits its text; one holding wide blocks (code, tables, diagrams, rendered MDX parts)
+   takes the full measure, so those have room and the bubble doesn't jump as they arrive. */
+.agent-reply:has(pre, table, svg, details, [role="alert"], [role="tablist"]) {
+  width: 100%;
 }
 
 /* ── The yaah mark assembling (home screen) ─────────────────────────────── */

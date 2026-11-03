@@ -4,7 +4,14 @@
 import { createContext, useContext } from "react";
 
 /** `pane`: the split pane the chat is shown in (the same chat can be open in two). */
-type ChatInfo = { sessionId: string; cwd: string; busy: boolean; pane?: string };
+type ChatInfo = {
+  sessionId: string;
+  cwd: string;
+  busy: boolean;
+  pane?: string;
+  /** The chat belongs to a project: what the user trusts there (an MCP server) is the project's. */
+  inProject?: boolean;
+};
 
 export const ChatContext = createContext<ChatInfo | null>(null);
 export const useChat = () => useContext(ChatContext);

@@ -44,6 +44,11 @@ pub struct Project {
     /// one picked in the sidebar. Registries from before this field load as none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    /// MCP servers whose tools the project's chats may run without asking (all
+    /// their tools, ones that change things too), by the agent's name for the
+    /// server: `claude_ai_Linear`, `linear`. Set from a permission card.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_mcp_servers: Vec<String>,
 }
 
 /// What a new project may start with besides its name and folders.
@@ -201,6 +206,7 @@ impl Projects {
             context_dir: ctx.to_string_lossy().into_owned(),
             link: None,
             agent_id: new.agent_id.filter(|a| !a.trim().is_empty()),
+            trusted_mcp_servers: vec![],
         };
         self.mutate(|r| {
             r.projects.push(project.clone());
@@ -224,6 +230,24 @@ impl Projects {
     pub fn set_agent(&self, id: &str, agent_id: Option<String>) -> Result<Project, String> {
         self.update(id, |p| {
             p.agent_id = agent_id.filter(|a| !a.trim().is_empty());
+            Ok(())
+        })
+    }
+
+    /// Trust an MCP server in the project: its chats run all of its tools without asking.
+    pub fn trust_server(&self, id: &str, server: &str) -> Result<Project, String> {
+        self.update(id, |p| {
+            if !p.trusted_mcp_servers.iter().any(|s| s == server) {
+                p.trusted_mcp_servers.push(server.to_owned());
+            }
+            Ok(())
+        })
+    }
+
+    /// Stop trusting an MCP server: its tools ask again.
+    pub fn untrust_server(&self, id: &str, server: &str) -> Result<Project, String> {
+        self.update(id, |p| {
+            p.trusted_mcp_servers.retain(|s| s != server);
             Ok(())
         })
     }
@@ -399,6 +423,17 @@ pub(crate) mod tests {
         assert_eq!(p.dirs.len(), 1);
         assert!(store.add_dirs(&p.id, &[b.to_string_lossy().into(), "/definitely/not/here".into()]).is_err(), "all or nothing");
         assert_eq!(store.get(&p.id).unwrap().dirs.len(), 1);
+
+        // Trusted MCP servers are kept in the registry, once each, and can be removed.
+        assert_eq!(p.trusted_mcp_servers, Vec::<String>::new());
+        store.trust_server(&p.id, "claude_ai_Linear").unwrap();
+        store.trust_server(&p.id, "claude_ai_Linear").unwrap();
+        store.trust_server(&p.id, "linear").unwrap();
+        assert_eq!(Projects::default().get(&p.id).unwrap().trusted_mcp_servers, ["claude_ai_Linear", "linear"], "persisted");
+        assert_eq!(store.untrust_server(&p.id, "claude_ai_Linear").unwrap().trusted_mcp_servers, ["linear"]);
+        assert!(store.trust_server("nope", "linear").is_err());
+        let raw: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(registry_path()).unwrap()).unwrap();
+        assert_eq!(raw["projects"][0]["trustedMcpServers"], serde_json::json!(["linear"]));
 
         store.delete(&p.id).unwrap();
         assert!(store.list().unwrap().is_empty());
