@@ -38,3 +38,20 @@ export function onOpenAgentSwitch(cb: (sessionId: string) => void): () => void {
   window.addEventListener(SWITCH_AGENT, listener);
   return () => window.removeEventListener(SWITCH_AGENT, listener);
 }
+
+const ADD_REPOS = "yaah:add-repos";
+type AddRepos = { sessionId: string; pane?: string };
+
+/**
+ * Ask a chat to open its repo picker, to add repos as it goes (⌘K, `/repos`, the header's
+ * folder menu). `pane`: the split pane it was asked from, when the chat is open in several.
+ */
+export function openAddRepos(sessionId: string, pane?: string) {
+  window.dispatchEvent(new CustomEvent<AddRepos>(ADD_REPOS, { detail: { sessionId, pane } }));
+}
+
+export function onOpenAddRepos(cb: (request: AddRepos) => void): () => void {
+  const listener = (e: Event) => cb((e as CustomEvent<AddRepos>).detail);
+  window.addEventListener(ADD_REPOS, listener);
+  return () => window.removeEventListener(ADD_REPOS, listener);
+}

@@ -20,14 +20,31 @@ type Props = {
   /** Folders already in the project; shown as added and not selectable. */
   exclude: string[];
   onAdd: (dirs: string[]) => Promise<void> | void;
+  /**
+   * "Add to this chat" mode (⌘K, `/repos`, a chat's folder menu): the chat's project name when it
+   * has one (the repos join the project, so all its chats get them), `null` for a quick chat
+   * (they are the chat's own). Unset: picking repos for a project or a new chat.
+   */
+  addTo?: { project: string | null };
 };
+
+/** What the picker's heading and note say in "add to this chat" mode. */
+function addToCopy(addTo: { project: string | null }) {
+  return addTo.project
+    ? {
+        title: `Add repositories to ${addTo.project}`,
+        note: "They join the project: this chat and every other chat in it work in them from the next message.",
+      }
+    : { title: "Add repositories to this chat", note: "Only this chat gets them, from the next message." };
+}
 
 /**
  * Pick repos to add to a project: every git repo under the workspace
  * folder(s), fuzzy-searchable, multi-select. Also clones by `owner/repo` or
  * URL, and falls back to a native folder picker for anything else.
  */
-export function RepoPicker({ open: isOpen, onClose, exclude, onAdd }: Props) {
+export function RepoPicker({ open: isOpen, onClose, exclude, onAdd, addTo }: Props) {
+  const copy = addTo ? addToCopy(addTo) : null;
   const [roots, setRoots] = useState<string[]>([]);
   const [repos, setRepos] = useState<Repo[] | null>(null);
   const [query, setQuery] = useState("");
@@ -209,7 +226,8 @@ export function RepoPicker({ open: isOpen, onClose, exclude, onAdd }: Props) {
         }}
       >
         <DialogHeader>
-          <DialogTitle>Add repos</DialogTitle>
+          <DialogTitle>{copy?.title ?? "Add repos"}</DialogTitle>
+          {copy && <p className="text-sm text-muted-foreground">{copy.note}</p>}
           <DialogDescription className="flex flex-wrap items-center gap-1">
             Repos in
             {roots.map((r) => (
@@ -356,6 +374,7 @@ export function RepoPicker({ open: isOpen, onClose, exclude, onAdd }: Props) {
             </Button>
             <Button onClick={() => void add()} disabled={selected.length === 0}>
               {selected.length > 1 ? `Add ${selected.length} repos` : "Add repo"}
+              {addTo && (addTo.project ? " to project" : " to chat")}
             </Button>
           </div>
         </DialogFooter>

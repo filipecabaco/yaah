@@ -227,19 +227,20 @@ pub fn set_project_status(projects: State<'_, Projects>, id: String, status: Sta
     })
 }
 
+/// Adding or removing a project's folder reaches every chat in it from that chat's next prompt (`Hub::sync_project`).
 #[tauri::command]
-pub fn add_project_dir(projects: State<'_, Projects>, id: String, dir: String) -> Result<Project, String> {
-    projects.add_dir(&id, &dir)
+pub fn add_project_dir(hub: State<'_, Arc<Hub>>, projects: State<'_, Projects>, id: String, dir: String) -> Result<Project, String> {
+    projects.add_dir(&id, &dir).inspect(|p| hub.sync_project(p))
 }
 
 #[tauri::command]
-pub fn add_project_dirs(projects: State<'_, Projects>, id: String, dirs: Vec<String>) -> Result<Project, String> {
-    projects.add_dirs(&id, &dirs)
+pub fn add_project_dirs(hub: State<'_, Arc<Hub>>, projects: State<'_, Projects>, id: String, dirs: Vec<String>) -> Result<Project, String> {
+    projects.add_dirs(&id, &dirs).inspect(|p| hub.sync_project(p))
 }
 
 #[tauri::command]
-pub fn remove_project_dir(projects: State<'_, Projects>, id: String, dir: String) -> Result<Project, String> {
-    projects.remove_dir(&id, &dir)
+pub fn remove_project_dir(hub: State<'_, Arc<Hub>>, projects: State<'_, Projects>, id: String, dir: String) -> Result<Project, String> {
+    projects.remove_dir(&id, &dir).inspect(|p| hub.sync_project(p))
 }
 
 #[tauri::command]
@@ -296,14 +297,28 @@ pub async fn new_session(
     projects: State<'_, Projects>,
     project_id: String,
     account_id: String,
+    extra_dirs: Option<Vec<String>>,
 ) -> Result<SessionInfo, String> {
-    let project = projects.get(&project_id)?;
+    // Repos chosen up front join the project, so its other chats get them too.
+    let project = match extra_dirs.filter(|d| !d.is_empty()) {
+        Some(dirs) => projects.add_dirs(&project_id, &dirs).inspect(|p| hub.sync_project(p))?,
+        None => projects.get(&project_id)?,
+    };
     hub.new_session(ChatTarget::Project(&project), &account_id).await
 }
 
-/// A chat outside any project: in `dir`, or a fresh scratch folder for quick work.
+/// A chat outside any project: in `dir`, or a fresh scratch folder for quick work,
+/// with `extra_dirs` (repos chosen up front) as its own.
 #[tauri::command]
-pub async fn new_quick_chat(hub: State<'_, Arc<Hub>>, account_id: String, dir: Option<String>) -> Result<SessionInfo, String> {
+pub async fn new_quick_chat(
+    hub: State<'_, Arc<Hub>>,
+    account_id: String,
+    dir: Option<String>,
+    extra_dirs: Option<Vec<String>>,
+) -> Result<SessionInfo, String> {
+    let extra_dirs = extra_dirs.unwrap_or_default();
+    // Checked before a scratch folder is made for nothing.
+    session::new_dirs("/", &[], &extra_dirs)?;
     let dir = match dir {
         Some(d) if std::path::Path::new(&d).is_dir() => d,
         Some(d) => return Err(format!("{d} is not a folder")),
@@ -313,7 +328,23 @@ pub async fn new_quick_chat(hub: State<'_, Arc<Hub>>, account_id: String, dir: O
             d.to_string_lossy().into_owned()
         }
     };
-    hub.new_session(ChatTarget::Folder(dir), &account_id).await
+    hub.new_session_with(ChatTarget::Folder(dir), &account_id, &extra_dirs).await
+}
+
+/// Add repos to a chat as it goes: to its project when it has one (every chat there
+/// gets them), else to the chat alone. The agent gets them from the next prompt on.
+#[tauri::command]
+pub async fn add_chat_dirs(
+    hub: State<'_, Arc<Hub>>,
+    projects: State<'_, Projects>,
+    session_id: String,
+    paths: Vec<String>,
+) -> Result<SessionInfo, String> {
+    hub.add_dirs(&session_id, &paths, |project_id, dirs| match projects.get(project_id) {
+        Ok(_) => projects.add_dirs(project_id, dirs).map(Some),
+        // Filed under a project that's gone: the chat keeps them itself.
+        Err(_) => Ok(None),
+    })
 }
 
 /// File a chat under a project (or none, with `project_id` null).
@@ -330,7 +361,8 @@ pub fn set_chat_project(
     hub.set_session_project(&session_id, project_id)
 }
 
-/// A quick chat that grew: make a project from its folder and file the chat under it.
+/// A quick chat that grew: make a project from its folder (and the repos added to
+/// it) and file the chat under it.
 #[tauri::command]
 pub fn promote_chat(
     hub: State<'_, Arc<Hub>>,
@@ -338,8 +370,9 @@ pub fn promote_chat(
     session_id: String,
     name: String,
 ) -> Result<(Project, SessionInfo), String> {
-    let cwd = hub.session_info(&session_id)?.cwd;
-    let project = projects.create(&name, &[cwd])?;
+    let info = hub.session_info(&session_id)?;
+    let dirs: Vec<String> = std::iter::once(info.cwd).chain(info.extra_dirs.into_iter().filter(|d| std::path::Path::new(d).is_dir())).collect();
+    let project = projects.create(&name, &dirs)?;
     let info = hub.set_session_project(&session_id, Some(project.id.clone()))?;
     Ok((project, info))
 }

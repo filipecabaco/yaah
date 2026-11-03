@@ -45,6 +45,16 @@ fn main() {
         ("switching_agents_hands_the_chat_to_a_fresh_session", switching_agents_hands_the_chat_to_a_fresh_session),
         ("a_switched_chat_reloads_on_its_new_agent_after_a_restart", a_switched_chat_reloads_on_its_new_agent_after_a_restart),
         ("switching_agents_is_refused_mid_turn", switching_agents_is_refused_mid_turn),
+        (
+            "added_repos_reach_the_agent_through_session_load_before_the_next_prompt",
+            added_repos_reach_the_agent_through_session_load_before_the_next_prompt,
+        ),
+        (
+            "an_agent_without_load_gets_added_repos_in_a_fresh_session_and_a_hand_off",
+            an_agent_without_load_gets_added_repos_in_a_fresh_session_and_a_hand_off,
+        ),
+        ("other_chats_in_the_project_pick_up_added_repos_on_their_next_prompt", other_chats_in_the_project_pick_up_added_repos_on_their_next_prompt),
+        ("quick_chats_start_with_repos_chosen_up_front", quick_chats_start_with_repos_chosen_up_front),
     ];
     let filters: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let chosen: Vec<_> = tests.iter().filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))).collect();
@@ -820,4 +830,172 @@ fn switching_agents_is_refused_mid_turn() {
     let t = f.finished(&sid);
     assert!(!t.entries.iter().any(|e| matches!(e, Entry::Switch { .. })));
     f.hub.switch_agent(&sid, &second).expect("once the turn is over");
+}
+
+// ── Adding repos to a chat as it goes (docs/research/chat-repos-contract.md) ──
+
+/// `names` made as folders in the fixture's dir; their paths.
+fn repos(f: &Fixture, names: &[&str]) -> Vec<String> {
+    names
+        .iter()
+        .map(|n| {
+            let d = f.dir.join(n);
+            std::fs::create_dir_all(&d).unwrap();
+            d.to_string_lossy().into_owned()
+        })
+        .collect()
+}
+
+/// A quick chat has no project to add to.
+fn no_project(_: &str, _: &[String]) -> Result<Option<Project>, String> {
+    panic!("a quick chat's repos are its own")
+}
+
+/// The methods the agent received, in order, leaving out the ones every turn has.
+fn methods(f: &Fixture) -> Vec<String> {
+    f.received().into_iter().filter_map(|(_, m)| m["method"].as_str().map(str::to_owned)).filter(|m| m != "session/cancel").collect()
+}
+
+fn added_dirs(t: &Transcript) -> Vec<(Vec<String>, String)> {
+    t.entries.iter().filter_map(|e| if let Entry::AddedDirs { paths, to } = e { Some((paths.clone(), to.clone())) } else { None }).collect()
+}
+
+fn added_repos_reach_the_agent_through_session_load_before_the_next_prompt() {
+    let mut f = Fixture::new(&[]);
+    let r = repos(&f, &["api", "web"]);
+    let sid = f.chat();
+    f.turn(&sid, "hello");
+    let info = f.hub.add_dirs(&sid, std::slice::from_ref(&r[0]), no_project).unwrap();
+    assert_eq!((info.extra_dirs.clone(), info.dirs_changed), (vec![r[0].clone()], true));
+    f.event("the new folders in the info", |n, v| n == "session-info" && v["sessionId"] == sid.as_str() && v["extraDirs"] == json!([r[0]]));
+    let notice = f.event("the notice", |n, v| n == "session-entry" && v["sessionId"] == sid.as_str() && v["entry"]["type"] == "addedDirs");
+    assert_eq!(notice["entry"], json!({ "type": "addedDirs", "paths": [r[0]], "to": "chat" }));
+    assert!(f.requests("session/load").is_empty(), "nothing goes to the agent until the next prompt");
+
+    let t = f.turn(&sid, "now with the api");
+    assert_eq!(last_agent_text(&t), "echo: now with the api", "the replay of history isn't added again");
+    let loads = f.requests("session/load");
+    assert_eq!(loads.len(), 1);
+    assert_eq!((loads[0]["sessionId"].as_str(), &loads[0]["additionalDirectories"]), (Some(sid.as_str()), &json!([r[0]])));
+    assert_eq!(loads[0]["cwd"], json!(f.dir));
+    let order = methods(&f);
+    let n = order.len();
+    assert_eq!(&order[n - 2..], ["session/load", "session/prompt"], "reopened right before the prompt: {order:?}");
+    assert!(!t.info.dirs_changed);
+    assert_eq!(added_dirs(&t), [(vec![r[0].clone()], "chat".to_owned())]);
+
+    f.turn(&sid, "and again");
+    assert_eq!(f.requests("session/load").len(), 1, "once");
+
+    // Added mid-turn: accepted, the notice after the reply, the folder from the next prompt.
+    f.prompt(&sid, "wait");
+    f.until(&sid, "the permission request", |t| waiting_permissions(t).first().copied());
+    let info = f.hub.add_dirs(&sid, std::slice::from_ref(&r[1]), no_project).unwrap();
+    assert!(info.running && info.dirs_changed);
+    f.hub.cancel(&sid).unwrap();
+    let t = f.finished(&sid);
+    assert!(matches!(t.entries.last(), Some(Entry::AddedDirs { paths, .. }) if *paths == [r[1].clone()]), "after the turn's reply");
+    assert_eq!(f.requests("session/load").len(), 1, "never mid-turn");
+
+    // It holds across a restart: the restored chat reattaches with both.
+    f.restart();
+    let info = f.hub.session_info(&sid).unwrap();
+    assert_eq!(info.additional_dirs, r);
+    f.turn(&sid, "after the restart");
+    let loads = f.requests("session/load");
+    assert_eq!(loads.len(), 2);
+    assert_eq!(loads[1]["additionalDirectories"], json!(r));
+}
+
+fn an_agent_without_load_gets_added_repos_in_a_fresh_session_and_a_hand_off() {
+    let f = Fixture::new(&[("YAAH_AGENT_NO_LOAD", "1")]);
+    let r = repos(&f, &["api"]);
+    let sid = f.chat();
+    f.turn(&sid, "hello there");
+    f.hub.add_dirs(&sid, &r, no_project).unwrap();
+
+    let t = f.turn(&sid, "with the api");
+    assert_eq!(last_agent_text(&t), "echo: with the api");
+    assert_eq!(f.requests("session/load"), Vec::<Value>::new());
+    let news = f.requests("session/new");
+    assert_eq!(news.len(), 2, "a fresh session");
+    assert_eq!(news[1]["additionalDirectories"], json!(r));
+    assert_eq!(news[1]["cwd"], news[0]["cwd"]);
+    let agent_session = t.info.agent_session_id.clone().expect("the fresh session's id is recorded");
+    assert!(!t.info.dirs_changed && t.info.handoff_from.is_none());
+    let (_, prompt) = prompts(&f).pop().unwrap();
+    assert_eq!(prompt["sessionId"], agent_session.as_str());
+    let handoff = prompt["prompt"][0]["text"].as_str().unwrap();
+    assert!(handoff.starts_with("You're taking over this chat from Scripted."), "{handoff}");
+    for said in ["User: hello there", "Agent: echo: hello there", &format!("[added {} to this chat]", r[0])] {
+        assert!(handoff.contains(said), "{said} in {handoff}");
+    }
+
+    let t = f.turn(&sid, "and then");
+    assert_eq!(last_agent_text(&t), "echo: and then");
+    assert_eq!(f.requests("session/new").len(), 2, "handed off once");
+    assert_eq!(prompts(&f).pop().unwrap().1["prompt"], json!([{ "type": "text", "text": "and then" }]));
+}
+
+fn other_chats_in_the_project_pick_up_added_repos_on_their_next_prompt() {
+    let f = Fixture::new(&[]);
+    let r = repos(&f, &["repo", "ctx", "new"]);
+    let project = Project {
+        id: "p1".into(),
+        name: "Shop".into(),
+        dirs: vec![r[0].clone()],
+        status: Status::Ongoing,
+        created_at: 0,
+        context_dir: r[1].clone(),
+        link: None,
+        agent_id: None,
+    };
+    let start = |p: &Project| tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Project(p), ACCOUNT)).unwrap().session_id;
+    let (one, two) = (start(&project), start(&project));
+    let quick = f.chat();
+    for sid in [&one, &two, &quick] {
+        f.turn(sid, "hello");
+    }
+
+    let after = Project { dirs: vec![r[0].clone(), r[2].clone()], ..project.clone() };
+    let info = f
+        .hub
+        .add_dirs(&one, std::slice::from_ref(&r[2]), |id, dirs| {
+            assert_eq!((id, dirs), ("p1", std::slice::from_ref(&r[2])));
+            Ok(Some(after.clone()))
+        })
+        .unwrap();
+    assert!(info.extra_dirs.is_empty(), "a project chat's folders come from the project");
+    assert_eq!(added_dirs(&f.hub.transcript(&one).unwrap()), [(vec![r[2].clone()], "project".to_owned())]);
+
+    // The other chat, before the one it was added from.
+    f.turn(&two, "do you see it?");
+    let loads = f.requests("session/load");
+    assert_eq!(loads.len(), 1);
+    assert_eq!((loads[0]["sessionId"].as_str(), &loads[0]["additionalDirectories"]), (Some(two.as_str()), &json!([r[2], r[1]])));
+    f.turn(&one, "and here?");
+    let loads = f.requests("session/load");
+    assert_eq!((loads.len(), loads[1]["sessionId"].as_str()), (2, Some(one.as_str())));
+    assert_eq!(loads[1]["additionalDirectories"], json!([r[2], r[1]]));
+    f.turn(&quick, "not me");
+    assert_eq!(f.requests("session/load").len(), 2, "a chat outside the project isn't reopened");
+
+    // A chat started in the project later gets it from the start.
+    let three = start(&after);
+    assert_eq!(f.requests("session/new").pop().unwrap()["additionalDirectories"], json!([r[2], r[1]]));
+    assert!(!f.hub.session_info(&three).unwrap().dirs_changed);
+}
+
+fn quick_chats_start_with_repos_chosen_up_front() {
+    let f = Fixture::new(&[]);
+    let r = repos(&f, &["api", "web"]);
+    let cwd = f.dir.to_string_lossy().into_owned();
+    let chosen = [r[0].clone(), r[1].clone(), r[0].clone(), cwd.clone()];
+    let info = tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd.clone()), ACCOUNT, &chosen)).unwrap();
+    assert_eq!((info.extra_dirs.clone(), info.additional_dirs.clone(), info.dirs_changed), (r.clone(), r.clone(), false));
+    assert_eq!(f.requests("session/new").pop().unwrap()["additionalDirectories"], json!(r));
+    let bad = f.dir.join("missing").to_string_lossy().into_owned();
+    let err = tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd), ACCOUNT, &[bad])).unwrap_err();
+    assert!(err.contains("is not a folder"), "{err}");
+    assert_eq!(f.requests("session/new").len(), 1, "checked before any session starts");
 }

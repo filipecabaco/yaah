@@ -131,6 +131,15 @@ pub enum Entry {
         /// The label of the agent it took over from, when known.
         from: Option<String>,
     },
+    /// The user added folders to the chat as it went (`Hub::add_dirs`): to its
+    /// project, so every chat there gets them, or to this chat only. The agent
+    /// works in them from the next prompt on.
+    AddedDirs {
+        /// The folders added, absolute.
+        paths: Vec<String>,
+        /// `"project"` or `"chat"`: what they were added to.
+        to: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -181,6 +190,21 @@ pub struct SessionInfo {
     /// conversation off; cleared once that prompt goes out.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff_from: Option<String>,
+    /// A quick chat's own folders besides its cwd (chosen when it started, or added
+    /// as it went); they are in `additional_dirs` too. Empty for project chats,
+    /// whose folders come from the project.
+    #[serde(default)]
+    pub extra_dirs: Vec<String>,
+    /// The chat's folders changed since its agent session was opened: the next
+    /// prompt reopens it with them first (`session/load`, or a fresh session and a
+    /// hand-off for an agent that can't load). Cleared once that is done.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dirs_changed: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref, reason = "serde's skip_serializing_if passes a reference")]
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl SessionInfo {
@@ -278,6 +302,9 @@ struct Session {
     /// The chat's token on the UI MCP server, once one was handed out (runtime
     /// only). A hand-off to another agent reuses it, so its UI calls reach this chat.
     ui_token: Option<String>,
+    /// Entries that wait for the running turn to end, so they don't land in the
+    /// middle of the agent's reply (folders added mid-turn).
+    after_turn: Vec<Entry>,
     /// This chat's own cell, for the threads that flush appends and save.
     me: Weak<Mutex<Session>>,
     stream: Stream,
@@ -335,6 +362,7 @@ impl Session {
             remembered: HashMap::new(),
             waiting: HashMap::new(),
             ui_token: None,
+            after_turn: vec![],
             me: Weak::new(),
             stream: Stream::default(),
             saving: Saving::default(),
@@ -1079,13 +1107,23 @@ impl Hub {
     /// the project's context folder are additional roots, and its brief goes with
     /// the first prompt. In a folder: a quick chat with just that folder.
     pub async fn new_session(&self, target: ChatTarget<'_>, account_id: &str) -> Result<SessionInfo, String> {
-        let account = self.shared.profile(account_id)?;
-        let agent = self.agent(&account).await?;
+        self.new_session_with(target, account_id, &[]).await
+    }
 
-        let (cwd, additional_dirs, project) = match target {
-            ChatTarget::Project(p) => (p.cwd(), p.additional_dirs(), Some(p)),
-            ChatTarget::Folder(dir) => (dir, vec![], None),
+    /// [`Hub::new_session`], with folders chosen up front. A quick chat keeps them
+    /// as its own (`extra_dirs`), checked like [`Hub::add_dirs`]'s. A project's go
+    /// to the project before the chat starts (`commands::new_session`), so they
+    /// are ignored here.
+    pub async fn new_session_with(&self, target: ChatTarget<'_>, account_id: &str, extra_dirs: &[String]) -> Result<SessionInfo, String> {
+        let account = self.shared.profile(account_id)?;
+        let (cwd, additional_dirs, extra_dirs, project) = match target {
+            ChatTarget::Project(p) => (p.cwd(), p.additional_dirs(), vec![], Some(p)),
+            ChatTarget::Folder(dir) => {
+                let extra = new_dirs(&dir, &[], extra_dirs)?;
+                (dir, extra.clone(), extra, None)
+            }
         };
+        let agent = self.agent(&account).await?;
         if !additional_dirs.is_empty() && !agent.caps.additional_dirs {
             return Err("this agent can't work across several folders (no additionalDirectories support)".into());
         }
@@ -1128,6 +1166,8 @@ impl Hub {
             commands: vec![],
             agent_session_id: None,
             handoff_from: None,
+            extra_dirs,
+            dirs_changed: false,
         };
         let mut session = Session::new(info.clone(), vec![], self.store.as_ref().map(|d| d.join(file_name(&session_id))));
         session.brief = brief;
@@ -1185,14 +1225,17 @@ impl Hub {
     }
 
     /// Reconnect a chat `agent` doesn't know (restored from disk, or its agent
-    /// restarted) with `session/load`. The agent replays the history as updates;
-    /// we already have it, so those are ignored.
+    /// restarted), or reopen one whose folders changed, with `session/load` and
+    /// the chat's folders as they are now. The agent replays the history as
+    /// updates; we already have it, so those are ignored.
     async fn attach(&self, session_id: &str, agent: &Agent, account: &Profile) -> Result<(), String> {
         if !agent.caps.load_session {
             return Err("This agent can't reopen earlier chats. Start a new chat to continue.".into());
         }
         let (agent_session, cwd, additional_dirs) = self.shared.with(session_id, |s| {
             s.replaying = true;
+            // Folders added from here on change it again, for the prompt after.
+            s.info.dirs_changed = false;
             (s.info.agent_session().to_owned(), s.info.cwd.clone(), s.info.additional_dirs.clone())
         })?;
         let mut params = json!({ "sessionId": agent_session, "cwd": cwd, "mcpServers": [] });
@@ -1207,6 +1250,7 @@ impl Hub {
         let _ = self.shared.with(session_id, |s| {
             s.replaying = false;
             s.attached = res.is_ok().then_some(agent.generation);
+            self.shared.save(s);
         });
         res.map(|_| ()).map_err(|e| self.shared.rpc_error(&account.id, &e, "Couldn't reopen this chat"))
     }
@@ -1249,8 +1293,11 @@ impl Hub {
     /// yaah's guide, and the project brief again. The new session id is recorded
     /// so this agent's updates reach the chat and later prompts (and reloads) use it.
     async fn hand_off(&self, session_id: &str, agent: &Agent, account: &Profile) -> Result<(), String> {
-        let (cwd, additional_dirs, project_id, token) =
-            self.shared.with(session_id, |s| (s.info.cwd.clone(), s.info.additional_dirs.clone(), s.info.project_id.clone(), s.ui_token.clone()))?;
+        let (cwd, additional_dirs, project_id, token) = self.shared.with(session_id, |s| {
+            // The fresh session gets the folders as they are now.
+            s.info.dirs_changed = false;
+            (s.info.cwd.clone(), s.info.additional_dirs.clone(), s.info.project_id.clone(), s.ui_token.clone())
+        })?;
         if !additional_dirs.is_empty() && !agent.caps.additional_dirs {
             return Err(format!(
                 "{} can't work across several folders (no additionalDirectories support), and this chat uses {}. Switch to another agent.",
@@ -1354,6 +1401,95 @@ impl Hub {
         })
     }
 
+    /// Add folders to a chat as it goes (`add_chat_dirs`). Each must be an
+    /// absolute path to a folder; ones the chat already has (its cwd included) and
+    /// repeats are left out, and with nothing new nothing changes.
+    ///
+    /// In a project (`add_to_project` adds them there and returns the project; `None`
+    /// when it no longer exists) they join the project, so this chat and every other
+    /// chat in it get them ([`Hub::sync_project`]). Otherwise they are this chat's own
+    /// (`extra_dirs`). Either way the agent works in them from the next prompt on: that
+    /// prompt reopens the session with them first. Mid-turn the change waits for that
+    /// prompt too, and the transcript's notice ([`Entry::AddedDirs`]) for the turn to end.
+    pub fn add_dirs(
+        &self,
+        session_id: &str,
+        paths: &[String],
+        add_to_project: impl FnOnce(&str, &[String]) -> Result<Option<Project>, String>,
+    ) -> Result<SessionInfo, String> {
+        let (cwd, have, project_id, account_id) =
+            self.shared.with_info(session_id, |i| (i.cwd.clone(), i.additional_dirs.clone(), i.project_id.clone(), i.account_id.clone()))?;
+        let added = new_dirs(&cwd, &have, paths)?;
+        if added.is_empty() {
+            return self.session_info(session_id);
+        }
+        // What the agent said in `initialize` last time it ran; an agent not run yet is checked when it starts.
+        if let Some(agent) = self.shared.profiles.find(&account_id)
+            && agent.report.is_some_and(|r| !r.additional_dirs)
+        {
+            return Err(format!(
+                "{} can't work across several folders (no additionalDirectories support). Switch to another agent first.",
+                agent.label
+            ));
+        }
+        let project = match &project_id {
+            Some(id) => add_to_project(id, &added)?,
+            None => None,
+        };
+        let to = match &project {
+            Some(p) => {
+                self.sync_project(p);
+                "project"
+            }
+            None => "chat",
+        };
+        self.shared.with(session_id, |s| {
+            if project.is_none() {
+                for dir in &added {
+                    if *dir != s.info.cwd && !s.info.additional_dirs.contains(dir) {
+                        s.info.additional_dirs.push(dir.clone());
+                    }
+                    if !s.info.extra_dirs.contains(dir) {
+                        s.info.extra_dirs.push(dir.clone());
+                    }
+                }
+                s.info.dirs_changed = true;
+            }
+            let notice = Entry::AddedDirs { paths: added, to: to.to_owned() };
+            if s.info.running {
+                s.after_turn.push(notice);
+            } else {
+                self.shared.push(s, notice);
+            }
+            self.shared.emit_info(s);
+            self.shared.save(s);
+            s.info.clone()
+        })
+    }
+
+    /// A project's folders changed: every chat in it gets them as they are now
+    /// ([`project_chat_dirs`]), from its next prompt on. Chats whose folders
+    /// already match are left alone. The UI hears that the project changed.
+    pub fn sync_project(&self, project: &Project) {
+        (self.shared.app)("projects-changed", json!({ "projectId": project.id }));
+        for chat in self.shared.chats() {
+            let mut s = chat.lock().unwrap();
+            if s.info.project_id.as_deref() != Some(project.id.as_str()) {
+                continue;
+            }
+            let dirs = project_chat_dirs(project, &s.info.cwd, &s.info.extra_dirs);
+            if dirs == s.info.additional_dirs {
+                continue;
+            }
+            // The whole chat is written with its info: read the entries first, if they weren't yet.
+            s.ensure_loaded();
+            s.info.additional_dirs = dirs;
+            s.info.dirs_changed = true;
+            self.shared.emit_info(&mut s);
+            self.shared.save(&mut s);
+        }
+    }
+
     pub fn rename_session(&self, session_id: &str, title: &str) -> Result<SessionInfo, String> {
         let title = title.trim();
         if title.is_empty() {
@@ -1436,15 +1572,24 @@ impl Hub {
     /// Starts the chat's agent if it isn't running, and reattaches the chat to it.
     pub async fn prompt(&self, session_id: &str, text: String, mentions: Vec<String>) -> Result<(), String> {
         const BUSY: &str = "a turn is already running in this session";
-        let (account_id, attached, handoff) = self
+        let (account_id, attached, handoff, dirs_changed) = self
             .shared
-            .with(session_id, |s| (!s.info.running).then(|| (s.info.account_id.clone(), s.attached, s.info.handoff_from.is_some())))?
+            .with(session_id, |s| {
+                (!s.info.running).then(|| (s.info.account_id.clone(), s.attached, s.info.handoff_from.is_some(), s.info.dirs_changed))
+            })?
             .ok_or(BUSY)?;
         let account = self.shared.profile(&account_id)?;
         let agent = self.agent(&account).await?;
         if handoff {
             self.hand_off(session_id, &agent, &account).await?;
-        } else if attached != Some(agent.generation) {
+        } else if dirs_changed && !agent.caps.load_session {
+            // Folders were added and this agent can't reopen the session with them:
+            // a fresh one, handed the conversation as a switch would.
+            self.shared.with(session_id, |s| {
+                s.info.handoff_from.get_or_insert_with(|| account.label.clone());
+            })?;
+            self.hand_off(session_id, &agent, &account).await?;
+        } else if dirs_changed || attached != Some(agent.generation) {
             self.attach(session_id, &agent, &account).await?;
         }
 
@@ -1832,6 +1977,9 @@ fn finish_turn(shared: &Shared, sid: &str, stop: Option<String>, error: Option<E
         if let Some(entry) = error {
             shared.push(s, entry);
         }
+        for entry in std::mem::take(&mut s.after_turn) {
+            shared.push(s, entry);
+        }
         shared.emit_info(s);
         shared.save_now(s);
     });
@@ -1946,6 +2094,40 @@ fn project_brief(project_id: &str, dirs: &[String]) -> Option<Brief> {
     Some(Brief { path: path.to_string_lossy().into_owned(), text })
 }
 
+/// The folders in `paths` a chat in `cwd` with `have` doesn't have yet, in order.
+/// Each must be an absolute path to an existing folder (a trailing `/` is dropped);
+/// any that isn't fails the whole call. Repeats, the cwd and folders in `have` are left out.
+pub fn new_dirs(cwd: &str, have: &[String], paths: &[String]) -> Result<Vec<String>, String> {
+    let trim = |d: &str| match d.trim_end_matches('/') {
+        "" => "/".to_owned(),
+        t => t.to_owned(),
+    };
+    let cwd = trim(cwd);
+    let have: Vec<String> = have.iter().map(|d| trim(d)).collect();
+    let mut out: Vec<String> = vec![];
+    for path in paths {
+        let dir = crate::projects::validate_dir(path.trim())?;
+        if dir != cwd && !have.contains(&dir) && !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    Ok(out)
+}
+
+/// The folders besides `cwd` a chat in `project` works in: the project's own
+/// (its first one too, for a chat that runs elsewhere), its context folder, and
+/// the chat's own `extra` ones, each once and in that order.
+pub fn project_chat_dirs(project: &Project, cwd: &str, extra: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = vec![];
+    let all = std::iter::once(project.cwd()).chain(project.additional_dirs()).chain(extra.iter().cloned());
+    for dir in all {
+        if dir != cwd && !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    out
+}
+
 /// At most this many characters of conversation go to an agent taking over a chat.
 pub const HANDOFF_MAX_CHARS: usize = 40_000;
 
@@ -1965,6 +2147,7 @@ pub fn handoff_text(from: &str, entries: &[Arc<Entry>]) -> String {
             }
             Entry::Ui { title, component, .. } => Some(format!("[UI] {}", title.as_deref().or(component.as_deref()).unwrap_or("UI"))),
             Entry::Switch { label, .. } => Some(format!("[switched to {label}]")),
+            Entry::AddedDirs { paths, to } => Some(format!("[added {} to this {to}]", paths.join(", "))),
             Entry::Error { message, .. } => Some(format!("[error] {}", truncate(message.lines().next().unwrap_or_default(), 200))),
             _ => None,
         })
@@ -2069,6 +2252,8 @@ fn test_info(id: &str) -> SessionInfo {
         commands: vec![],
         agent_session_id: None,
         handoff_from: None,
+        extra_dirs: vec![],
+        dirs_changed: false,
     }
 }
 
@@ -3460,5 +3645,216 @@ mod switch_tests {
         assert_eq!(info.handoff_from.as_deref(), Some("Alpha"));
         assert!(matches!(&hub.transcript("sw").unwrap().entries[2], Entry::Switch { from: Some(f), .. } if f == "Beta"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod dirs_tests {
+    use super::*;
+    use crate::projects::Status;
+
+    /// A temp folder with `names` made inside it; returns it and their paths.
+    fn folders(names: &[&str]) -> (PathBuf, Vec<String>) {
+        let root = std::env::temp_dir().join(format!("yaah-dirs-{}", random_token()));
+        let paths = names
+            .iter()
+            .map(|n| {
+                std::fs::create_dir_all(root.join(n)).unwrap();
+                root.join(n).to_string_lossy().into_owned()
+            })
+            .collect();
+        (root, paths)
+    }
+
+    /// A hub over its own agent profiles (one, `Scripted`), saving chats in `root/sessions`.
+    fn hub(root: &Path) -> (Hub, String) {
+        let profiles: &'static Store = Box::leak(Box::new(Store::at(root.join("agents.json"))));
+        std::fs::write(root.join("agents.json"), r#"{ "profiles": [] }"#).unwrap();
+        let draft =
+            agents::Draft { label: "Scripted".into(), preset: agents::CUSTOM.into(), command_line: "true".into(), ..agents::Draft::default() };
+        let id = profiles.save(&draft).unwrap().0.id;
+        (Hub::open(Arc::new(|_: &str, _: Value| {}), Some(root.join("sessions")), profiles), id)
+    }
+
+    fn chat(hub: &Hub, root: &Path, id: &str, account: &str, cwd: &str, project: Option<&Project>) -> String {
+        let mut info = test_info(id);
+        info.running = false;
+        info.account_id = account.into();
+        cwd.clone_into(&mut info.cwd);
+        if let Some(p) = project {
+            info.project_id = Some(p.id.clone());
+            info.additional_dirs = p.additional_dirs();
+        }
+        hub.shared.insert(Session::new(info, vec![], Some(root.join("sessions").join(file_name(id)))));
+        id.to_owned()
+    }
+
+    fn project(root: &Path, dirs: &[String]) -> Project {
+        let ctx = root.join("ctx");
+        std::fs::create_dir_all(&ctx).unwrap();
+        Project {
+            id: "p1".into(),
+            name: "Shop".into(),
+            dirs: dirs.to_vec(),
+            status: Status::Ongoing,
+            created_at: 0,
+            context_dir: ctx.to_string_lossy().into_owned(),
+            link: None,
+            agent_id: None,
+        }
+    }
+
+    fn added(hub: &Hub, sid: &str) -> Vec<(Vec<String>, String)> {
+        hub.transcript(sid)
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter_map(|e| if let Entry::AddedDirs { paths, to } = e { Some((paths, to)) } else { None })
+            .collect()
+    }
+
+    fn never(_: &str, _: &[String]) -> Result<Option<Project>, String> {
+        panic!("a quick chat has no project to add to")
+    }
+
+    #[test]
+    fn new_folders_must_exist_be_folders_and_be_new() {
+        let (root, p) = folders(&["cwd", "a", "b"]);
+        let (cwd, a, b) = (&p[0], &p[1], &p[2]);
+        std::fs::write(root.join("file"), "x").unwrap();
+
+        let got =
+            new_dirs(cwd, std::slice::from_ref(b), &[a.clone(), format!("{a}/"), cwd.clone(), format!("{cwd}/"), b.clone(), a.clone()]).unwrap();
+        assert_eq!(got, std::slice::from_ref(a), "repeats, the cwd (however it ends) and folders the chat has are left out");
+        assert_eq!(new_dirs(&format!("{cwd}/"), &[], std::slice::from_ref(cwd)).unwrap(), Vec::<String>::new(), "the cwd never twice");
+        for bad in [root.join("missing").to_string_lossy().into_owned(), root.join("file").to_string_lossy().into_owned(), "relative/dir".into()] {
+            assert!(new_dirs(cwd, &[], &[a.clone(), bad.clone()]).is_err(), "{bad} fails the whole call");
+        }
+        let _ = std::fs::remove_dir_all(root); // the saver may still be writing
+    }
+
+    #[test]
+    fn a_project_chats_folders_are_the_projects_and_its_own_each_once() {
+        let (root, p) = folders(&["repo", "other", "mine"]);
+        let project = project(&root, &p[..2]);
+        let ctx = project.context_dir.clone();
+        assert_eq!(project_chat_dirs(&project, &p[0], &[]), [p[1].clone(), ctx.clone()], "as a new project chat gets them");
+        assert_eq!(project_chat_dirs(&project, &p[2], &[p[1].clone()]), [p[0].clone(), p[1].clone(), ctx.clone()], "a chat moved in from elsewhere");
+        let _ = std::fs::remove_dir_all(root); // the saver may still be writing
+    }
+
+    #[test]
+    fn a_quick_chat_keeps_added_folders_as_its_own() {
+        let (root, p) = folders(&["cwd", "a", "b"]);
+        let (hub, account) = hub(&root);
+        let sid = chat(&hub, &root, &format!("quick-{}", random_token()), &account, &p[0], None);
+
+        let info = hub.add_dirs(&sid, &[p[1].clone(), p[1].clone(), p[0].clone()], never).unwrap();
+        assert_eq!((info.extra_dirs.clone(), info.additional_dirs.clone()), (vec![p[1].clone()], vec![p[1].clone()]));
+        assert!(info.dirs_changed, "the next prompt reopens the session with it");
+        assert_eq!(added(&hub, &sid), [(vec![p[1].clone()], "chat".to_owned())]);
+
+        let again = hub.add_dirs(&sid, &[format!("{}/", p[1]), p[0].clone()], never).unwrap();
+        assert_eq!(again.extra_dirs, [p[1].clone()], "nothing new");
+        assert_eq!(added(&hub, &sid).len(), 1, "and no notice for nothing");
+        assert!(hub.add_dirs(&sid, &[p[2].clone(), root.join("nope").to_string_lossy().into_owned()], never).is_err());
+        assert_eq!(hub.session_info(&sid).unwrap().extra_dirs, [p[1].clone()], "all or nothing");
+        let info = hub.add_dirs(&sid, std::slice::from_ref(&p[2]), never).unwrap();
+        assert_eq!(info.extra_dirs, [p[1].clone(), p[2].clone()]);
+        assert!(hub.add_dirs("no-such-chat", std::slice::from_ref(&p[2]), never).is_err());
+        let _ = std::fs::remove_dir_all(root); // the saver may still be writing
+    }
+
+    #[test]
+    fn a_project_chat_adds_to_the_project_and_every_chat_in_it_follows() {
+        let (root, p) = folders(&["repo", "new", "elsewhere"]);
+        let (hub, account) = hub(&root);
+        let before = project(&root, &p[..1]);
+        let (one, two) = (format!("one-{}", random_token()), format!("two-{}", random_token()));
+        chat(&hub, &root, &one, &account, &p[0], Some(&before));
+        chat(&hub, &root, &two, &account, &p[0], Some(&before));
+        let mut other_project = before.clone();
+        other_project.id = "p2".into();
+        let other = chat(&hub, &root, &format!("other-{}", random_token()), &account, &p[0], Some(&other_project));
+        let quick = chat(&hub, &root, &format!("quick-{}", random_token()), &account, &p[2], None);
+
+        let asked = std::cell::RefCell::new(None);
+        let info = hub
+            .add_dirs(&one, std::slice::from_ref(&p[1]), |id, dirs| {
+                *asked.borrow_mut() = Some((id.to_owned(), dirs.to_vec()));
+                let mut after = before.clone();
+                after.dirs.extend(dirs.iter().cloned());
+                Ok(Some(after))
+            })
+            .unwrap();
+        assert_eq!(asked.take(), Some(("p1".to_owned(), vec![p[1].clone()])), "the folder goes to the project");
+        let expected = vec![p[1].clone(), before.context_dir.clone()];
+        assert_eq!((info.additional_dirs.clone(), info.extra_dirs.clone(), info.dirs_changed), (expected.clone(), vec![], true));
+        let two_info = hub.session_info(&two).unwrap();
+        assert_eq!((two_info.additional_dirs, two_info.dirs_changed), (expected, true), "the project's other chat gets it on its next prompt");
+        for untouched in [&other, &quick] {
+            let i = hub.session_info(untouched).unwrap();
+            assert!(!i.dirs_changed && !i.additional_dirs.contains(&p[1]), "{untouched}");
+        }
+        assert_eq!(added(&hub, &one), [(vec![p[1].clone()], "project".to_owned())]);
+        assert!(added(&hub, &two).is_empty(), "the notice is in the chat it was added from");
+
+        // A chat filed under a project that's gone keeps them itself.
+        let info = hub.add_dirs(&other, std::slice::from_ref(&p[1]), |_, _| Ok(None)).unwrap();
+        assert_eq!(info.extra_dirs, [p[1].clone()]);
+        assert_eq!(added(&hub, &other), [(vec![p[1].clone()], "chat".to_owned())]);
+        let _ = std::fs::remove_dir_all(root); // the saver may still be writing
+    }
+
+    #[test]
+    fn added_folders_and_their_notice_survive_a_restart() {
+        let (root, p) = folders(&["cwd", "a"]);
+        let (hub, account) = hub(&root);
+        let sid = chat(&hub, &root, &format!("kept-{}", random_token()), &account, &p[0], None);
+        hub.add_dirs(&sid, std::slice::from_ref(&p[1]), never).unwrap();
+        hub.flush();
+        let profiles = hub.shared.profiles;
+        drop(hub);
+
+        let hub = Hub::open(Arc::new(|_: &str, _: Value| {}), Some(root.join("sessions")), profiles);
+        let info = hub.session_info(&sid).unwrap();
+        assert_eq!((info.extra_dirs, info.additional_dirs, info.dirs_changed), (vec![p[1].clone()], vec![p[1].clone()], true));
+        assert_eq!(added(&hub, &sid), [(vec![p[1].clone()], "chat".to_owned())]);
+        let saved: Value = serde_json::from_slice(&std::fs::read(root.join("sessions").join(file_name(&sid))).unwrap()).unwrap();
+        assert_eq!(saved["entries"][0], json!({ "type": "addedDirs", "paths": [p[1]], "to": "chat" }), "the notice as the UI gets it");
+        assert_eq!(saved["info"]["extraDirs"], json!([p[1]]));
+        let _ = std::fs::remove_dir_all(root); // the saver may still be writing
+    }
+
+    #[test]
+    fn mid_turn_the_notice_waits_for_the_turn_to_end() {
+        let (root, p) = folders(&["cwd", "a"]);
+        let (hub, account) = hub(&root);
+        let sid = chat(&hub, &root, &format!("busy-{}", random_token()), &account, &p[0], None);
+        hub.shared.with(&sid, |s| s.info.running = true).unwrap();
+        let info = hub.add_dirs(&sid, std::slice::from_ref(&p[1]), never).unwrap();
+        assert!(info.dirs_changed && info.extra_dirs == [p[1].clone()], "accepted, for the next prompt");
+        assert!(added(&hub, &sid).is_empty(), "not in the middle of the reply");
+        finish_turn(&hub.shared, &sid, Some("end_turn".into()), None);
+        assert_eq!(added(&hub, &sid), [(vec![p[1].clone()], "chat".to_owned())]);
+        let _ = std::fs::remove_dir_all(root); // the saver may still be writing
+    }
+
+    #[test]
+    fn an_agent_that_cant_use_several_folders_is_refused() {
+        let (root, p) = folders(&["cwd", "a"]);
+        let (hub, account) = hub(&root);
+        hub.shared.profiles.record_report(&account, &agents::Report { compatible: true, additional_dirs: false, ..agents::Report::default() });
+        let sid = chat(&hub, &root, &format!("single-{}", random_token()), &account, &p[0], None);
+        let err = hub.add_dirs(&sid, std::slice::from_ref(&p[1]), never).unwrap_err();
+        assert!(err.contains("Scripted can't work across several folders"), "{err}");
+        assert_eq!(hub.session_info(&sid).unwrap().extra_dirs, Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(root); // the saver may still be writing
+    }
+
+    #[test]
+    fn the_handoff_mentions_added_folders() {
+        let entries = vec![Arc::new(Entry::AddedDirs { paths: vec!["/w/api".into(), "/w/web".into()], to: "project".into() })];
+        assert!(handoff_text("Scripted", &entries).contains("[added /w/api, /w/web to this project]"));
     }
 }

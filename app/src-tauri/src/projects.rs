@@ -322,7 +322,7 @@ fn save(r: &Registry) -> Result<(), String> {
     crate::json_file::write(&registry_path(), r, false)
 }
 
-fn validate_dir(dir: &str) -> Result<String, String> {
+pub(crate) fn validate_dir(dir: &str) -> Result<String, String> {
     let p = Path::new(dir);
     if !p.is_absolute() {
         return Err(format!("{dir} is not an absolute path"));
