@@ -27,7 +27,7 @@ What [`install.sh`](../install.sh) does (POSIX `sh`; it runs nothing it download
 
 **macOS signing.** Releases are ad-hoc signed, not signed with an Apple Developer ID or notarised yet. Gatekeeper only checks apps that carry the quarantine attribute, which browsers add to downloads and `curl` doesn't; the installer removes it anyway after checking the SHA-256, so yaah opens without a prompt. If you download the `.dmg` or `.tar.gz` with a browser instead, macOS will say it can't verify the developer: run `xattr -dr com.apple.quarantine /Applications/yaah.app`, or allow it in System Settings → Privacy & Security.
 
-Releases are built by `.github/workflows/release.yml` (not enabled yet) through `mise run release:build`; see [Releases](#releases).
+Releases are built by `.github/workflows/release.yml` through `mise run release:build`; see [Releases](#releases).
 
 ## Run
 
@@ -173,7 +173,7 @@ mise run ci               # all three, one after another
 mise run ci:docker        # build ci/Dockerfile (Ubuntu 24.04, like ubuntu-latest) and run `ci` in it; CI_TASK=ci:rust for one task
 ```
 
-In the container the Docker and Postgres tests skip (no daemon or database to reach), and the repository is copied from a read-only mount into a volume, so the host's `target/` and `node_modules/` are never touched. `.github/workflows/ci.yml` is the GitHub Actions version, not enabled yet; see `docs/experiments/2026-11-03-ci-docker/`.
+In the container the Docker and Postgres tests skip (no daemon or database to reach), and the repository is copied from a read-only mount into a volume, so the host's `target/` and `node_modules/` are never touched. `.github/workflows/ci.yml` is the GitHub Actions version (on pushes, pull requests and nightly); see `docs/experiments/2026-11-03-ci-docker/`.
 
 - `pnpm format` and `cargo fmt` fix formatting.
 - `pnpm coverage` and `cargo llvm-cov --lib --tests --summary-only` report coverage.
