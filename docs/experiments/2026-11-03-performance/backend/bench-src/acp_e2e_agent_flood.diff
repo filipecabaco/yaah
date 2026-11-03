@@ -1,0 +1,23 @@
+--- /Users/filipecabaco/Documents/workspace/yaah/app/src-tauri/tests/acp_e2e/agent.rs	2026-11-03 06:17:17
++++ tests/acp_e2e/agent.rs	2026-11-03 06:48:58
+@@ -264,6 +264,20 @@
+                 std::process::exit(3);
+             }
+             "garbage" => self.garbage(&sid),
++            // `flood <n> <size>`: n agent_message_chunks of `size` chars, as fast as stdout takes them.
++            "flood" => {
++                let mut w = text.split_whitespace().skip(1).map(|x| x.parse::<usize>().unwrap_or(1));
++                let (n, size) = (w.next().unwrap_or(1000), w.next().unwrap_or(40));
++                let per = w.next().unwrap_or(n).max(1);
++                let piece: String = "lorem ipsum dolor sit amet, consectetur ".chars().cycle().take(size).collect();
++                let mut out = std::io::BufWriter::new(std::io::stdout().lock());
++                for i in 0..n {
++                    let m = json!({ "jsonrpc": "2.0", "method": "session/update", "params": { "sessionId": sid,
++                        "update": { "sessionUpdate": "agent_message_chunk", "messageId": format!("m{}", i / per), "content": { "type": "text", "text": piece } } } });
++                    let _ = writeln!(out, "{m}");
++                }
++                let _ = out.flush();
++            }
+             // `spoof <other chat id>`: write into, and ask permission in, a chat this process didn't start.
+             "spoof" => {
+                 let other = text.split_whitespace().nth(1).unwrap_or_default().to_owned();

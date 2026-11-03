@@ -1,0 +1,123 @@
+{
+  "_setup": {
+    "date": "2026-11-03",
+    "machine": "macOS (Apple silicon), Chrome via vitro desktop, viewport 1440x900, DPR 1, no CPU or network throttling unless stated",
+    "builds": {
+      "prod": "pnpm build, served by vite preview on :4173 (no Tauri IPC, so the app shows its load-error banner)",
+      "prodmock": "same sources and production React, plus src/dev/browser-mock installed first (scratch vite config, entry harness/prod-entry.ts), served on :4174; used for every interaction number",
+      "dev": "pnpm dev on :1420 (development React + StrictMode)"
+    },
+    "harness": "harness/perf-harness.js, loaded into the page with import(); drives session-entry/session-info events through the mocked Tauri IPC exactly as Rust emits them"
+  },
+  "bundle": {
+    "all_js_kB": 5318.7,
+    "all_js_gzip_kB": 1544.6,
+    "css_kB": 119.2,
+    "fonts_kB": 76.4,
+    "js_files": 126,
+    "main_chunk_index_kB": 732.6,
+    "main_chunk_gzip_kB": 219.4,
+    "loaded_at_startup_js_kB": 838.1,
+    "loaded_at_startup_js_transfer_kB": 258.1,
+    "loaded_at_startup_js_files": 14,
+    "main_chunk_breakdown_kB": {
+      "react-dom+react+scheduler": 207.0,
+      "app src": 189.2,
+      "markdown stack (react-markdown, remark-gfm, micromark, mdast, hast, unified, vfile, property-information...)": 158.0,
+      "radix-ui + floating-ui + react-remove-scroll": 112.5,
+      "themes.json (65 pre-mapped palettes, unmapped by the source map)": 24.8,
+      "lucide-react": 16.0,
+      "cmdk": 11.2,
+      "other": 10.3
+    },
+    "lazy_chunks_kB": {
+      "mermaid (69 chunks incl. cytoscape 434.7, @mermaid-js/parser 662.1, katex 258.6)": 3317.4,
+      "sql (CodeMirror)": 436.7,
+      "chart (recharts + 2 copies of immer)": 328.9,
+      "map (leaflet)": 155.1,
+      "diagram wrapper": 98.5,
+      "data-table": 54.0,
+      "cli views": 40.8
+    },
+    "duplicate_packages": {
+      "immer": "10.2.0 (recharts) + 11.2.9 (@reduxjs/toolkit), both in chart chunk, 17.6 kB together",
+      "d3-shape / d3-array / d3-path": "v1/v2 (mermaid sankey) + v3 (recharts, mermaid)",
+      "layout-base / cose-base": "1.x + 2.x (mermaid cytoscape layouts)"
+    }
+  },
+  "startup": {
+    "prod_no_ipc": { "fcp_ms": 24, "lcp_ms": 68, "dcl_ms": 42.9, "load_ms": 43.3 },
+    "prodmock": { "fcp_ms": 20, "lcp_ms": 128, "dcl_ms": 54.3, "load_ms": 60.2, "mock_installed_ms": 45.1, "long_animation_frames": 0, "note": "prodmock JS includes ~2 MB of mock fixtures" },
+    "lighthouse_prod_mobile_simulated": { "performance": 96, "fcp_ms": 904, "lcp_ms": 2854, "tbt_ms": 0, "cls": 0.0003, "opportunity": "unused-javascript, 750 ms" }
+  },
+  "streaming_per_chunk_ms_prod": {
+    "_how": "growth(): jump an entry to N chars, then time 25 consecutive 24-char chunks from emit to React commit + effects (incl. the auto-scroll forced layout)",
+    "agent_markdown_empty_chat": { "1k": 2.33, "10k": 5.6, "50k": 20.65, "50k_p95": 25.5, "dom_nodes_at_50k": 2109 },
+    "plain_text_control_same_chat": { "1k": 1.03, "10k": 1.49, "50k": 3.63 },
+    "agent_markdown_with_240_entries": { "1k": 2.2, "10k": 4.9, "50k": 20.42, "dom_nodes": 8589 },
+    "throughput_as_fast_as_possible_ms_per_commit": { "1k": 1.47, "10k": 5.1, "50k": 22.18, "fps_at_50k": 45.1, "raf_gap_p95_at_50k_ms": 33.4 },
+    "live_cadence_16ms_45k_to_50k": { "chunks": 208, "commits": 153, "fps": 59.7, "note": "keeps 60 fps only by coalescing 26% of chunks" },
+    "dev_mode_agent_markdown": { "1k": 6.25, "10k": 14.35, "50k": 63.89, "50k_p95": 101.4 },
+    "auto_scroll_pinned_vs_scrolled_up": { "10k": [6.16, 5.02], "50k": [22.32, 21.5] },
+    "background_chat_chunk_nothing_visible_changes": { "4_chats": 1.65, "300_chats": 4.26 },
+    "foreground_chunk_1k_to_2k": { "4_chats": 2.13, "300_chats": 4.95 },
+    "ipc_payload": { "bytes_per_chunk_at_50k": 51464, "json_parse_ms_at_50k": 0.022, "derived_total_bytes_for_one_50k_reply_24char_chunks": "~52 MB" }
+  },
+  "chat_switch_ms_prod": {
+    "small_chat_with_one_50k_message": 104,
+    "240_entries": 191,
+    "1000_entries_first": 462,
+    "1000_entries_again": 406,
+    "1000_entries_dom_nodes": 27012,
+    "ui_heavy_chat_open_15x": { "mean": 868, "p95": 955, "long_frames_one_open_ms": [105, 118, 267, 234], "note": "6 mermaid diagrams (10..201 nodes) re-render on every open: ~620 ms in mermaid" },
+    "live_chat_open_15x": { "mean": 133, "p95": 143 }
+  },
+  "scrolling_prod": { "entries": 243, "dom_nodes": 10854, "frame_ms": { "mean": 16.65, "p95": 18.5, "max": 18.7 }, "long_frames": 0 },
+  "agent_ui_prod": {
+    "table_25_rows_cold_ms": 318.3,
+    "table_25_rows_warm_ms": 15.1,
+    "table_1000_rows_ms": 17,
+    "table_10000_rows_ms": 24.8,
+    "table_10000_rerender_by_id_ms": 40.6,
+    "filetree_300_paths_ms": 23.5,
+    "filetree_3000_paths_ms": 19.6,
+    "filetree_3000_with_find_ms": 27.3,
+    "filetree_3000_with_find_nodes": 2886,
+    "json_2000_items_ms": 23.2,
+    "mermaid_10_nodes_cold_ms": 360.2,
+    "mermaid_10_nodes_warm_ms": 45.2,
+    "mermaid_60_nodes_ms": 137.3,
+    "mermaid_200_nodes_ms": 337.7,
+    "mermaid_201_nodes_long_frames_ms": [237, 78],
+    "mermaid_same_text_rerender_ms": 4.7,
+    "patch_1305_lines_ms": 13.2,
+    "patch_16280_lines_ms": 18.5,
+    "text_diff_lcs_500_1000_1999_lines_ms": [11.8, 17.3, 29.6],
+    "text_diff_5000_lines_every_7th_changed": "falls back to whole-file delete+add (+4999 -4999) because 5000x5000 > MAX_CELLS",
+    "diff_review_open_5000_line_file_ms": 527.3,
+    "diff_review_dom_nodes": 50052,
+    "chart_update_60_or_600_points_1_or_5_series_ms": "<= one frame (mean 16.2-16.6 incl. frame wait)",
+    "composite_40_stats_plus_500_row_table_rerender_by_id_ms": "<= one frame (mean 16.0 incl. frame wait)"
+  },
+  "live_sources_prod": {
+    "ten_live_charts_every_2s": { "read_source_calls_per_10s": 50, "charts_visible": 0, "long_frames": 0 },
+    "document_hidden_6s": { "read_source_calls": 0 }
+  },
+  "interaction_prod": {
+    "command_palette_open_330_items_ms": 64,
+    "command_palette_keystroke_ms": { "js_range": [7.8, 36.6], "to_frame_range": [12, 39.7] },
+    "settings_open_first_ms": 313.3,
+    "settings_tab_first_visit_ms": [317.6, 316.8, 313.6, 317.5, 314.9, 321.2, 317.1],
+    "settings_tab_revisit_ms": [17.9, 19.3, 18.2, 18.4, 19.3, 17.3, 17.8, 18.4],
+    "component_library_open_ms": 24,
+    "component_library_select_component_ms": { "mean": 30.7, "max": 34 }
+  },
+  "leaks_prod": {
+    "_how": "15 round trips between a UI-heavy chat (map, timer, 6 diagrams, tables) and a chat with 10 live charts",
+    "tauri_event_callbacks": [4, 4],
+    "live_intervals_after_leaving": 0,
+    "leaflet_containers_after_leaving": 0,
+    "dom_nodes_same_chat_before_after": [3419, 3141],
+    "js_heap": "not measured: performance.memory is quantised and frozen in this Chrome, and vitro exposes no heap snapshot"
+  }
+}

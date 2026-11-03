@@ -1,0 +1,191 @@
+acp	100k chunks of 40 chars: read+parse+route per message	0.626	us	252 B/line
+acp	100k chunks of 40 chars: throughput	1597.735	k msg/s	403 MB/s
+acp	100k chunks of 40 chars: allocations per message	21.004	allocs	2722 B allocated per message
+acp	100k chunks of 40 chars: parse to Value	0.522	us	
+acp	100k chunks of 40 chars: parse floor (IgnoredAny)	0.167	us	lower bound for a typed/borrowed parse
+acp	200 messages of 100 KB: read+parse+route per message	47.446	us	101361 B/line
+acp	200 messages of 100 KB: throughput	21.077	k msg/s	2136 MB/s
+acp	200 messages of 100 KB: allocations per message	33.030	allocs	456162 B allocated per message
+acp	200 messages of 100 KB: parse to Value	20.012	us	
+acp	200 messages of 100 KB: parse floor (IgnoredAny)	11.896	us	lower bound for a typed/borrowed parse
+session	stream 1k chars, 0 prior: total apply+emit	0.108	ms	1000 chars in 40-char chunks (25 chunks), 0 prior entries
+session	stream 1k chars, 0 prior: per chunk at the end (mean of last 10%)	1.146	us	1000 chars in 40-char chunks (25 chunks), 0 prior entries
+session	stream 1k chars, 0 prior: IPC bytes emitted, last chunk	1209.000	B	1000 chars in 40-char chunks (25 chunks), 0 prior entries
+session	stream 1k chars, 0 prior: IPC bytes emitted, whole message	0.018	MB	1000 chars in 40-char chunks (25 chunks), 0 prior entries
+session	stream 1k chars, 0 prior: bytes allocated, whole message	0.146	MB	1000 chars in 40-char chunks (25 chunks), 0 prior entries; 490 allocations
+session	stream 10k chars, 0 prior: total apply+emit	0.651	ms	10000 chars in 40-char chunks (250 chunks), 0 prior entries
+session	stream 10k chars, 0 prior: per chunk at the end (mean of last 10%)	4.148	us	10000 chars in 40-char chunks (250 chunks), 0 prior entries
+session	stream 10k chars, 0 prior: IPC bytes emitted, last chunk	10312.000	B	10000 chars in 40-char chunks (250 chunks), 0 prior entries
+session	stream 10k chars, 0 prior: IPC bytes emitted, whole message	1.319	MB	10000 chars in 40-char chunks (250 chunks), 0 prior entries
+session	stream 10k chars, 0 prior: bytes allocated, whole message	9.428	MB	10000 chars in 40-char chunks (250 chunks), 0 prior entries; 5621 allocations
+session	stream 50k chars, 0 prior: total apply+emit	12.703	ms	50000 chars in 40-char chunks (1250 chunks), 0 prior entries
+session	stream 50k chars, 0 prior: per chunk at the end (mean of last 10%)	19.906	us	50000 chars in 40-char chunks (1250 chunks), 0 prior entries
+session	stream 50k chars, 0 prior: IPC bytes emitted, last chunk	50772.000	B	50000 chars in 40-char chunks (1250 chunks), 0 prior entries
+session	stream 50k chars, 0 prior: IPC bytes emitted, whole message	31.881	MB	50000 chars in 40-char chunks (1250 chunks), 0 prior entries
+session	stream 50k chars, 0 prior: bytes allocated, whole message	222.264	MB	50000 chars in 40-char chunks (1250 chunks), 0 prior entries; 30915 allocations
+session	stream 200k chars, 0 prior: total apply+emit	175.980	ms	200000 chars in 40-char chunks (5000 chunks), 0 prior entries
+session	stream 200k chars, 0 prior: per chunk at the end (mean of last 10%)	65.083	us	200000 chars in 40-char chunks (5000 chunks), 0 prior entries
+session	stream 200k chars, 0 prior: IPC bytes emitted, last chunk	202496.000	B	200000 chars in 40-char chunks (5000 chunks), 0 prior entries
+session	stream 200k chars, 0 prior: IPC bytes emitted, whole message	506.836	MB	200000 chars in 40-char chunks (5000 chunks), 0 prior entries
+session	stream 200k chars, 0 prior: bytes allocated, whole message	3518.783	MB	200000 chars in 40-char chunks (5000 chunks), 0 prior entries; 133563 allocations
+session	stream 50k chars, 250 prior: total apply+emit	12.056	ms	50000 chars in 40-char chunks (1250 chunks), 250 prior entries
+session	stream 50k chars, 250 prior: per chunk at the end (mean of last 10%)	16.993	us	50000 chars in 40-char chunks (1250 chunks), 250 prior entries
+session	stream 50k chars, 250 prior: IPC bytes emitted, last chunk	50774.000	B	50000 chars in 40-char chunks (1250 chunks), 250 prior entries
+session	stream 50k chars, 250 prior: IPC bytes emitted, whole message	31.884	MB	50000 chars in 40-char chunks (1250 chunks), 250 prior entries
+session	stream 50k chars, 250 prior: bytes allocated, whole message	222.404	MB	50000 chars in 40-char chunks (1250 chunks), 250 prior entries; 30916 allocations
+session	stream 50k chars, 2000 prior: total apply+emit	12.373	ms	50000 chars in 40-char chunks (1250 chunks), 2000 prior entries
+session	stream 50k chars, 2000 prior: per chunk at the end (mean of last 10%)	18.286	us	50000 chars in 40-char chunks (1250 chunks), 2000 prior entries
+session	stream 50k chars, 2000 prior: IPC bytes emitted, last chunk	50775.000	B	50000 chars in 40-char chunks (1250 chunks), 2000 prior entries
+session	stream 50k chars, 2000 prior: IPC bytes emitted, whole message	31.885	MB	50000 chars in 40-char chunks (1250 chunks), 2000 prior entries
+session	stream 50k chars, 2000 prior: bytes allocated, whole message	223.331	MB	50000 chars in 40-char chunks (1250 chunks), 2000 prior entries; 30916 allocations
+session	stream 10k chars: delta-only emit (alternative), total	0.060	ms	same chunks; IPC bytes 0.05 MB
+session	stream 50k chars: delta-only emit (alternative), total	0.273	ms	same chunks; IPC bytes 0.24 MB
+session	stream 200k chars: delta-only emit (alternative), total	1.007	ms	same chunks; IPC bytes 0.96 MB
+session	tool_call_update with 100 KB content: per update	35.354	us	content replaced whole each update (200 updates growing by 500 chars)
+session	tool_call_update x200 growing to 100 KB: IPC bytes	10.233	MB	whole tool entry re-emitted per update
+session	edit_form (200 entries)	145.475	us	emits the whole UI entry (1586 B) and re-serialises the whole transcript for the saver
+session	ui_get_values / form() (200 entries)	5.304	us	rposition + form_fields walk
+session	get_transcript clone+serialise (200 entries)	186.013	us	IPC reply 0.35 MB
+session	push_ui re-render same id (200 entries)	144.400	us	rposition scan + emit + whole-transcript save
+session	edit_form (1000 entries heavy)	2092.061	us	emits the whole UI entry (1587 B) and re-serialises the whole transcript for the saver
+session	ui_get_values / form() (1000 entries heavy)	4.850	us	rposition + form_fields walk
+session	get_transcript clone+serialise (1000 entries heavy)	2454.550	us	IPC reply 5.56 MB
+session	push_ui re-render same id (1000 entries heavy)	2105.894	us	rposition scan + emit + whole-transcript save
+session	edit_form (1000 entries heavy + 1 MB image in the form)	2701.226	us	emits the whole UI entry (1001645 B) and re-serialises the whole transcript for the saver
+session	ui_get_values / form() (1000 entries heavy + 1 MB image in the form)	4.725	us	rposition + form_fields walk
+session	get_transcript clone+serialise (1000 entries heavy + 1 MB image in the form)	2891.837	us	IPC reply 6.56 MB
+session	push_ui re-render same id (1000 entries heavy + 1 MB image in the form)	2852.219	us	rposition scan + emit + whole-transcript save
+startup	load_sessions 20 chats x 200 entries (7 MB)	4.809	ms	Hub::with_store, before the window is built (runs in setup)
+startup	load_sessions 100 chats x 200 entries (35 MB)	26.101	ms	Hub::with_store, before the window is built (runs in setup)
+startup	load_sessions 100 chats x 1000 entries (176 MB)	129.581	ms	Hub::with_store, before the window is built (runs in setup)
+session	chat B chunk latency p50 (uncontended)	8.417	us	3963 chunks
+session	chat B chunk latency p99 (uncontended)	18.000	us	
+session	chat B chunk latency max (uncontended)	199.625	us	
+session	chat B chunk latency p50 (while chat A (5000 entries, 28 MB) takes edits + get_transcript)	6.542	us	2706 chunks
+session	chat B chunk latency p99 (while chat A (5000 entries, 28 MB) takes edits + get_transcript)	12397.167	us	
+session	chat B chunk latency max (while chat A (5000 entries, 28 MB) takes edits + get_transcript)	13410.208	us	
+session	save() 200 entries (0.4 MB): serialise under the sessions lock	125.052	us	Shared::save: serde_json::to_vec of the whole transcript
+session	save() 200 entries (0.4 MB): background write (write_private)	225.046	us	saver thread; not under the lock
+session	save() 1000 entries (1.8 MB): serialise under the sessions lock	617.596	us	Shared::save: serde_json::to_vec of the whole transcript
+session	save() 1000 entries (1.8 MB): background write (write_private)	326.067	us	saver thread; not under the lock
+session	save() 1000 entries (5.6 MB): serialise under the sessions lock	2072.087	us	Shared::save: serde_json::to_vec of the whole transcript
+session	save() 1000 entries (5.6 MB): background write (write_private)	552.875	us	saver thread; not under the lock
+session	save() 5000 entries (27.8 MB): serialise under the sessions lock	10455.281	us	Shared::save: serde_json::to_vec of the whole transcript
+session	save() 5000 entries (27.8 MB): background write (write_private)	2798.238	us	saver thread; not under the lock
+startup	adopt_login_shell (/bin/zsh -ilc), mean of 5	702.657	ms	blocks run() before tauri::Builder; this machine's rc files
+startup	adopt_login_shell max	1280.212	ms	timeout is 5 s
+startup	Guide::sync first run (writes skills + plugin)	1.644	ms	background thread at startup
+startup	Guide::sync unchanged (reads + compares)	0.206	ms	also runs inside deliver() for every Claude session/new and session/load
+session	guide.deliver() for a Claude session/new (723 components)	22.527	ms	component_names twice (text + plugin sync) + file compare
+disk	agents::Store::find (agents.json read per prompt/new_session/auth)	19.082	us	2178 B file, 6 profiles
+disk	~/.claude.json read+parse (200 KB) per Claude session/new and session/load	0.156	ms	mcp_servers::inject -> read_source (this machine's files: 178 KB and 206 KB)
+disk	~/.claude.json read+parse (2 MB) per Claude session/new and session/load	1.271	ms	mcp_servers::inject -> read_source (this machine's files: 178 KB and 206 KB)
+disk	settings.json read (teach_agents per session/new)	16.229	us	
+disk	JsonFile::update (write + fsync + rename)	3.957	ms	e.g. record_report on every agent start
+startup	Library reload (0 local + 0 in a no library)	0.016	ms	Library::local() at startup: Pack::load of every installed library
+library	list() (0 local + 0 in a no library, 23 components)	0.094	ms	re-reads every local component file, recomputes uses for all
+library	catalog() (0 local + 0 in a no library)	0.185	ms	39 KB of JSON
+library	refresh_folders() (0 local + 0 in a no library)	0.019	us	runs on every list/get/prepare/save
+library	list_libraries() (0 local + 0 in a no library)	0.087	ms	Component library page
+library	agent_guide::component_names (0 local + 0 in a no library)	0.082	ms	per session/new (guide text) + per sync + ui_guide/resources/prompts
+library	prepare(ad-hoc 2,990 primitive nodes) (0 local + 0 in a no library)	2.773	ms	
+startup	Library reload (200 local + 0 in a no library)	0.038	ms	Library::local() at startup: Pack::load of every installed library
+library	list() (200 local + 0 in a no library, 223 components)	7.197	ms	re-reads every local component file, recomputes uses for all
+library	catalog() (200 local + 0 in a no library)	6.989	ms	136 KB of JSON
+library	refresh_folders() (200 local + 0 in a no library)	0.025	us	runs on every list/get/prepare/save
+library	list_libraries() (200 local + 0 in a no library)	6.163	ms	Component library page
+library	agent_guide::component_names (200 local + 0 in a no library)	6.237	ms	per session/new (guide text) + per sync + ui_guide/resources/prompts
+library	get(local) (200 local + 0 in a no library)	38.376	us	reads its file from disk
+library	prepare(local component, 1 nested) (200 local + 0 in a no library)	69.935	us	
+library	prepare(ad-hoc tree: 220 local component refs, ~2.9k expanded nodes) (200 local + 0 in a no library)	7.384	ms	validate resolves each ref from disk; expansion caches per call
+library	prepare(ad-hoc 2,990 primitive nodes) (200 local + 0 in a no library)	2.670	ms	
+startup	Library reload (200 local + 500 in a folder library)	35.477	ms	Library::local() at startup: Pack::load of every installed library
+library	list() (200 local + 500 in a folder library, 723 components)	11.583	ms	re-reads every local component file, recomputes uses for all
+library	catalog() (200 local + 500 in a folder library)	12.907	ms	392 KB of JSON
+library	refresh_folders() (200 local + 500 in a folder library)	934.279	us	runs on every list/get/prepare/save
+library	list_libraries() (200 local + 500 in a folder library)	7.829	ms	Component library page
+library	agent_guide::component_names (200 local + 500 in a folder library)	11.244	ms	per session/new (guide text) + per sync + ui_guide/resources/prompts
+library	get(local) (200 local + 500 in a folder library)	868.064	us	reads its file from disk
+library	prepare(local component, 1 nested) (200 local + 500 in a folder library)	873.922	us	
+library	prepare(ad-hoc tree: 220 local component refs, ~2.9k expanded nodes) (200 local + 500 in a folder library)	8.648	ms	validate resolves each ref from disk; expansion caches per call
+library	prepare(ad-hoc tree: 220 library refs, ~2.9k expanded nodes) (200 local + 500 in a folder library)	4.073	ms	
+library	prepare(library component) (200 local + 500 in a folder library)	821.617	us	
+library	prepare(ad-hoc 2,990 primitive nodes) (200 local + 500 in a folder library)	3.973	ms	
+startup	Library reload (200 local + 500 in a git library)	35.441	ms	Library::local() at startup: Pack::load of every installed library
+library	list() (200 local + 500 in a git library, 723 components)	10.548	ms	re-reads every local component file, recomputes uses for all
+library	catalog() (200 local + 500 in a git library)	11.496	ms	392 KB of JSON
+library	refresh_folders() (200 local + 500 in a git library)	0.035	us	runs on every list/get/prepare/save
+library	list_libraries() (200 local + 500 in a git library)	6.208	ms	Component library page
+library	agent_guide::component_names (200 local + 500 in a git library)	10.295	ms	per session/new (guide text) + per sync + ui_guide/resources/prompts
+library	get(local) (200 local + 500 in a git library)	46.527	us	reads its file from disk
+library	prepare(local component, 1 nested) (200 local + 500 in a git library)	75.304	us	
+library	prepare(ad-hoc tree: 220 local component refs, ~2.9k expanded nodes) (200 local + 500 in a git library)	7.369	ms	validate resolves each ref from disk; expansion caches per call
+library	prepare(ad-hoc tree: 220 library refs, ~2.9k expanded nodes) (200 local + 500 in a git library)	2.739	ms	
+library	prepare(library component) (200 local + 500 in a git library)	21.433	us	
+library	prepare(ad-hoc 2,990 primitive nodes) (200 local + 500 in a git library)	2.716	ms	
+ui_mcp	HTTP ping round trip (thread per request)	98.844	us	loopback, Connection: close
+ui_mcp	tools/list round trip	126.654	us	tools() JSON rebuilt per call
+ui_mcp	ui_catalog round trip (23 components, 200-entry chat)	0.398	ms	43 KB reply; rebuilt per call, not cached
+ui_mcp	ui_catalog handler only (23 components, 200-entry chat)	0.213	ms	
+ui_mcp	ui_guide round trip (23 components, 200-entry chat)	0.259	ms	component_names -> library.list()
+ui_mcp	ui_render 2,990-node tree, by id (23 components, 200-entry chat)	6.527	ms	223 KB request; prepare + inline_files + push_ui (emit + whole-transcript save)
+ui_mcp	ui_render bundled component, by id (23 components, 200-entry chat)	0.638	ms	
+ui_mcp	  of which prepare() of the 2,990-node tree (23 components, 200-entry chat)	2.865	ms	
+ui_mcp	ui_get_values round trip (23 components, 200-entry chat)	100.291	us	
+ui_mcp	ui_set_values round trip (23 components, 200-entry chat)	0.591	ms	includes whole-transcript save
+ui_mcp	HTTP ping round trip (thread per request)	103.821	us	loopback, Connection: close
+ui_mcp	tools/list round trip	131.368	us	tools() JSON rebuilt per call
+ui_mcp	ui_catalog round trip (723 components, 1000-entry chat)	14.998	ms	435 KB reply; rebuilt per call, not cached
+ui_mcp	ui_catalog handler only (723 components, 1000-entry chat)	13.377	ms	
+ui_mcp	ui_guide round trip (723 components, 1000-entry chat)	11.844	ms	component_names -> library.list()
+ui_mcp	ui_render 2,990-node tree, by id (723 components, 1000-entry chat)	8.021	ms	223 KB request; prepare + inline_files + push_ui (emit + whole-transcript save)
+ui_mcp	ui_render bundled component, by id (723 components, 1000-entry chat)	2.461	ms	
+ui_mcp	  of which prepare() of the 2,990-node tree (723 components, 1000-entry chat)	3.984	ms	
+ui_mcp	ui_get_values round trip (723 components, 1000-entry chat)	179.154	us	
+ui_mcp	ui_set_values round trip (723 components, 1000-entry chat)	1.195	ms	includes whole-transcript save
+integrations	github_graphql round trip (local stand-in, shared client)	107.456	us	includes integrations.json read for the token
+integrations	github_get (diff, 20 KB) round trip	111.394	us	
+integrations	gitlab_get round trip	85.170	us	reads integrations.json twice (auth + base url)
+integrations	linear graphql round trip	91.455	us	
+disk	integrations.json read per API request (token())	14.095	us	3 services stored
+integrations	graphql with a new reqwest::Client per request (alternative, not what yaah does)	197.823	us	loopback, no TLS
+integrations	requests sent for 5 identical concurrent reads	5.000	requests	no in-flight dedup or short cache for GitHub/Linear/GitLab
+sources	docker.containers (docker ps -a)	90.592	ms	a docker CLI process per read (shared for 1 s between identical reads)
+sources	docker.stats (all, --no-stream)	2074.671	ms	a docker CLI process per read (shared for 1 s between identical reads)
+sources	docker.logs --tail 200	24.783	ms	a docker CLI process per read (shared for 1 s between identical reads)
+sources	docker.stats x4 concurrent identical reads	2074.982	ms	docker_shared: one CLI run serves all four
+sources	postgres: open() a connection	3.888	ms	TCP + startup + auth (sslmode prefer), per query
+sources	postgres: check_role()	0.501	ms	once per 60 s per URL (trusted_roles)
+sources	postgres.query end to end (role cached)	4.172	ms	connect + begin + prepare + wrapped query, new connection each time
+sources	postgres.query on a reused connection (alternative)	0.920	ms	same statements, no connect
+sources	postgres.schema end to end	8.132	ms	
+disk	connections.json read per postgres read	15.362	us	JsonFile::read: open + read + parse, 5 connections
+startup	Sources::new() (first sysinfo process scan)	6.050	ms	in setup, before the window shows
+sources	system: one refresh (snapshot past FRESH)	22.717	ms	745 processes on this machine; all refreshed with cpu+memory, disks too
+sources	system: one refresh p99	23.761	ms	
+sources	system: cached read within FRESH (1 s)	1.419	us	Value clone
+sources	system polled every 2 s by 1 live node(s): CPU	1.023	% of a core	225 ms CPU over 22 s, 10 reads
+sources	system polled every 2 s by 4 live node(s): CPU	1.782	% of a core	392 ms CPU over 22 s, 40 reads
+sources	system polled every 2 s by 8 live node(s): CPU	2.755	% of a core	606 ms CPU over 22 s, 80 reads
+e2e	5,000 chunks x 40 chars, a new message every 50 chunks (2 KB messages): wall time	8.598	ms	581528 chunks/s; yaah CPU 10 ms
+e2e	5,000 chunks x 40 chars, a new message every 50 chunks (2 KB messages): IPC bytes	6.010	MB	5003 events
+e2e	5,000 chunks x 40 chars into one 200 KB message: wall time	159.303	ms	31387 chunks/s; yaah CPU 160 ms
+e2e	5,000 chunks x 40 chars into one 200 KB message: IPC bytes	501.011	MB	5003 events
+e2e	10,000 chunks x 40 chars into one 400 KB message: wall time	620.174	ms	16125 chunks/s; yaah CPU 630 ms
+e2e	10,000 chunks x 40 chars into one 400 KB message: IPC bytes	2002.021	MB	10003 events
+agents	new chat, agent not running: spawn + initialize + session/new (scripted Rust agent)	8.621	ms	includes record_report (agents.json write + fsync)
+agents	new chat, agent running: session/new only	0.147	ms	
+agents	claude-agent-acp via npx -y, run 1: time to initialize answer	431.359	ms	children RSS 246 MB after 3 s
+agents	claude-agent-acp via npx -y, run 2: time to initialize answer	404.571	ms	children RSS 245 MB after 3 s
+agents	claude-agent-acp via npx -y, run 3: time to initialize answer	417.018	ms	children RSS 245 MB after 3 s
+agents	claude-agent-acp via node <cached dist/index.js>, run 1: time to initialize answer	139.987	ms	children RSS 129 MB after 3 s
+agents	claude-agent-acp via node <cached dist/index.js>, run 2: time to initialize answer	136.860	ms	children RSS 130 MB after 3 s
+agents	claude-agent-acp via node <cached dist/index.js>, run 3: time to initialize answer	127.082	ms	children RSS 130 MB after 3 s
+webview-proxy	eval of one session-entry script, 1k-char message (V8 in node v26.11.1)	8.3	us	estimate: excludes React/markdown re-render; WebKit JSC differs
+webview-proxy	eval of one session-entry script, 10k-char message (V8 in node v26.11.1)	27.0	us	estimate: excludes React/markdown re-render; WebKit JSC differs
+webview-proxy	eval of one session-entry script, 50k-char message (V8 in node v26.11.1)	945.3	us	estimate: excludes React/markdown re-render; WebKit JSC differs
+webview-proxy	eval of one session-entry script, 200k-char message (V8 in node v26.11.1)	746.8	us	estimate: excludes React/markdown re-render; WebKit JSC differs
+idle	yaah process CPU, 30 samples at 1 s after 20 s settle	0.0	%	release build, empty HOME, no chats; 0.20 s CPU total incl. startup
+idle	yaah process RSS	108	MB	excludes WebKit WebContent/GPU/Network XPC processes
+idle	yaah threads	31	threads	
+idle	yaah open files	69	fds	lsof

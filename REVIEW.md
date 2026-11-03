@@ -1,6 +1,6 @@
 # Review: open work items from the research
 
-Updated 3 November 2026. One place to review what the recent research found and what is still to decide or build.
+Updated 3 November 2026 (performance review added). One place to review what the recent research found and what is still to decide or build.
 Each item links to its source. Tick an item or write a decision next to it, and it becomes the next task.
 
 **Sources:**
@@ -8,15 +8,7 @@ Each item links to its source. Tick an item or write a decision next to it, and 
 - Screenshots and experiment notes: [`docs/experiments/`](docs/experiments/)
 - Plan: [`PLAN.md`](PLAN.md)
 
-**State of the code:** everything below is built but **uncommitted** on `main`, since the last commit `2695665` (security fixes). All checks pass:
-- `cargo fmt`
-- `clippy -D warnings`
-- Rust: 149 lib tests, plus the acp_e2e, docker and postgres suites
-- `cargo deny`
-- `pnpm check`: 116 tests
-- `pnpm build`
-
-What's in that uncommitted work:
+**State of the code:** the features are committed on `main` as `4a14b72`, after the security fixes in `2695665`. That commit covers:
 - component libraries
 - brand
 - the "Assembling UI" card
@@ -24,6 +16,16 @@ What's in that uncommitted work:
 - projects from tracker items
 - GitLab
 - teaching agents yaah's UI
+
+All checks pass:
+- `cargo fmt`
+- `clippy -D warnings`
+- Rust: 149 lib tests, plus the acp_e2e, docker and postgres suites
+- `cargo deny`
+- `pnpm check`: 116 tests
+- `pnpm build`
+
+The performance review (section 9) is research only: it changed no app code.
 
 ---
 
@@ -123,8 +125,28 @@ Screenshots of earlier UI checks: [earlier-ui-checks](docs/experiments/earlier-u
 - [ ] **The Component library page** is cramped below about 700 px wide (two fixed-width side columns).
 - [ ] **Streamed messages** slow down as a reply gets long (cost grows with the square of its length).
 
-## 9. Housekeeping
+## 9. Performance
 
-- [ ] **Commit the work above** (needs your OK; the earlier permission covered the security review only).
+Source: [performance-review.md](docs/research/performance-review.md) (measured numbers, file:line, effort, expected gain);
+evidence in [docs/experiments/2026-11-03-performance/](docs/experiments/2026-11-03-performance/).
+
+yaah is fast at rest (0 % CPU idle, first paint about 20 ms, smooth scrolling, no leaks). The costs grow with use:
+
+- [ ] **9.1 Long replies cost O(n²).** A 200k-character reply sends 507 MB from Rust to the interface, and each chunk re-parses all the Markdown (about 21 ms per chunk at 50k). Fix: emit only the new text, coalesce emits, and use Markdown memoised per block. **Highest impact.** (M, both sides)
+- [ ] **9.2 Saves block every chat.** The whole transcript is serialised under one global lock (another chat's p99 goes from 18 µs to 12 ms). Fix: per-session locks and lazy saves. (M)
+- [ ] **9.3 Launch waits 0.7–1.3 s for the login-shell PATH.** Fix: read it in the background, and load transcripts lazily. (S/M)
+- [ ] **9.4 Opening a chat redraws everything** (heavy chat 868 ms, mostly Mermaid). Fix: an SVG cache and `content-visibility`. (S–M)
+- [ ] **9.5 Every chunk re-renders the whole app,** even for background chats. Fix: a per-session store. (M)
+- [ ] **9.6 First visit to a Settings tab or lazy UI waits 300 ms.** Fix: preload. (S)
+- [ ] **9.7 The component library is re-read on every call** (catalog 15 ms, `session/new` +22 ms with a large library). Fix: an in-memory cache. (M)
+- [ ] **9.8 Agents start through `npx -y`** (+280 ms, +115 MB each). Fix: run the cached binary. (S–M)
+- [ ] **9.9 Live sources over-poll** (offscreen nodes, duplicate API reads, `docker.stats` takes 2 s but is shared for 1 s), and **Postgres connects per query** (+3.3 ms). (S each)
+- [ ] **9.10 Large diffs are wrong above the LCS cap** (+4999 −4999) and slow to review. Fix: Myers diff and windowing. (M)
+- [ ] **9.11 Smaller items:** palette search per keystroke, theme flash at startup, transcripts never evicted, bundle trims. (S each)
+- [ ] **Bug:** "stay at bottom" is shared across chats (`chat.tsx:77-79`). Fix: key `Transcript` by session. (S)
+
+## 10. Housekeeping
+
+- [x] **Committed** as `4a14b72`; the performance review and these doc updates are not committed yet.
 - [ ] **`src-tauri/src/live_ui_review.rs`** (the live UI test, `#[ignore]`) is now in the repo. Keep it?
 - [ ] **`PRODUCT.md`** (the design-context file) is in `app/`. Keep it?
