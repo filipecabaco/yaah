@@ -38,3 +38,19 @@ export function fuzzyRank<T>(items: T[], query: string, fields: (item: T) => (st
     .sort((a, b) => b.s - a.s)
     .map((x) => x.item);
 }
+
+/**
+ * The best `limit` matches, best first, with the best score (0: nothing matched) and how many
+ * were left out. An empty query keeps the original order.
+ */
+export function rankTop<T>(
+  items: T[],
+  query: string,
+  fields: (item: T) => (string | null | undefined)[],
+  limit = Infinity,
+): { shown: T[]; best: number; more: number } {
+  if (!query.trim()) return { shown: items.slice(0, limit), best: 1, more: Math.max(0, items.length - limit) };
+  const scored = items.map((item) => ({ item, s: fuzzyBest(query, fields(item)) })).filter((x) => x.s > 0);
+  scored.sort((a, b) => b.s - a.s);
+  return { shown: scored.slice(0, limit).map((x) => x.item), best: scored[0]?.s ?? 0, more: Math.max(0, scored.length - limit) };
+}

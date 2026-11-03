@@ -149,9 +149,56 @@ const markdownReply: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
+/** A `ui_render` call as Claude streams it: pending with no input, in progress as the input arrives, then the UI and the call completed. */
+const deployTree = {
+  type: "card",
+  props: { title: "Deploys" },
+  children: [
+    {
+      type: "table",
+      props: {
+        columns: [
+          { key: "service", label: "Service" },
+          { key: "status", label: "Status" },
+        ],
+        rows: [
+          { service: "api", status: "live" },
+          { service: "web", status: "rolling out" },
+        ],
+      },
+    },
+  ],
+};
+const renderCall = (status: "pending" | "in_progress" | "completed", rawInput: unknown): Entry => ({
+  type: "tool",
+  toolCallId: "toolu_assemble",
+  title: "mcp__yaah-ui__ui_render",
+  kind: "other",
+  status,
+  content: status === "completed" ? [{ type: "content", content: { type: "text", text: "Rendered." } }] : [],
+  locations: [],
+  rawInput,
+});
+const assembling: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  { event: "session-entry", index: 1, entry: renderCall("pending", {}) },
+  { event: "session-entry", index: 1, entry: renderCall("in_progress", { title: "Deploys" }) },
+  { event: "session-entry", index: 1, entry: renderCall("in_progress", { title: "Deploys", tree: deployTree }) },
+  {
+    event: "session-entry",
+    index: 2,
+    entry: { type: "ui", askId: null, answer: null, title: "Deploys", component: null, version: null, tree: deployTree, props: {} },
+  },
+  { event: "session-entry", index: 1, entry: renderCall("completed", { title: "Deploys", tree: deployTree }) },
+  { event: "session-entry", index: 3, entry: { type: "agent", text: "Here are the deploys: web is still rolling out.", messageId: null } },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
 const routes: [RegExp, Recording][] = [
   [/big diff/i, bigDiff],
+  [/assembl|deploys/i, assembling],
   [/\blinks?\b|markdown/i, markdownReply],
   [/notices|mcp servers?\b/i, notices],
   [/yaah (ui tools|components)|docker|bug report/i, recordings.pack],
@@ -172,6 +219,18 @@ function shiftTimes<T>(v: T, ms: number): T {
   return v;
 }
 
+/** Characters per `session-append` when a recorded reply is streamed. */
+const STREAM_CHUNK = 48;
+/** Entries `get_entries` returns when not told how many. */
+const ENTRIES_PAGE = 200;
+
+/** Two UI entries that differ only in their draft (what `session-draft` carries). */
+function sameButDraft(a: Extract<Entry, { type: "ui" }>, b: Extract<Entry, { type: "ui" }>): boolean {
+  const { draft: _a, draftBy: _ab, ...restA } = a;
+  const { draft: _b, draftBy: _bb, ...restB } = b;
+  return JSON.stringify(restA) === JSON.stringify(restB);
+}
+
 export function stopTurn(turn: Turn | undefined) {
   if (!turn) return;
   turn.cancelled = true;
@@ -184,8 +243,36 @@ export function chatReplies(m: Mock): Replies {
   const shown = (sessionId: string, index: number) => state.transcripts[sessionId]?.[index];
 
   const showInfo = (s: SessionInfo) => m.emit("session-info", s);
-  const show = (sessionId: string, index: number, entry: Entry) => {
-    (state.transcripts[sessionId] ??= [])[index] = entry;
+  /**
+   * Shows `entry` at `index` the way session.rs does: an agent message or thought
+   * that starts or grows streams as `session-append`s (one per chunk, `len` in UTF-16
+   * code units), a form whose draft alone changed is a `session-draft`, and anything
+   * else a `session-entry`.
+   */
+  const show = async (sessionId: string, index: number, entry: Entry) => {
+    const list = (state.transcripts[sessionId] ??= []);
+    const prev = list[index];
+    if (prev?.type === "ui" && entry.type === "ui" && sameButDraft(prev, entry)) {
+      list[index] = entry;
+      return m.emit("session-draft", { sessionId, index, draft: entry.draft ?? null, draftBy: entry.draftBy ?? null });
+    }
+    if ((entry.type === "agent" || entry.type === "thought") && (!prev || (prev.type === entry.type && entry.text.startsWith(prev.text)))) {
+      let shown = prev?.type === entry.type ? prev.text.length : Math.min(entry.text.length, STREAM_CHUNK);
+      if (!prev || prev.type !== entry.type) {
+        list[index] = { ...entry, text: entry.text.slice(0, shown) };
+        await m.emit("session-entry", { sessionId, index, entry: list[index] });
+      }
+      while (shown < entry.text.length) {
+        await m.wait(16);
+        const text = entry.text.slice(shown, shown + STREAM_CHUNK);
+        shown += text.length;
+        list[index] = { ...entry, text: entry.text.slice(0, shown) };
+        await m.emit("session-append", { sessionId, index, field: "text", text, len: shown });
+      }
+      list[index] = entry;
+      return;
+    }
+    list[index] = entry;
     return m.emit("session-entry", { sessionId, index, entry });
   };
 
@@ -253,6 +340,15 @@ export function chatReplies(m: Mock): Replies {
       return [p, s];
     },
     get_transcript: ({ sessionId }: { sessionId: string }) => ({ info: session(sessionId), entries: state.transcripts[sessionId] ?? [] }),
+    // A page of the transcript; without `from` and `limit`, the last 200 entries (session.rs `PAGE`).
+    get_entries: ({ sessionId, from, limit }: { sessionId: string; from?: number | null; limit?: number | null }) => {
+      session(sessionId);
+      const all = state.transcripts[sessionId] ?? [];
+      const total = all.length;
+      const start = Math.min(total, from ?? Math.max(0, total - (limit ?? ENTRIES_PAGE)));
+      const end = Math.min(total, limit == null ? (from == null ? start + ENTRIES_PAGE : total) : start + limit);
+      return { entries: all.slice(start, end), from: start, total };
+    },
     rename_session: async ({ sessionId, title }: { sessionId: string; title: string }): Promise<SessionInfo> => {
       const s = Object.assign(session(sessionId), { title });
       await showInfo(s);
@@ -295,6 +391,7 @@ export function chatReplies(m: Mock): Replies {
       const ui = shown(sessionId, index);
       if (ui?.type !== "ui") return null;
       const by = Object.fromEntries(Object.keys(values).map((k) => [k, "user" as const]));
+      // Only the draft goes out (session-draft), not the whole entry.
       await show(sessionId, index, { ...ui, draft: { ...ui.draft, ...values }, draftBy: { ...ui.draftBy, ...by } });
       return null;
     },

@@ -1,6 +1,6 @@
 // Agent-built UI rendered for real: a recorded component, and what untrusted
 // trees can and can't do (links, images, frames, raw HTML).
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import liveUi from "@/dev/fixtures/live-ui.json";
@@ -109,6 +109,27 @@ describe("untrusted UI", () => {
     expect(sandbox).not.toContain("allow-popups");
     expect(screen.getByText("Todo — local · index.html")).toBeInTheDocument();
     expect(screen.getAllByText(/Can't preview/)).toHaveLength(3);
+  });
+
+  it("frames each chat's own preview origin (a port per chat, ui_mcp.rs) the same way", () => {
+    // Each chat's previews are served on a port of its own, with a 32-hex folder id.
+    const a = "http://127.0.0.1:53211/preview/9f86d081884c7d659a2feaa0c55ad015/index.html";
+    const b = "http://127.0.0.1:61002/preview/0123456789abcdef0123456789abcdef/report/page.html";
+    render(
+      <UiTree
+        tree={{
+          type: "stack",
+          children: [
+            { type: "browser", props: { src: a, title: "A" } },
+            { type: "browser", props: { src: b, title: "B" } },
+          ],
+        }}
+        props={{}}
+      />,
+    );
+    expect([...document.querySelectorAll("iframe")].map((f) => f.getAttribute("src"))).toEqual([a, b]);
+    expect(screen.getByText("A — local · index.html")).toBeInTheDocument();
+    expect(screen.getByText("B — local · report/page.html")).toBeInTheDocument();
   });
 
   it("fetches nothing for any other page until the user loads it", async () => {
@@ -294,5 +315,58 @@ describe("a form outside a chat", () => {
     await user.click(screen.getByRole("button", { name: "Go" }));
     expect(onSubmit).toHaveBeenCalledWith({ size: "M" });
     expect(await screen.findByText("Sent")).toBeInTheDocument();
+  });
+});
+
+describe("live sources", () => {
+  it("stop polling while scrolled out of view, and read at once when back", async () => {
+    // Drive visibility by hand: one IntersectionObserver per live node.
+    const observers: IntersectionObserverCallback[] = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        constructor(cb: IntersectionObserverCallback) {
+          observers.push(cb);
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const calls = ipcCalls();
+      const reads = () => calls.mock.calls.filter(([cmd]) => cmd === "read_source").length;
+      const scroll = (visible: boolean) =>
+        act(() => observers.forEach((cb) => cb([{ isIntersecting: visible } as IntersectionObserverEntry], {} as IntersectionObserver)));
+      render(
+        <UiTree
+          tree={{
+            type: "live",
+            props: { source: { kind: "system" }, every: 1000 },
+            children: [{ type: "text", props: { text: "cpu {{data.cpu}}" } }],
+          }}
+          props={{}}
+        />,
+      );
+      await waitFor(() => expect(reads()).toBe(1));
+      await act(() => vi.advanceTimersByTimeAsync(2050));
+      expect(reads()).toBeGreaterThanOrEqual(2);
+
+      scroll(false);
+      const hidden = reads();
+      await act(() => vi.advanceTimersByTimeAsync(5000));
+      expect(reads(), "no polling while out of view").toBe(hidden);
+
+      scroll(true);
+      await act(() => vi.advanceTimersByTimeAsync(20));
+      expect(reads(), "one read as soon as it is back").toBe(hidden + 1);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
   });
 });

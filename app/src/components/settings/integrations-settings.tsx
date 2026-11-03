@@ -3,9 +3,24 @@
 // Connecting: OAuth with no client secret (GitHub's device code, Linear's and
 // GitLab's browser sign-in), or a personal API key. GitLab can be self-managed. Rust holds every token;
 // this screen only ever sees who is connected.
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Check, Copy, Database, ExternalLink, GitMerge, GitPullRequest, KeyRound, Loader2, Plus, SquareKanban, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  Copy,
+  Database,
+  ExternalLink,
+  GitMerge,
+  GitPullRequest,
+  KeyRound,
+  Loader2,
+  Plus,
+  RotateCw,
+  SquareKanban,
+  Trash2,
+} from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +29,7 @@ import { Separator } from "@/components/ui/separator";
 import { ErrorText } from "@/components/error-text";
 import { connectionReady } from "@/components/settings/form-state";
 import { NavHeading, NavNote, NavRow, Panel, PanelHeader, TwoPane } from "@/components/settings/parts";
-import { api, type ConnectionInfo, type IntegrationStart, type IntegrationStatus } from "@/lib/api";
+import { api, integrationState, type ConnectionInfo, type IntegrationStart, type IntegrationState, type IntegrationStatus } from "@/lib/api";
 import { hostOf, openExternal } from "@/lib/links";
 import { cn } from "@/lib/utils";
 
@@ -32,7 +47,13 @@ const VIA: Record<string, string> = { oauth: "OAuth", key: "API key", env: "envi
 /** A background sign-in finished (Rust's "integration-changed" event). */
 type Outcome = { service: string; ok: boolean; error?: string | null };
 
-const statusText = (s: IntegrationStatus) => (s.needsReauth ? "needs reconnecting" : s.connected ? "connected" : "not connected");
+const STATUS_TEXT: Record<IntegrationState, string> = {
+  connected: "connected",
+  refused: "credential refused",
+  needsReauth: "needs reconnecting",
+  disconnected: "not connected",
+};
+const statusText = (s: IntegrationStatus) => STATUS_TEXT[integrationState(s)];
 
 export function IntegrationsSettings({ initial }: { initial?: string }) {
   const [services, setServices] = useState<IntegrationStatus[] | null>(null);
@@ -93,7 +114,12 @@ export function IntegrationsSettings({ initial }: { initial?: string }) {
 }
 
 function StatusDot({ s }: { s: IntegrationStatus }) {
-  const tone = s.needsReauth ? "bg-amber-500" : s.connected ? "bg-green-600 dark:bg-green-500" : "bg-muted-foreground/30";
+  const tone = {
+    connected: "bg-green-600 dark:bg-green-500",
+    refused: "bg-destructive",
+    needsReauth: "bg-amber-500",
+    disconnected: "bg-muted-foreground/30",
+  }[integrationState(s)];
   return <span className={cn("size-2 shrink-0 rounded-full", tone)} aria-hidden />;
 }
 
@@ -154,17 +180,28 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
   const saveKey = () => run("key", () => api.integrationSetKey(s.id, key, base || undefined).then(() => setKey("")));
 
   const canDisconnect = s.connected && (s.via === "oauth" || s.via === "key");
+  const state = integrationState(s);
+  // Reconnecting: sign in again where there's an app for it, else a new key in the field below.
+  const keyField = useRef<HTMLInputElement>(null);
+  const reconnect = () => {
+    if (s.flow === "key" || s.via === "key" || s.via === "env") keyField.current?.focus();
+    else void connect();
+  };
   return (
     <Panel>
       <PanelHeader
         icon={ICON[s.id]}
         title={s.label}
         extra={
-          s.needsReauth ? (
+          state === "refused" ? (
+            <Badge variant="destructive" className="gap-1">
+              <AlertTriangle className="size-3" /> Credential refused
+            </Badge>
+          ) : state === "needsReauth" ? (
             <Badge variant="outline" className="border-amber-500/50 text-amber-700 dark:text-amber-400">
               Needs reconnecting
             </Badge>
-          ) : s.connected ? (
+          ) : state === "connected" ? (
             <Badge variant="secondary" className="gap-1">
               <Check className="size-3" /> Connected{s.account ? ` as ${s.account}` : ""}
             </Badge>
@@ -181,6 +218,24 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
           </p>
         )}
       </PanelHeader>
+
+      {state === "refused" && !start && (
+        <Alert variant="destructive">
+          <AlertTriangle />
+          <AlertTitle>
+            {s.label} refused the {s.via === "oauth" ? "sign-in" : s.via === "env" ? `token in ${s.keyEnv}` : "saved key"}
+          </AlertTitle>
+          <AlertDescription className="flex flex-col items-start gap-2">
+            <span>
+              {(s.message ?? `${s.label} refused the credential`).replace(/[.\s]*$/, ".")} Its live views and issues won't load until you reconnect
+              {s.via === "env" ? ` or change ${s.keyEnv}` : ""}.
+            </span>
+            <Button size="sm" variant="outline" onClick={reconnect} disabled={!!busy}>
+              {busy === "connect" ? <Loader2 className="animate-spin" /> : <RotateCw />} Reconnect
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {s.id === "github" && <GitHubAccessNote />}
 
@@ -294,6 +349,7 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
         </Label>
         <div className="flex gap-2">
           <Input
+            ref={keyField}
             id={`key-${s.id}`}
             type="password"
             autoComplete="off"

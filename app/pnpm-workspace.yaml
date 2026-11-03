@@ -1,0 +1,4 @@
+# pnpm settings (pnpm 10+ reads them here, not from package.json).
+overrides:
+  # One immer: recharts asks for ^10 (and only uses castDraft, unchanged in 11), Redux Toolkit for ^11.
+  immer: 11.2.9

@@ -200,7 +200,7 @@ describe("the Component library", () => {
     const nav = await screen.findByRole("navigation", { name: "Components" });
     const writeText = spyClipboard();
 
-    const row = within(nav).getByRole("button", { name: /platform\/host-health/ });
+    const row = await within(nav).findByRole("button", { name: /platform\/host-health/ });
     const menu = await rightClick(row);
     expect(items(menu)).toEqual(["Open", "Copy to my collection…", "Copy name"]);
     await user.click(within(menu).getByRole("menuitem", { name: "Copy name" }));

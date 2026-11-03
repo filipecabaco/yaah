@@ -21,11 +21,13 @@ export function useAction<K extends string>() {
   return { busy, failed, run };
 }
 
-export type Pair = { id: number; name: string; value: string };
+/** A key/value row. `from`: the name it was loaded with (a masked secret stays tied to it). */
+export type Pair = { id: number; name: string; value: string; from?: string };
 
 let lastPairId = 0;
 export const newPair = (name = "", value = ""): Pair => ({ id: ++lastPairId, name, value });
-export const toPairs = (record: Record<string, string>): Pair[] => Object.entries(record).map(([name, value]) => newPair(name, value));
+export const toPairs = (record: Record<string, string>): Pair[] =>
+  Object.entries(record).map(([name, value]) => ({ ...newPair(name, value), from: name }));
 /** Rows with a name, as a record (blank rows are dropped). */
 export const fromPairs = (rows: Pair[]): Record<string, string> =>
   Object.fromEntries(rows.filter((r) => r.name.trim()).map((r) => [r.name, r.value]));

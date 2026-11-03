@@ -5,6 +5,8 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>yaah</title>
+    <!-- The last theme, before anything paints (see public/theme-boot.js). -->
+    <script src="/theme-boot.js"></script>
     <!--
       The start-up indicator: the yaah mark's tiles sliding together, holding, and sliding on, in a
       loop. It lives here, outside the bundle, so it shows before any script runs; React replaces it
@@ -20,6 +22,15 @@
           background: #0a0a0a;
           color: #fafafa;
         }
+      }
+      /* A theme from the last run (theme-boot.js) wins over the OS setting. */
+      html[data-theme="light"] {
+        background: var(--background, #fff);
+        color: var(--foreground, #18181b);
+      }
+      html[data-theme="dark"] {
+        background: var(--background, #0a0a0a);
+        color: var(--foreground, #fafafa);
       }
       .yaah-boot {
         position: fixed;

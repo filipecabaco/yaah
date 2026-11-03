@@ -8,7 +8,10 @@ import { api } from "@/lib/api";
 
 async function openLibrary(user: ReturnType<typeof renderApp>["user"]) {
   await user.click(await screen.findByRole("button", { name: "Component library" }));
-  return screen.findByRole("navigation", { name: "Components" });
+  const nav = await screen.findByRole("navigation", { name: "Components" });
+  // The page loads on first use, then its components.
+  await within(nav).findAllByRole("heading");
+  return nav;
 }
 
 describe("Component library", () => {
@@ -107,5 +110,29 @@ describe("Component library", () => {
 
     await user.click(within(dialog).getByRole("button", { name: "Done" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Share as library" })).toBeNull());
+  });
+});
+
+describe("the Component library in a narrow window", () => {
+  it("shows the list or the component, one at a time, with a way back to the list", async () => {
+    const { user } = renderApp();
+    const nav = await openLibrary(user);
+    const page = nav.closest("main")!;
+    // A container query on the page: under 36rem wide, one pane at a time (happy-dom has no layout,
+    // so this checks which pane is up and the classes that hide the other).
+    expect(page).toHaveClass("@container/library");
+    const list = nav.parentElement!;
+    expect(list).toHaveClass("@max-xl/library:w-full");
+
+    await user.click(await within(nav).findByRole("button", { name: /platform\/host-health/ }));
+    expect(page).toHaveAttribute("data-pane", "detail");
+    expect(list).toHaveClass("@max-xl/library:hidden");
+    expect(await screen.findByRole("heading", { level: 2, name: "platform/host-health" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "All components" }));
+    expect(page).toHaveAttribute("data-pane", "list");
+    expect(list).not.toHaveClass("@max-xl/library:hidden");
+    // The component pane is the one hidden now (narrow only).
+    expect(screen.getByRole("heading", { level: 2, name: "platform/host-health" }).closest(".overflow-y-auto")).toHaveClass("@max-xl/library:hidden");
   });
 });

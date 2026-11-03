@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { ArrowUp, FileText, SquareSlash, Square } from "lucide-react";
 import { Hint } from "@/components/shortcuts";
 import { ErrorText } from "@/components/error-text";
@@ -7,23 +7,23 @@ import { Button } from "@/components/ui/button";
 import { Command, CommandGroup, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type AgentProfile, type Entry, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
+import { api, type AgentProfile, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
 import { compactPath } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { ChatContext, onDraft } from "@/components/chat-context";
 import { TranscriptEntry } from "@/components/entries";
 import { FolderMenu } from "@/components/menus";
+import { useTranscript, useTranscripts } from "@/hooks/use-transcript";
 
 type Props = {
   session: SessionInfo;
-  entries: Entry[];
   agents: AgentProfile[];
   project: Project | null;
   onOpenProject: (id: string) => void;
   onLogin: (accountId: string) => void;
 };
 
-export function Chat({ session, entries, agents, project, onOpenProject, onLogin }: Props) {
+export function Chat({ session, agents, project, onOpenProject, onLogin }: Props) {
   const agent = agents.find((a) => a.id === session.accountId);
   const roots = [session.cwd, ...session.additionalDirs.filter((d) => d !== project?.contextDir)];
   // Only what deep components need; a stable object, so they don't re-render on every entry.
@@ -67,16 +67,29 @@ export function Chat({ session, entries, agents, project, onOpenProject, onLogin
       </header>
 
       <ChatContext.Provider value={chat}>
-        <Transcript running={session.running} entries={entries} onLogin={onLogin} />
+        {/* One per chat: whether it follows the stream, and how far back it shows, are the chat's own. */}
+        <Transcript key={session.sessionId} sessionId={session.sessionId} running={session.running} onLogin={onLogin} />
       </ChatContext.Provider>
       <Composer key={session.sessionId} session={session} agentLabel={agent?.label} />
     </div>
   );
 }
 
-function Transcript({ running, entries, onLogin }: { running: boolean; entries: Entry[]; onLogin: (accountId: string) => void }) {
+/** Entries drawn when a chat opens; earlier ones are added as the user scrolls up to them. */
+export const SHOWN = 200;
+/** Entries at the end that are always laid out (the rest skip layout while off screen). */
+const LIVE_TAIL = 3;
+
+function Transcript({ sessionId, running, onLogin }: { sessionId: string; running: boolean; onLogin: (accountId: string) => void }) {
+  const store = useTranscripts();
+  const transcript = useTranscript(sessionId);
+  const entries = useMemo(() => transcript?.entries ?? [], [transcript]);
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  // The first index drawn: fixed when the chat loads, lowered by "earlier".
+  const [start, setStart] = useState<number | null>(null);
+  if (transcript && start === null) setStart(Math.max(transcript.from, entries.length - SHOWN));
+  const first = start ?? entries.length;
   // Entries after the last user message belong to the current turn.
   const turnStart = entries.findLastIndex((e) => e?.type === "user");
   // Permission prompts carry no input; the tool call they ask about does.
@@ -92,6 +105,33 @@ function Transcript({ running, entries, onLogin }: { running: boolean; entries: 
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   }, [entries]);
 
+  // Earlier entries go in above what's shown without moving it.
+  const heightBefore = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = scroller.current;
+    if (!el || heightBefore.current == null) return;
+    el.scrollTop += el.scrollHeight - heightBefore.current;
+    heightBefore.current = null;
+  }, [first]);
+  const hasEarlier = first > 0 && transcript != null;
+  const earlier = useCallback(async () => {
+    const t = store.get(sessionId);
+    if (!t || start === null || start === 0) return;
+    if (start <= t.from) await store.loadEarlier(sessionId);
+    heightBefore.current = scroller.current?.scrollHeight ?? null;
+    setStart((s) => Math.max(store.get(sessionId)?.from ?? 0, (s ?? 0) - SHOWN));
+  }, [store, sessionId, start]);
+  const sentinel = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !hasEarlier) return;
+    const io = new IntersectionObserver((seen) => {
+      if (seen.some((s) => s.isIntersecting)) earlier().catch((e: unknown) => console.error("could not load earlier messages", e));
+    });
+    io.observe(el);
+    return () => io.disconnect();
+  }, [hasEarlier, earlier]);
+
   return (
     <div
       ref={scroller}
@@ -101,23 +141,48 @@ function Transcript({ running, entries, onLogin }: { running: boolean; entries: 
       }}
       className="min-h-0 flex-1 overflow-y-auto"
     >
-      <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-6" role="log" aria-label="Conversation" aria-busy={running}>
-        {entries.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Send a message to start.</p>}
-        {entries.map((entry, i) => {
+      {hasEarlier && (
+        <button
+          ref={sentinel}
+          type="button"
+          onClick={() => void earlier()}
+          className="mx-auto mt-4 block text-xs text-muted-foreground hover:text-foreground"
+        >
+          Show earlier messages
+        </button>
+      )}
+      <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-6" role="log" aria-label="Conversation" aria-busy={running || !transcript}>
+        {transcript?.error ? (
+          <TranscriptEntry
+            entry={{ type: "error", message: transcript.error, loginAccount: null }}
+            index={0}
+            inTurn={false}
+            live={false}
+            onLogin={onLogin}
+          />
+        ) : !transcript ? (
+          <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>
+        ) : (
+          entries.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Send a message to start.</p>
+        )}
+        {entries.slice(first).map((entry, k) => {
+          const i = first + k;
           // Rust addresses entries by index and only ever appends or replaces in place, so the index is a stable key.
           if (!entry) return null;
           const inTurn = running && i > turnStart;
           const toolInput = entry.type === "permission" && entry.toolCallId ? toolInputs.get(entry.toolCallId) : undefined;
           return (
-            <TranscriptEntry
-              key={i}
-              entry={entry}
-              index={i}
-              inTurn={inTurn}
-              live={inTurn && i === entries.length - 1}
-              toolInput={toolInput}
-              onLogin={onLogin}
-            />
+            // Off-screen entries skip layout and paint (content-visibility), so long chats open fast.
+            <div key={i} className={i < entries.length - LIVE_TAIL ? "transcript-entry" : undefined}>
+              <TranscriptEntry
+                entry={entry}
+                index={i}
+                inTurn={inTurn}
+                live={inTurn && i === entries.length - 1}
+                toolInput={toolInput}
+                onLogin={onLogin}
+              />
+            </div>
           );
         })}
         {running && entries[entries.length - 1]?.type === "user" && <p className="text-xs text-muted-foreground">Working…</p>}

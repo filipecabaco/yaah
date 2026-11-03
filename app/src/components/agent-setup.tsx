@@ -1,20 +1,24 @@
-// The Settings dialog and the first-run screen. Each tab's code loads the
-// first time it's shown, so none of it is in the main chunk.
-import { lazy, Suspense, useState, type ReactNode } from "react";
+// The Settings dialog and the first-run screen. Each tab's code is in its own
+// chunk, out of the main one; the dialog fetches them all when it opens (and the
+// app when it's idle), so a first visit to a tab doesn't wait on a fallback.
+import { startTransition, Suspense, useEffect, useState, type ReactNode } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { AgentsProps, AgentTarget } from "@/components/settings/agents-settings";
-import { TabSkeleton } from "@/components/settings/parts";
+import { TabSkeleton } from "@/components/settings/tab-skeleton";
+import { preloadSettings, TAB_CODE } from "@/components/settings/tab-code";
 
-const GeneralSettings = lazy(() => import("@/components/settings/general-settings").then((m) => ({ default: m.GeneralSettings })));
-const AgentsSettings = lazy(() => import("@/components/settings/agents-settings").then((m) => ({ default: m.AgentsSettings })));
-const ChatSettings = lazy(() => import("@/components/settings/chat-settings").then((m) => ({ default: m.ChatSettings })));
-const McpSettings = lazy(() => import("@/components/settings/mcp-settings").then((m) => ({ default: m.McpSettings })));
-const SkillsSettings = lazy(() => import("@/components/settings/skills-settings").then((m) => ({ default: m.SkillsSettings })));
-const LibrariesSettings = lazy(() => import("@/components/settings/libraries-settings").then((m) => ({ default: m.LibrariesSettings })));
-const IntegrationsSettings = lazy(() => import("@/components/settings/integrations-settings").then((m) => ({ default: m.IntegrationsSettings })));
-const KeyboardSettings = lazy(() => import("@/components/settings/keyboard-settings").then((m) => ({ default: m.KeyboardSettings })));
+const {
+  general: GeneralSettings,
+  agents: AgentsSettings,
+  chat: ChatSettings,
+  mcp: McpSettings,
+  skills: SkillsSettings,
+  components: LibrariesSettings,
+  integrations: IntegrationsSettings,
+  keyboard: KeyboardSettings,
+} = TAB_CODE;
 
 /** The Settings tabs, in order. */
 const TABS = [
@@ -48,6 +52,20 @@ type AgentProps = Omit<AgentsProps, "target">;
 /** Settings: general, agents (ACP), chat, MCP servers, skills, component libraries, integrations and keyboard. */
 export function AgentSetupDialog({ target, onClose, ...agentProps }: AgentProps & { target: SettingsTarget | null; onClose: () => void }) {
   const [tab, setTab] = useState<SettingsTab>(() => tabOf(target));
+  const open = !!target;
+  useEffect(() => {
+    if (open) void preloadSettings();
+  }, [open]);
+  // A tab opens once its code is in (it nearly always is, see above), in a transition, so the
+  // tab on screen stays until the next one can draw instead of flashing a skeleton.
+  const pick = (id: SettingsTab) => {
+    const code = TAB_CODE[id];
+    if (code.loaded) return startTransition(() => setTab(id));
+    code.preload().then(
+      () => startTransition(() => setTab(id)),
+      () => setTab(id),
+    );
+  };
   // Each new target (⌘K → MCP servers…, Log in → Edit agent) opens on its own tab.
   const [shownTarget, setShownTarget] = useState(target);
   if (target !== shownTarget) {
@@ -93,7 +111,7 @@ export function AgentSetupDialog({ target, onClose, ...agentProps }: AgentProps 
   return (
     <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex h-[min(46rem,92vh)] flex-col gap-0 p-0 sm:max-w-5xl">
-        <Tabs value={tab} onValueChange={(v) => setTab(v as SettingsTab)} className="min-h-0 flex-1 flex-col gap-0">
+        <Tabs value={tab} onValueChange={(v) => pick(v as SettingsTab)} className="min-h-0 flex-1 flex-col gap-0">
           <DialogHeader className="gap-3 border-b px-4 pt-4">
             <div className="flex flex-col gap-1 pr-8">
               <DialogTitle>Settings</DialogTitle>

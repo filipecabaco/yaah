@@ -1,6 +1,6 @@
 // ⌘K palette: jump to any chat or project, and run the actions that apply to
 // the current selection. Rename and delete happen inline as palette pages.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CircleDot,
   Plug,
@@ -35,7 +35,7 @@ import type { Yaah } from "@/hooks/use-yaah";
 import type { SettingsTab } from "@/components/agent-setup";
 import { api, canChat, PROJECT_STATUSES, type AgentProfile, type ConnectionInfo, type Project, type SessionInfo } from "@/lib/api";
 import { baseName } from "@/lib/format";
-import { fuzzyBest } from "@/lib/fuzzy";
+import { fuzzyBest, rankTop } from "@/lib/fuzzy";
 import { formatKeys, SHORTCUTS, type ShortcutId } from "@/lib/shortcuts";
 
 export type PalettePage =
@@ -69,12 +69,60 @@ type Props = {
   onHelp: () => void;
 };
 
-// cmdk filters on `keywords`; `value` is only an id.
+// cmdk filters the small pages on `keywords`; `value` is only an id. The root page ranks itself.
 const filter = (_value: string, search: string, keywords?: string[]) => fuzzyBest(search, keywords ?? []);
 
-export function CommandPalette({
+/** The palette. Its items are built only while it's open, so it costs nothing when closed. */
+export function CommandPalette(props: Props) {
+  const { page, onPage } = props;
+  // Where focus goes once the dialog is gone; otherwise it returns to where it was.
+  const afterClose = useRef<(() => void) | null>(null);
+  // The page that was open, so the dialog keeps its content while it fades out.
+  const [shown, setShown] = useState(page);
+  if (page && page !== shown) setShown(page);
+  const close = (then?: () => void) => {
+    afterClose.current = then ?? null;
+    onPage(null);
+  };
+  return (
+    <Dialog open={page != null} onOpenChange={(o) => !o && close()}>
+      <DialogContent
+        className="top-1/4 translate-y-0 overflow-hidden rounded-xl! p-0 sm:max-w-lg"
+        showCloseButton={false}
+        onCloseAutoFocus={(e) => {
+          const then = afterClose.current;
+          afterClose.current = null;
+          if (!then) return;
+          e.preventDefault();
+          then();
+        }}
+      >
+        <DialogTitle className="sr-only">Command palette</DialogTitle>
+        <DialogDescription className="sr-only">Search chats, projects and actions.</DialogDescription>
+        {shown && <PaletteBody {...props} page={shown} close={close} />}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+type Entry = {
+  id: string;
+  icon?: ReactNode;
+  label: string;
+  detail?: string;
+  shortcut?: ShortcutId;
+  keys?: string[];
+  onSelect: () => void;
+};
+
+/** Chats and projects listed at most, best first; typing finds the rest. */
+const LIMIT = 50;
+const rankEntries = (entries: Entry[], query: string, limit = Infinity) => rankTop(entries, query, (e) => [e.label, e.detail], limit);
+
+function PaletteBody({
   page,
   onPage,
+  close,
   y,
   onNewProject,
   onNewProjectFromItem,
@@ -85,22 +133,24 @@ export function CommandPalette({
   onIntegrations,
   onSettings,
   onHelp,
-}: Props) {
+}: Props & { page: PalettePage; close: (then?: () => void) => void }) {
   const [search, setSearch] = useState("");
-  // Where focus goes once the dialog is gone; otherwise it returns to where it was.
-  const afterClose = useRef<(() => void) | null>(null);
+  // The list follows the typing a beat behind, so keystrokes never wait on it.
+  const query = useDeferredValue(search);
+  // The selected item on the root page, for the search it was picked in.
+  const [active, setActive] = useState<{ id: string; query: string } | null>(null);
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    list.current?.scrollTo?.({ top: 0 });
+  }, [query]);
 
   // Each page starts with an empty search.
-  const [searchFor, setSearchFor] = useState(page?.kind);
-  if (page?.kind !== searchFor) {
-    setSearchFor(page?.kind);
+  const [searchFor, setSearchFor] = useState(page.kind);
+  if (page.kind !== searchFor) {
+    setSearchFor(page.kind);
     setSearch("");
   }
 
-  const close = (then?: () => void) => {
-    afterClose.current = then ?? null;
-    onPage(null);
-  };
   /** Run an action, close, and land in the message box if there is one. */
   const run = (f: () => unknown) => {
     Promise.resolve(f()).catch(console.error);
@@ -113,11 +163,44 @@ export function CommandPalette({
   const projectName = (id: string | null) => (id ? (y.projects.find((p) => p.id === id)?.name ?? "") : "quick chat");
   const projectChats = project ? (y.chatsByProject[project.id] ?? []) : [];
 
+  // The root page's lists, ranked once per (deferred) keystroke.
+  const { chatOrder, orderedProjects, projects } = y;
+  const chatEntries = useMemo(
+    () =>
+      page.kind !== "root"
+        ? []
+        : chatOrder.map((c): Entry & { chat: SessionInfo } => ({
+            id: `chat-${c.sessionId}`,
+            chat: c,
+            label: c.title,
+            detail: c.projectId ? (projects.find((p) => p.id === c.projectId)?.name ?? "") : "quick chat",
+            onSelect: () => undefined,
+          })),
+    [page.kind, chatOrder, projects],
+  );
+  const rankedChats = useMemo(() => rankEntries(chatEntries, query, LIMIT), [chatEntries, query]);
+  const projectEntries = useMemo(
+    () =>
+      page.kind !== "root"
+        ? []
+        : orderedProjects.map((p): Entry & { project: Project } => ({
+            id: `project-${p.id}`,
+            project: p,
+            label: p.name,
+            detail: p.status === "ongoing" ? undefined : p.status,
+            onSelect: () => undefined,
+          })),
+    [page.kind, orderedProjects],
+  );
+  const rankedProjects = useMemo(() => rankEntries(projectEntries, query, LIMIT), [projectEntries, query]);
+
   let body: ReactNode;
   let placeholder = "Search chats, projects and actions…";
-  if (page?.kind === "rename") {
+  /** The root page's best match, which a new search starts on. */
+  let firstId = "";
+  if (page.kind === "rename") {
     body = <RenameChat chat={page.chat} onDone={(title) => run(() => title && y.renameChat(page.chat.sessionId, title))} />;
-  } else if (page?.kind === "delete") {
+  } else if (page.kind === "delete") {
     const c = y.chatOrder.find((x) => x.sessionId === page.chat.sessionId) ?? page.chat;
     placeholder = "Delete this chat?";
     body = (
@@ -138,7 +221,7 @@ export function CommandPalette({
         <Item id="keep" icon={<MessageSquare />} label="Keep it" onSelect={() => onPage({ kind: "root" })} />
       </CommandGroup>
     );
-  } else if (page?.kind === "status") {
+  } else if (page.kind === "status") {
     placeholder = `Set status of ${page.project.name}…`;
     body = (
       <CommandGroup heading="Status">
@@ -153,7 +236,7 @@ export function CommandPalette({
         ))}
       </CommandGroup>
     );
-  } else if (page?.kind === "move") {
+  } else if (page.kind === "move") {
     placeholder = `Move “${page.chat.title}” to…`;
     body = (
       <CommandGroup heading="File this chat under">
@@ -176,7 +259,7 @@ export function CommandPalette({
         ))}
       </CommandGroup>
     );
-  } else if (page?.kind === "promote") {
+  } else if (page.kind === "promote") {
     const folder = baseName(page.chat.cwd);
     body = (
       <TextPrompt
@@ -186,12 +269,12 @@ export function CommandPalette({
         onDone={(name) => run(() => name && y.promoteChat(page.chat.sessionId, name))}
       />
     );
-  } else if (page?.kind === "connections") {
+  } else if (page.kind === "connections") {
     placeholder = "Database connections…";
     body = <Connections onAdd={() => onPage({ kind: "addConnection" })} onPick={(connection) => onPage({ kind: "removeConnection", connection })} />;
-  } else if (page?.kind === "addConnection") {
+  } else if (page.kind === "addConnection") {
     body = <AddConnection onDone={() => onPage({ kind: "connections" })} />;
-  } else if (page?.kind === "removeConnection") {
+  } else if (page.kind === "removeConnection") {
     const c = page.connection;
     placeholder = `Remove “${c.name}”?`;
     body = (
@@ -208,7 +291,7 @@ export function CommandPalette({
         <Item id="keep" icon={<Database />} label="Keep it" onSelect={() => onPage({ kind: "connections" })} />
       </CommandGroup>
     );
-  } else if (page?.kind === "agent") {
+  } else if (page.kind === "agent") {
     placeholder = "Switch agent…";
     body = (
       <CommandGroup heading="New chats use">
@@ -230,239 +313,253 @@ export function CommandPalette({
     );
   } else {
     const ready = canChat(account);
-    body = (
-      <>
-        <CommandGroup heading="Actions">
-          {project && ready && (
-            <Item
-              id="new-chat"
-              icon={<MessageSquarePlus />}
-              label={`New chat in ${project.name}`}
-              shortcut="newChat"
-              onSelect={() => run(() => y.newChat(project.id))}
-            />
-          )}
-          {ready && (
-            <Item
-              id="quick-chat"
-              icon={<MessageSquarePlus />}
-              label="New quick chat"
-              detail="no project"
-              shortcut={project ? undefined : "newChat"}
-              onSelect={() => run(() => y.newQuickChat())}
-            />
-          )}
-          {ready && (
-            <Item
-              id="folder-chat"
-              icon={<FolderOpen />}
-              label="New chat in a folder…"
-              onSelect={() =>
-                close(() => {
-                  y.newChatInFolder().catch(console.error);
-                })
-              }
-            />
-          )}
-          {chat?.running && (
-            <Item
-              id="stop"
-              icon={<Square />}
-              label="Stop the running turn"
-              shortcut="stop"
-              onSelect={() => run(() => api.cancelTurn(chat.sessionId))}
-            />
-          )}
-          {chat && (
-            <Item
-              id="focus"
-              icon={<TextCursorInput />}
-              label="Focus the message box"
-              shortcut="focusComposer"
-              onSelect={() => close(focusComposer)}
-            />
-          )}
-          {chat && <Item id="rename" icon={<Pencil />} label="Rename chat…" onSelect={() => onPage({ kind: "rename", chat })} />}
-          {chat && (
-            <Item
-              id="move-chat"
-              icon={<FolderInput />}
-              label="Move chat to a project…"
-              detail={projectName(chat.projectId)}
-              onSelect={() => onPage({ kind: "move", chat })}
-            />
-          )}
-          {chat && !chat.projectId && (
-            <Item id="promote-chat" icon={<FolderPlus />} label="Turn chat into a project…" onSelect={() => onPage({ kind: "promote", chat })} />
-          )}
-          {chat && <Item id="delete-chat" icon={<Trash2 />} label="Delete chat…" onSelect={() => onPage({ kind: "delete", chat })} />}
-          {project && <Item id="add-repos" icon={<FolderGit2 />} label={`Add repos to ${project.name}…`} onSelect={() => close(onAddRepos)} />}
-          {project && (
-            <Item
-              id="status"
-              icon={<CircleDot />}
-              label="Set project status…"
-              detail={project.status}
-              onSelect={() => onPage({ kind: "status", project })}
-            />
-          )}
-          <Item id="new-project" icon={<Plus />} label="New project…" shortcut="newProject" onSelect={() => close(onNewProject)} />
-          <Item
-            id="new-project-from-item"
-            icon={<CircleDot />}
-            label="New project from an issue…"
-            detail="GitHub, Linear, GitLab"
-            onSelect={() => close(onNewProjectFromItem)}
-          />
-          {!account && <Item id="first-agent" icon={<Bot />} label="Add agent…" detail="needed to chat" onSelect={() => close(onAddAgent)} />}
-          {account && (
-            <Item
-              id="login"
-              icon={<LogIn />}
-              label={`Log in “${account.label}”…`}
-              detail={account.loggedIn === false ? "needed" : undefined}
-              onSelect={() => close(() => onLogin(account))}
-            />
-          )}
-          <Item id="switch-agent" icon={<Bot />} label="Switch agent…" detail={account?.label} onSelect={() => onPage({ kind: "agent" })} />
-          <Item
-            id="connections"
-            icon={<Database />}
-            label="Database connections…"
-            detail="read-only, for live views"
-            onSelect={() => onPage({ kind: "connections" })}
-          />
-          <Item id="add-connection" icon={<Database />} label="Add database connection…" onSelect={() => onPage({ kind: "addConnection" })} />
-          {account && <Item id="add-agent" icon={<Plus />} label="Add agent…" detail="any ACP agent" onSelect={() => close(onAddAgent)} />}
-          <Item
-            id="settings"
-            icon={<Settings2 />}
-            label="Settings…"
-            detail="general, agents, MCP, skills, components, integrations"
-            shortcut="settings"
-            onSelect={() => close(() => onSettings())}
-          />
-          <Item id="mcp-servers" icon={<Plug />} label="MCP servers…" onSelect={() => close(() => onSettings("mcp"))} />
-          <Item id="skills" icon={<Plug />} label="Skills…" detail="install from GitHub" onSelect={() => close(() => onSettings("skills"))} />
-          <Item
-            id="install-library"
-            icon={<LayoutPanelTop />}
-            label="Install component library…"
-            detail="from a git repo or a folder"
-            onSelect={() => close(() => onSettings("components"))}
-          />
-          <Item
-            id="manage-agents"
-            icon={<Settings2 />}
-            label="Manage agents…"
-            detail="commands, logins, default"
-            onSelect={() => close(onManageAgents)}
-          />
-          <Item
-            id="integrations"
-            icon={<Plug />}
-            label="Integrations…"
-            detail="GitHub, Linear, GitLab, databases"
-            onSelect={() => close(() => onIntegrations())}
-          />
-          <Item id="connect-linear" icon={<Plug />} label="Connect Linear…" onSelect={() => close(() => onIntegrations("linear"))} />
-          <Item id="connect-github" icon={<Plug />} label="Connect GitHub…" onSelect={() => close(() => onIntegrations("github"))} />
-          <Item id="connect-gitlab" icon={<Plug />} label="Connect GitLab…" onSelect={() => close(() => onIntegrations("gitlab"))} />
-          <Item id="help" icon={<Keyboard />} label="Keyboard shortcuts" shortcut="help" onSelect={() => close(onHelp)} />
-        </CommandGroup>
-        {y.chatOrder.length > 0 && (
-          <CommandGroup heading="Chats">
-            {y.chatOrder.map((c) => {
+    const actions: (Entry | false | null | undefined)[] = [
+      project &&
+        ready && {
+          id: "new-chat",
+          icon: <MessageSquarePlus />,
+          label: `New chat in ${project.name}`,
+          shortcut: "newChat",
+          onSelect: () => run(() => y.newChat(project.id)),
+        },
+      ready && {
+        id: "quick-chat",
+        icon: <MessageSquarePlus />,
+        label: "New quick chat",
+        detail: "no project",
+        shortcut: project ? undefined : "newChat",
+        onSelect: () => run(() => y.newQuickChat()),
+      },
+      ready && {
+        id: "folder-chat",
+        icon: <FolderOpen />,
+        label: "New chat in a folder…",
+        onSelect: () =>
+          close(() => {
+            y.newChatInFolder().catch(console.error);
+          }),
+      },
+      chat?.running && {
+        id: "stop",
+        icon: <Square />,
+        label: "Stop the running turn",
+        shortcut: "stop",
+        onSelect: () => run(() => api.cancelTurn(chat.sessionId)),
+      },
+      chat && {
+        id: "focus",
+        icon: <TextCursorInput />,
+        label: "Focus the message box",
+        shortcut: "focusComposer",
+        onSelect: () => close(focusComposer),
+      },
+      chat && { id: "rename", icon: <Pencil />, label: "Rename chat…", onSelect: () => onPage({ kind: "rename", chat }) },
+      chat && {
+        id: "move-chat",
+        icon: <FolderInput />,
+        label: "Move chat to a project…",
+        detail: projectName(chat.projectId),
+        onSelect: () => onPage({ kind: "move", chat }),
+      },
+      chat &&
+        !chat.projectId && {
+          id: "promote-chat",
+          icon: <FolderPlus />,
+          label: "Turn chat into a project…",
+          onSelect: () => onPage({ kind: "promote", chat }),
+        },
+      chat && { id: "delete-chat", icon: <Trash2 />, label: "Delete chat…", onSelect: () => onPage({ kind: "delete", chat }) },
+      project && { id: "add-repos", icon: <FolderGit2 />, label: `Add repos to ${project.name}…`, onSelect: () => close(onAddRepos) },
+      project && {
+        id: "status",
+        icon: <CircleDot />,
+        label: "Set project status…",
+        detail: project.status,
+        onSelect: () => onPage({ kind: "status", project }),
+      },
+      { id: "new-project", icon: <Plus />, label: "New project…", shortcut: "newProject", onSelect: () => close(onNewProject) },
+      {
+        id: "new-project-from-item",
+        icon: <CircleDot />,
+        label: "New project from an issue…",
+        detail: "GitHub, Linear, GitLab",
+        onSelect: () => close(onNewProjectFromItem),
+      },
+      !account && { id: "first-agent", icon: <Bot />, label: "Add agent…", detail: "needed to chat", onSelect: () => close(onAddAgent) },
+      account && {
+        id: "login",
+        icon: <LogIn />,
+        label: `Log in “${account.label}”…`,
+        detail: account.loggedIn === false ? "needed" : undefined,
+        onSelect: () => close(() => onLogin(account)),
+      },
+      { id: "switch-agent", icon: <Bot />, label: "Switch agent…", detail: account?.label, onSelect: () => onPage({ kind: "agent" }) },
+      {
+        id: "connections",
+        icon: <Database />,
+        label: "Database connections…",
+        detail: "read-only, for live views",
+        onSelect: () => onPage({ kind: "connections" }),
+      },
+      { id: "add-connection", icon: <Database />, label: "Add database connection…", onSelect: () => onPage({ kind: "addConnection" }) },
+      account && { id: "add-agent", icon: <Plus />, label: "Add agent…", detail: "any ACP agent", onSelect: () => close(onAddAgent) },
+      {
+        id: "settings",
+        icon: <Settings2 />,
+        label: "Settings…",
+        detail: "general, agents, MCP, skills, components, integrations",
+        shortcut: "settings",
+        onSelect: () => close(() => onSettings()),
+      },
+      { id: "mcp-servers", icon: <Plug />, label: "MCP servers…", onSelect: () => close(() => onSettings("mcp")) },
+      { id: "skills", icon: <Plug />, label: "Skills…", detail: "install from GitHub", onSelect: () => close(() => onSettings("skills")) },
+      {
+        id: "install-library",
+        icon: <LayoutPanelTop />,
+        label: "Install component library…",
+        detail: "from a git repo or a folder",
+        onSelect: () => close(() => onSettings("components")),
+      },
+      {
+        id: "manage-agents",
+        icon: <Settings2 />,
+        label: "Manage agents…",
+        detail: "commands, logins, default",
+        onSelect: () => close(onManageAgents),
+      },
+      {
+        id: "integrations",
+        icon: <Plug />,
+        label: "Integrations…",
+        detail: "GitHub, Linear, GitLab, databases",
+        onSelect: () => close(() => onIntegrations()),
+      },
+      { id: "connect-linear", icon: <Plug />, label: "Connect Linear…", onSelect: () => close(() => onIntegrations("linear")) },
+      { id: "connect-github", icon: <Plug />, label: "Connect GitHub…", onSelect: () => close(() => onIntegrations("github")) },
+      { id: "connect-gitlab", icon: <Plug />, label: "Connect GitLab…", onSelect: () => close(() => onIntegrations("gitlab")) },
+      { id: "help", icon: <Keyboard />, label: "Keyboard shortcuts", shortcut: "help", onSelect: () => close(onHelp) },
+    ];
+    const rankedActions = rankEntries(
+      actions.filter((a): a is Entry => !!a),
+      query,
+    );
+    const goTo: Entry = {
+      id: "components",
+      icon: <LayoutPanelTop />,
+      label: "Component library",
+      onSelect: () => close(() => y.setSelection({ kind: "components" })),
+    };
+    const goToShown = rankEntries([goTo], query);
+    // While searching, the group with the best match comes first.
+    const groups = [
+      {
+        id: "actions",
+        best: rankedActions.best,
+        node: rankedActions.shown.length > 0 && (
+          <CommandGroup key="actions" heading="Actions">
+            {rankedActions.shown.map((a) => (
+              <Item key={a.id} {...a} />
+            ))}
+          </CommandGroup>
+        ),
+      },
+      {
+        id: "chats",
+        best: rankedChats.best,
+        node: rankedChats.shown.length > 0 && (
+          <CommandGroup key="chats" heading="Chats">
+            {rankedChats.shown.map((e) => {
+              const c = (e as Entry & { chat: SessionInfo }).chat;
               const n = projectChats.indexOf(c);
               return (
                 <Item
-                  key={c.sessionId}
-                  id={`chat-${c.sessionId}`}
+                  key={e.id}
+                  id={e.id}
                   icon={c.running ? <Loader2 className="animate-spin" /> : <MessageSquare />}
-                  label={c.title}
-                  detail={projectName(c.projectId)}
+                  label={e.label}
+                  detail={e.detail}
                   keys={n >= 0 && n < 9 ? [SHORTCUTS.jumpChat.keys[0], String(n + 1)] : undefined}
                   onSelect={() => run(() => y.setSelection({ kind: "chat", id: c.sessionId }))}
                 />
               );
             })}
+            {rankedChats.more > 0 && <p className="px-2 py-1.5 text-xs text-muted-foreground">{rankedChats.more} more: type to find them.</p>}
           </CommandGroup>
-        )}
-        <CommandGroup heading="Go to">
-          {y.orderedProjects.map((p) => (
-            <Item
-              key={p.id}
-              id={`project-${p.id}`}
-              icon={<FolderOpen />}
-              label={p.name}
-              detail={p.status === "ongoing" ? undefined : p.status}
-              onSelect={() => close(() => y.setSelection({ kind: "project", id: p.id }))}
-            />
-          ))}
-          <Item
-            id="components"
-            icon={<LayoutPanelTop />}
-            label="Component library"
-            onSelect={() => close(() => y.setSelection({ kind: "components" }))}
-          />
-        </CommandGroup>
-      </>
-    );
+        ),
+      },
+      {
+        id: "goto",
+        best: Math.max(rankedProjects.best, goToShown.best),
+        node: (rankedProjects.shown.length > 0 || goToShown.shown.length > 0) && (
+          <CommandGroup key="goto" heading="Go to">
+            {rankedProjects.shown.map((e) => {
+              const p = (e as Entry & { project: Project }).project;
+              return (
+                <Item
+                  key={e.id}
+                  id={e.id}
+                  icon={<FolderOpen />}
+                  label={e.label}
+                  detail={e.detail}
+                  onSelect={() => close(() => y.setSelection({ kind: "project", id: p.id }))}
+                />
+              );
+            })}
+            {goToShown.shown.map((e) => (
+              <Item key={e.id} {...e} />
+            ))}
+          </CommandGroup>
+        ),
+      },
+    ];
+    if (query.trim()) groups.sort((a, b) => b.best - a.best);
+    body = groups.map((g) => g.node);
+    const shownGroups: Record<string, Entry[]> = {
+      actions: rankedActions.shown,
+      chats: rankedChats.shown,
+      goto: [...rankedProjects.shown, ...goToShown.shown],
+    };
+    firstId = groups.map((g) => shownGroups[g.id][0]?.id).find(Boolean) ?? "";
   }
 
+  if (page.kind === "rename" || page.kind === "promote" || page.kind === "addConnection") return body;
+  const root = page.kind === "root";
+  // cmdk doesn't filter the root page, so it doesn't move the selection either: each search starts on its best match, at the top.
+  const pick = root ? { value: active?.query === query ? active.id : firstId, onValueChange: (id: string) => setActive({ id, query }) } : {};
   return (
-    <Dialog open={page != null} onOpenChange={(o) => !o && close()}>
-      <DialogContent
-        className="top-1/4 translate-y-0 overflow-hidden rounded-xl! p-0 sm:max-w-lg"
-        showCloseButton={false}
-        onCloseAutoFocus={(e) => {
-          const then = afterClose.current;
-          afterClose.current = null;
-          if (!then) return;
-          e.preventDefault();
-          then();
+    // The root page is ranked above (once per keystroke, top results only); the small pages let cmdk filter.
+    <Command filter={filter} shouldFilter={!root} vimBindings={false} key={page.kind} {...pick}>
+      <CommandInput
+        autoFocus
+        value={search}
+        onValueChange={setSearch}
+        placeholder={placeholder}
+        onKeyDown={(e) => {
+          // Backspace on an empty search goes back to the top level.
+          if (e.key === "Backspace" && !search && !root) onPage({ kind: "root" });
         }}
-      >
-        <DialogTitle className="sr-only">Command palette</DialogTitle>
-        <DialogDescription className="sr-only">Search chats, projects and actions.</DialogDescription>
-        {page?.kind === "rename" || page?.kind === "promote" || page?.kind === "addConnection" ? (
-          body
-        ) : (
-          <Command filter={filter} vimBindings={false} key={page?.kind}>
-            <CommandInput
-              autoFocus
-              value={search}
-              onValueChange={setSearch}
-              placeholder={placeholder}
-              onKeyDown={(e) => {
-                // Backspace on an empty search goes back to the top level.
-                if (e.key === "Backspace" && !search && page?.kind !== "root") onPage({ kind: "root" });
-              }}
-            />
-            <CommandList className="max-h-96">
-              <CommandEmpty>Nothing matches.</CommandEmpty>
-              {body}
-            </CommandList>
-            <footer className="flex items-center gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
-              <span>
-                <Kbd>↑</Kbd> <Kbd>↓</Kbd> move
-              </span>
-              <span>
-                <Kbd>↵</Kbd> run
-              </span>
-              {page?.kind !== "root" && (
-                <span>
-                  <Kbd>⌫</Kbd> back
-                </span>
-              )}
-              <span className="ml-auto">
-                <Kbd>Esc</Kbd> close
-              </span>
-            </footer>
-          </Command>
+      />
+      <CommandList className="max-h-96" ref={list}>
+        <CommandEmpty>Nothing matches.</CommandEmpty>
+        {body}
+      </CommandList>
+      <footer className="flex items-center gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
+        <span>
+          <Kbd>↑</Kbd> <Kbd>↓</Kbd> move
+        </span>
+        <span>
+          <Kbd>↵</Kbd> run
+        </span>
+        {!root && (
+          <span>
+            <Kbd>⌫</Kbd> back
+          </span>
         )}
-      </DialogContent>
-    </Dialog>
+        <span className="ml-auto">
+          <Kbd>Esc</Kbd> close
+        </span>
+      </footer>
+    </Command>
   );
 }
 

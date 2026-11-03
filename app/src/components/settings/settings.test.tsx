@@ -10,7 +10,8 @@ async function openSettings(user: ReturnType<typeof renderApp>["user"], tab: str
   await user.click(await screen.findByRole("button", { name: /^settings/i }));
   const dialog = await screen.findByRole("dialog");
   await user.click(within(dialog).getByRole("tab", { name: tab }));
-  expect(within(dialog).getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true");
+  // The tab opens once its code is in (fetched when the dialog opened).
+  await waitFor(() => expect(within(dialog).getByRole("tab", { name: tab })).toHaveAttribute("aria-selected", "true"));
   return dialog;
 }
 
@@ -209,5 +210,51 @@ describe("Settings → MCP servers", () => {
       const saved = (await mcpApi.list()).servers.find((s) => s.name === "filesystem");
       expect(saved?.agents ?? []).toEqual([]);
     });
+  });
+});
+
+describe("Settings → MCP servers: secrets", () => {
+  it("shows secret values masked, keeps one sent back unchanged, and replaces one typed over", async () => {
+    const { user, mock } = renderApp();
+    const dialog = await openSettings(user, "MCP servers");
+    // Rust never sends the value itself.
+    expect(JSON.stringify(await mcpApi.list())).not.toContain("ntk_5f2c9a8e7d1b");
+
+    await user.click(await within(dialog).findByRole("button", { name: /^filesystem/ }));
+    const key = await within(dialog).findByRole("textbox", { name: "Value of NOTES_API_KEY" });
+    expect(key).toHaveValue("••••7d1b");
+    expect(key).toHaveAccessibleDescription(/saved but never shown here/);
+    // A value that isn't a secret is shown as it is.
+    expect(within(dialog).getByLabelText("Value of LOG_LEVEL")).toHaveValue("info");
+
+    // Saved untouched: the stored secret stays.
+    await user.click(within(dialog).getByRole("radio", { name: "Only these agents" }));
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(mock.mcpServers.find((s) => s.name === "filesystem")?.agents).toBeDefined());
+    expect(mock.mcpServers.find((s) => s.name === "filesystem")?.env).toEqual({ NOTES_API_KEY: "ntk_5f2c9a8e7d1b", LOG_LEVEL: "info" });
+
+    // Typed over (focus selects the mask, so typing replaces it): the new value is stored.
+    const again = await within(dialog).findByRole("textbox", { name: "Value of NOTES_API_KEY" });
+    await user.click(again);
+    await user.keyboard("ntk_new_value_1234");
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(mock.mcpServers.find((s) => s.name === "filesystem")?.env.NOTES_API_KEY).toBe("ntk_new_value_1234"));
+    // A value being typed is a password field; what Rust sends back is masked again.
+    expect(within(dialog).getByLabelText("Value of NOTES_API_KEY")).toHaveAttribute("type", "password");
+    expect((await mcpApi.list()).servers.find((s) => s.name === "filesystem")?.env.NOTES_API_KEY).toBe("••••1234");
+  });
+
+  it("says a renamed hidden value must be typed again, as Rust refuses it", async () => {
+    const { user } = renderApp();
+    const dialog = await openSettings(user, "MCP servers");
+    await user.click(await within(dialog).findByRole("button", { name: /^filesystem/ }));
+    const name = (await within(dialog).findAllByRole("textbox", { name: "Variable name" })).find(
+      (i) => (i as HTMLInputElement).value === "NOTES_API_KEY",
+    )!;
+    await user.clear(name);
+    await user.type(name, "NOTES_TOKEN");
+    expect(within(dialog).getByText(/Renamed from NOTES_API_KEY: its hidden value can't move with it/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    expect(await within(dialog).findByText(/the environment variable `NOTES_TOKEN` was hidden; type its value again/)).toBeInTheDocument();
   });
 });

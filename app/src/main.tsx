@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
 
-import { followTheme, setAppearance, setThemes } from "./lib/theme";
+import { followTheme, setAppearance, setThemes, settingsUnavailable } from "./lib/theme";
 import { api } from "./lib/api";
 import { setCardRules } from "./lib/tool-cards";
 
@@ -23,14 +23,18 @@ async function start() {
       return;
     }
   }
-  // Saved appearance, themes and tool-card rules; until they arrive the app follows the OS in yaah's colours.
+  // Saved appearance, themes and tool-card rules. Until they arrive the app shows the theme of the
+  // last run (public/theme-boot.js), or follows the OS in yaah's colours on a first start.
   api.generalSettings().then(
     (s) => {
       setThemes(s.theme);
       setAppearance(s.appearance);
       setCardRules(s.toolCards.rules);
     },
-    (e: unknown) => console.error("could not read settings", e),
+    (e: unknown) => {
+      console.error("could not read settings", e);
+      settingsUnavailable();
+    },
   );
   root().render(
     <React.StrictMode>
