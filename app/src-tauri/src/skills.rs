@@ -1164,6 +1164,7 @@ mod tests {
             env: BTreeMap::default(),
             config_dir: dir.map(Into::into),
             report: None,
+            provider: None,
         };
         let home = accounts::home().to_string_lossy().into_owned();
         let profiles = [

@@ -28,14 +28,7 @@ pub struct AgentList {
 
 fn agent_list(hub: &Hub, file: AgentsFile) -> AgentList {
     let default_id = file.default_id();
-    let profiles = file
-        .profiles
-        .into_iter()
-        .map(|p| {
-            let needs_login = hub.needs_login(&p.id);
-            agents::info(p, needs_login)
-        })
-        .collect();
+    let profiles = file.profiles.into_iter().map(|p| hub.info(p)).collect();
     AgentList { profiles, default_id }
 }
 
@@ -62,8 +55,7 @@ pub async fn save_agent(app: AppHandle, hub: State<'_, Arc<Hub>>, draft: Draft) 
         hub.drop_agent(&profile.id).await;
     }
     let _ = app.emit("accounts-changed", ());
-    let needs_login = hub.needs_login(&profile.id);
-    Ok(agents::info(profile, needs_login))
+    Ok(hub.info(profile))
 }
 
 #[tauri::command]

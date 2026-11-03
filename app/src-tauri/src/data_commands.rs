@@ -4,12 +4,13 @@
 #![allow(clippy::needless_pass_by_value, reason = "Tauri hands commands their arguments and state by value")]
 
 use crate::integrations::Integrations;
+use crate::keychain::SecretString;
 use crate::projects::{Project, Projects};
 use crate::session::{ChatTarget, Hub};
 use crate::ui_libraries::{LibraryExport, LibraryInfo, LibraryPreview, LibrarySource, LibraryUpdate, Manifest};
 use crate::ui_library::{Component, Library, Prepared};
 use crate::work_items::{self, Started, WorkItem, WorkQueue};
-use crate::{agents, integrations, mcp_servers, path_env, repos, settings, skills, sources};
+use crate::{agents, integrations, mcp_servers, path_env, providers, repos, settings, skills, sources};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -437,6 +438,130 @@ pub fn mcp_import_candidates() -> Vec<mcp_servers::Candidate> {
 #[tauri::command]
 pub fn import_mcp_servers(picks: Vec<mcp_servers::ImportPick>) -> Result<Vec<mcp_servers::ServerInfo>, String> {
     Ok(mcp_servers::import(&picks)?.into_iter().map(mcp_servers::info_now).collect())
+}
+
+// ── Model providers (Settings → Model providers) ────────────────────────────
+// OpenRouter and Bedrock for Claude Code, Goose and OpenCode; see providers.rs.
+// The keychain can block (an OS prompt), so it's read off the async workers.
+// Changes emit "providers-changed" (and "accounts-changed": readiness follows the checks).
+
+fn providers_changed(app: &AppHandle) {
+    let _ = app.emit("providers-changed", ());
+    let _ = app.emit("accounts-changed", ());
+}
+
+async fn off_workers<T: Send + 'static>(f: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())?
+}
+
+/// Profiles bound to a provider: their agents restart with its new settings.
+async fn restart_bound(hub: &Hub, provider_id: &str) {
+    let bound: Vec<String> = agents::Store::user()
+        .load()
+        .profiles
+        .into_iter()
+        .filter(|p| p.provider.as_ref().is_some_and(|b| b.provider_id == provider_id))
+        .map(|p| p.id)
+        .collect();
+    for id in bound {
+        hub.drop_agent(&id).await;
+    }
+}
+
+/// Every provider; never a secret, only whether there is one.
+#[tauri::command]
+pub async fn list_providers() -> Result<Vec<providers::ProviderInfo>, String> {
+    off_workers(|| Ok(providers::Store::user().list())).await
+}
+
+/// Create (no `id`) or edit a provider. An omitted `secret` keeps the stored one.
+#[tauri::command]
+pub async fn save_provider(
+    app: AppHandle,
+    hub: State<'_, Arc<Hub>>,
+    id: Option<String>,
+    kind: providers::Kind,
+    label: String,
+    bedrock: Option<providers::Bedrock>,
+    secret: Option<SecretString>,
+) -> Result<providers::ProviderInfo, String> {
+    let draft = providers::Draft { id, kind, label, bedrock, secret };
+    let info = off_workers(move || providers::Store::user().save(&draft)).await?;
+    restart_bound(&hub, &info.id).await;
+    providers_changed(&app);
+    Ok(info)
+}
+
+/// Refused while an agent profile is bound to it.
+#[tauri::command]
+pub async fn delete_provider(app: AppHandle, id: String) -> Result<(), String> {
+    off_workers(move || providers::Store::user().delete(&id, &agents::Store::user().load().profiles)).await?;
+    providers_changed(&app);
+    Ok(())
+}
+
+/// OpenRouter: `GET /api/v1/key`. Bedrock: `aws sts get-caller-identity`. The result is kept as the provider's `check`.
+#[tauri::command]
+pub async fn test_provider(app: AppHandle, id: String) -> Result<providers::ProviderInfo, String> {
+    let info = providers::Store::user().test(&id).await?;
+    providers_changed(&app);
+    Ok(info)
+}
+
+/// The provider's models an agent preset can use (cached for a day; `refresh` skips the cache).
+#[tauri::command]
+pub async fn provider_models(id: String, preset: String, refresh: Option<bool>) -> Result<providers::ModelList, String> {
+    providers::Store::user().models(&id, &preset, refresh.unwrap_or(false)).await
+}
+
+/// Profiles in `~/.aws/config` and `~/.aws/credentials`: names, regions, SSO. Never credentials.
+#[tauri::command]
+pub async fn aws_profiles() -> Vec<providers::AwsProfile> {
+    providers::Store::user().aws_profiles()
+}
+
+/// Run `aws sso login --profile P` for a Bedrock provider in the background (the
+/// CLI opens the browser). When it's done: "provider-sso-login" `{ id, ok,
+/// provider? , error? }`, after testing the provider again.
+#[tauri::command]
+pub async fn provider_sso_login(app: AppHandle, id: String) -> Result<(), String> {
+    let store = providers::Store::user();
+    match store.get(&id) {
+        Some(p) if p.bedrock.is_some() => {}
+        Some(_) => return Err("only Bedrock providers sign in with AWS SSO".into()),
+        None => return Err(format!("no model provider {id}")),
+    }
+    tauri::async_runtime::spawn(async move {
+        let payload = match store.sso_login(&id).await {
+            Ok(info) => serde_json::json!({ "id": id, "ok": info.check.as_ref().is_some_and(|c| c.ok), "provider": info }),
+            Err(e) => serde_json::json!({ "id": id, "ok": false, "error": e }),
+        };
+        let _ = app.emit("provider-sso-login", payload);
+        providers_changed(&app);
+    });
+    Ok(())
+}
+
+/// Bind an agent profile to a provider and model, or unbind it (`binding: null`).
+/// Its agent restarts with the new route.
+#[tauri::command]
+pub async fn set_profile_provider(
+    app: AppHandle,
+    hub: State<'_, Arc<Hub>>,
+    account_id: String,
+    binding: Option<providers::Binding>,
+) -> Result<agents::ProfileInfo, String> {
+    if let Some(b) = &binding
+        && providers::Store::user().get(&b.provider_id).is_none()
+    {
+        return Err(format!("no model provider {}", b.provider_id));
+    }
+    let profile = agents::Store::user().set_provider(&account_id, binding)?;
+    hub.drop_agent(&account_id).await;
+    // A login the old route asked for doesn't apply to the new one.
+    hub.logged_in(&account_id);
+    let _ = app.emit("accounts-changed", ());
+    Ok(hub.info(profile))
 }
 
 #[cfg(test)]

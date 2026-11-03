@@ -1,0 +1,2 @@
+# Product names in doc comments, not code identifiers (`..` keeps clippy's defaults).
+doc-valid-idents = ["OpenRouter", "OpenCode", "KWallet", ".."]

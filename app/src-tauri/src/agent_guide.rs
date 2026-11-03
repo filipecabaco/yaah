@@ -719,6 +719,7 @@ mod tests {
             env: std::collections::BTreeMap::new(),
             config_dir: None,
             report: None,
+            provider: None,
         };
         let mut fresh = claude.clone();
         fresh.id = "fresh".into();
