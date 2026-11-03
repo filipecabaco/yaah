@@ -4,7 +4,12 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { afterEach } from "vitest";
 
-afterEach(cleanup);
+// The browser mock stops first (if a test installed it), so nothing it was still streaming
+// reaches a listener that cleanup has just removed (Tauri logs "Couldn't find callback id").
+afterEach(() => {
+  (globalThis as { __yaahDisposeMock?: () => void }).__yaahDisposeMock?.();
+  cleanup();
+});
 // Views and dialogs the app doesn't need at startup load on first use (a dynamic import, which
 // vitest transforms the first time): give a `findBy…` time for that.
 configure({ asyncUtilTimeout: 5000 });

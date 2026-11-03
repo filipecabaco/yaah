@@ -31,6 +31,14 @@ export type BrowserMockOptions = {
 /** Stops the previous install's replays and timers, so a reinstall starts clean. */
 let disposePrevious: (() => void) | undefined;
 
+/** Stops the current install's replays and timers: tests call it before unmounting, so nothing
+ * the mock was still streaming reaches a listener that is gone. */
+export function disposeBrowserMock() {
+  disposePrevious?.();
+}
+// For the test setup, which stops it after every test without loading the mock into tests that never use it.
+(globalThis as { __yaahDisposeMock?: () => void }).__yaahDisposeMock = disposeBrowserMock;
+
 /**
  * Answers every command the UI invokes, from fresh state each time it is called.
  * Returns that state, so a test can set up what Rust would have (e.g. a transcript on disk).
@@ -53,6 +61,7 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     for (const turn of Object.values(state.turns)) stopTurn(turn);
     for (const t of timers) clearTimeout(t);
     for (const t of Object.values(state.terminals)) clearInterval(t.timer);
+    disposePrevious = undefined;
   };
 
   const replies: Replies = {
