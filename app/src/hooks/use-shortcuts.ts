@@ -6,6 +6,14 @@ type Handlers = Partial<Record<ShortcutId, (hit: ShortcutHit) => void>>;
 /** Shortcuts that still work while a dialog or menu is open. */
 const OVER_DIALOGS: ShortcutId[] = ["palette", "help", "settings"];
 
+/** The handlers bound last, for keys that reach the app another way (a terminal hands them over). */
+let bound: { current: Handlers } | null = null;
+
+/** Run a shortcut as if its keys were pressed (a terminal pane passes app shortcuts on this way). */
+export function runShortcut(hit: ShortcutHit) {
+  bound?.current[hit.id]?.(hit);
+}
+
 /** Binds the global shortcuts. Handlers may change every render; the latest ones run. */
 export function useShortcuts(handlers: Handlers) {
   const latest = useRef(handlers);
@@ -14,6 +22,7 @@ export function useShortcuts(handlers: Handlers) {
   });
 
   useEffect(() => {
+    bound = latest;
     const onKey = (e: KeyboardEvent) => {
       const hit = shortcutFor(e);
       if (!hit || e.isComposing) return;
@@ -23,6 +32,9 @@ export function useShortcuts(handlers: Handlers) {
       latest.current[hit.id]?.(hit);
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (bound === latest) bound = null;
+    };
   }, []);
 }

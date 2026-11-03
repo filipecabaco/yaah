@@ -19,6 +19,7 @@ export type ShortcutId =
   | "splitRight"
   | "splitDown"
   | "closePane"
+  | "newTerminal"
   | "focusPane"
   | "toggleSidebar"
   | "help"
@@ -38,6 +39,7 @@ export const SHORTCUTS: Record<ShortcutId, Shortcut> = {
   splitRight: { label: "Split the pane to the right", keys: [MOD, "D"], code: "KeyD" },
   splitDown: { label: "Split the pane downward", keys: [MOD, SHIFT, "D"], code: "KeyD", shift: true },
   closePane: { label: "Close the pane", keys: [MOD, "W"], code: "KeyW" },
+  newTerminal: { label: "New terminal to the right, in this pane's folder", keys: [MOD, "T"], code: "KeyT" },
   focusPane: { label: "Move to the next pane over", keys: [MOD, ALT, "←↑↓→"] },
   toggleSidebar: { label: "Show or hide the sidebar", keys: [MOD, "B"], code: "KeyB" },
   help: { label: "Keyboard shortcuts", keys: [MOD, "/"], code: "Slash" },
@@ -82,4 +84,28 @@ export function shortcutFor(e: KeyboardEvent): ShortcutHit | null {
     if (s.code && is(s.code, s.keys[s.keys.length - 1].toLowerCase()) && !!s.shift === e.shiftKey) return { id: id as ShortcutId };
   }
   return null;
+}
+
+/** What a terminal leaves to the app; every other key goes to the shell. */
+const IN_TERMINAL = new Set<ShortcutId>(["palette", "splitRight", "splitDown", "closePane", "newTerminal", "focusPane"]);
+
+/**
+ * The app shortcut a keydown in a terminal is, if it's one a terminal leaves to the app.
+ * On macOS that's ⌘K, ⌘D, ⌘⇧D, ⌘W, ⌘T and ⌘⌥ arrows. On Linux Ctrl+K, Ctrl+D and Ctrl+W
+ * are the shell's (kill line, end of input, delete word), so there it takes Shift too
+ * (Ctrl+Shift+K, D, W, T), as GNOME Terminal does; Ctrl+Alt arrows stay as they are.
+ */
+export function terminalShortcut(e: KeyboardEvent): ShortcutHit | null {
+  if (isMac) {
+    const hit = shortcutFor(e);
+    return hit && IN_TERMINAL.has(hit.id) ? hit : null;
+  }
+  if (e.altKey) {
+    const hit = shortcutFor(e);
+    return hit?.id === "focusPane" ? hit : null;
+  }
+  if (!e.ctrlKey || !e.shiftKey || e.metaKey) return null;
+  const unshifted = { key: e.key.toLowerCase(), code: e.code, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false } as KeyboardEvent;
+  const hit = shortcutFor(unshifted);
+  return hit && IN_TERMINAL.has(hit.id) && hit.id !== "splitDown" ? hit : null;
 }

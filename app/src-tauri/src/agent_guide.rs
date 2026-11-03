@@ -527,6 +527,10 @@ mod tests {
             "ui_ask",
             "ui_guide",
             "`mcp__yaah-ui__ui_catalog`",
+            // A repo outside the chat: ask once, then `repo`; never a loop of shell commands.
+            "`ui_request_folders` once",
+            "`repo`",
+            "never loop shell commands",
             "bare `ui_catalog`",
         ] {
             assert!(text.contains(must), "the guide mentions {must}");
@@ -548,6 +552,11 @@ mod tests {
         assert!(bad < good, "bad first, then good");
         for source in ["`git.diff`", "`git.log`", "`git.status`", "`git.show`", "`postgres.query`", "`docker.logs`", "`textfile` with its `path`"] {
             assert!(section.contains(source), "the table names {source}");
+        }
+        // Another repository: ask for it once, then diff-review with `repo`; no shell loop, no asking again.
+        let other = section.split("**Another repository.**").nth(1).expect("the other-repository part");
+        for must in ["`ui_request_folders", r#""repo": "~/work/api""#, "Never loop shell commands", "After Not now, don't ask again"] {
+            assert!(other.contains(must), "it says {must}");
         }
         // Each example is valid JSON as written (the pasted diff is cut short on purpose).
         for block in section.split("```json\n").skip(1) {
@@ -620,7 +629,7 @@ mod tests {
             text.split("```json\n").skip(1).map(|b| serde_json::from_str(b.split("\n```").next().unwrap()).expect("a JSON example")).collect()
         };
         let ui = blocks(skill_text(skill("ui").unwrap(), &[]).as_str());
-        assert_eq!(ui.len(), 5, "three patterns, and the pasted diff beside diff-review");
+        assert_eq!(ui.len(), 6, "three patterns, the pasted diff beside diff-review, and diff-review with `repo`");
         for tree in ui {
             lib.prepare(None, json!({}), Some(tree.clone())).unwrap_or_else(|e| panic!("{tree}: {e:?}"));
         }

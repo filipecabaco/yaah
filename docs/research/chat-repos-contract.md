@@ -25,3 +25,13 @@ Branch `feat/split-panes-collapsible-sidebar`.
 - The chat header shows the chat's folders (a count and a menu listing them, with "Add repositories…").
 - All of these open the existing `RepoPicker` (`repo-picker.tsx`: keyboard list, clone, browse) in "add to this chat" mode.
 - The split-pane new-chat picker has an optional "Repositories" step (the same `RepoPicker`) whose result goes to `extraDirs`.
+
+## The agent asking for folders (`ui_request_folders`)
+- A yaah UI MCP tool, `ui_request_folders({ paths, reason })`. Paths must exist and be folders (absolute or `~/…`; canonical,
+  once each, at most 10). Ones the chat already has are left out; with none left it answers at once, nothing shown.
+- It shows an inline card (`Entry::FolderRequest`): "The agent wants to add `~/…` to this chat", the reason, **Add** / **Not now**.
+  The tool call waits like `ui_ask`; stopping the turn cancels it.
+- **Add** (`answer_folder_request({ sessionId, index, add })`) goes through `add_chat_dirs`'s flow (project or chat, the
+  notice after the turn), then tells the agent to read it with `repo`. If adding fails, the card stays open.
+- **Not now** adds nothing; the agent is told not to ask again or look for the folder with shell commands.
+- It needs no permission prompt (it's in Claude Code's `allowedTools`): the card is the prompt.

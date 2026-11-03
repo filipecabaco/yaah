@@ -4,7 +4,7 @@
 // agent asked with (ui_ask) until `answer_ui`; `cancel_turn` stops it.
 import type { Entry, Project, SessionInfo, SlashCommand } from "@/lib/api";
 import { baseName, home, need, now, type Mock, type Replies } from "./context";
-import { recordings, type Recording } from "./fixtures";
+import { bundledComponents, recordings, type Recording } from "./fixtures";
 import { addProject } from "./projects";
 
 /** A new, empty chat (session.rs `new_session`). */
@@ -42,7 +42,7 @@ export function seedChats() {
   };
 }
 
-const slashCommands: SlashCommand[] = [
+export const slashCommands: SlashCommand[] = [
   { name: "review", description: "Review the current changes", input: null },
   { name: "init", description: "Write a CLAUDE.md for this project", input: null },
   { name: "compact", description: "Summarise the conversation to free up context", input: { hint: "what to keep" } },
@@ -363,9 +363,47 @@ const commandOutput: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
+/** The yaah repo, outside a quick chat's scratch folder: the agent asks for it (`ui_request_folders`). */
+const yaahRepo = `${home}/Documents/workspace/yaah`;
+const reviewComponent = bundledComponents.find((c) => c.name === "diff-review");
+const reviewProps = { repo: yaahRepo, range: "HEAD~1", title: "yaah: the last commit against the one before" };
+/** A diff of a repo outside the chat: ask for the folder once, then diff-review with `repo` (no shell commands). */
+const folderRequest: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  { event: "session-entry", index: 1, entry: call("rf", "mcp__yaah-ui__ui_request_folders", "other", "in_progress", { paths: [yaahRepo] }) },
+  {
+    event: "session-entry",
+    index: 2,
+    entry: { type: "folderRequest", paths: [yaahRepo], reason: "to show the diff of your yaah project", askId: "ask-folders", answer: null },
+  },
+  {
+    event: "session-entry",
+    index: 1,
+    entry: call("rf", "mcp__yaah-ui__ui_request_folders", "other", "completed", { paths: [yaahRepo] }, `The user added ${yaahRepo} to this chat.`),
+  },
+  {
+    event: "session-entry",
+    index: 3,
+    entry: {
+      type: "ui",
+      askId: null,
+      answer: null,
+      title: null,
+      component: "diff-review",
+      version: reviewComponent?.version ?? 1,
+      tree: { type: "$component", name: "diff-review", version: reviewComponent?.version ?? 1, props: reviewProps, tree: reviewComponent?.tree },
+      props: reviewProps,
+    },
+  },
+  { event: "session-entry", index: 4, entry: { type: "agent", text: "Here is the last commit of yaah against the one before it.", messageId: null } },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
 const routes: [RegExp, Recording][] = [
   [/command output|tool cards/i, commandOutput],
+  [/diff of my project|workspace of yaah|request folders/i, folderRequest],
   [/big diff/i, bigDiff],
   [/assembl|deploys/i, assembling],
   [/\blinks?\b|markdown/i, markdownReply],
@@ -447,6 +485,12 @@ export function chatReplies(m: Mock): Replies {
 
   const open = (fields: Pick<SessionInfo, "projectId" | "accountId" | "cwd" | "additionalDirs">) => openChat(m, fields);
 
+  /** Notices added mid-turn (folders added), shown once the turn ends. */
+  const afterTurn: Record<string, Entry[]> = {};
+  const flushAfterTurn = async (sessionId: string) => {
+    for (const notice of afterTurn[sessionId]?.splice(0) ?? []) await show(sessionId, (state.transcripts[sessionId] ??= []).length, notice);
+  };
+
   /** Replays the recording for `text`, after what the chat already shows. */
   async function replay(sessionId: string, text: string, mentions: string[]) {
     const s = session(sessionId);
@@ -472,6 +516,7 @@ export function chatReplies(m: Mock): Replies {
       if (step.event === "session-info") {
         // Keep the mock's own record in step, so e.g. a rename mid-turn doesn't look stopped.
         Object.assign(s, { running: step.running, stopReason: step.stopReason });
+        if (!step.running) await flushAfterTurn(sessionId);
         await showInfo(s);
         continue;
       }
@@ -491,6 +536,22 @@ export function chatReplies(m: Mock): Replies {
       if (turn.cancelled) return;
       await show(sessionId, index, entry.type === "ui" ? shiftTimes(entry, shift) : entry);
       if (entry.type === "permission" || (entry.type === "ui" && entry.askId && entry.answer == null)) await pause();
+      if (entry.type === "folderRequest" && entry.answer == null) {
+        await pause();
+        const answered = shown(sessionId, index);
+        // "Not now": the agent carries on without the folder (and doesn't go looking for it).
+        if (!turn.cancelled && answered?.type === "folderRequest" && answered.answer !== "added") {
+          await show(sessionId, state.transcripts[sessionId]?.length ?? index + 1, {
+            type: "agent",
+            text: "OK, I'll leave that folder out of this chat.",
+            messageId: null,
+          });
+          Object.assign(s, { running: false, stopReason: "end_turn" });
+          await flushAfterTurn(sessionId);
+          await showInfo(s);
+          return;
+        }
+      }
     }
   }
 
@@ -501,6 +562,30 @@ export function chatReplies(m: Mock): Replies {
     await m.wait(700);
     await m.emit("session-starting", { startId, stage: "mcpServers", servers: ["chrome-devtools", "fetch"] });
     await m.wait(900);
+  };
+
+  // session.rs `add_dirs`: a project chat's repos join the project (every chat in it follows), a quick chat keeps them;
+  // the notice waits for a running turn to end there, here it shows at once.
+  const addDirs = async (sessionId: string, paths: string[]): Promise<SessionInfo> => {
+    const s = session(sessionId);
+    const added = [...new Set(paths.map((p) => p.replace(/(.)\/+$/, "$1")))].filter((p) => p !== s.cwd && !s.additionalDirs.includes(p));
+    if (!added.length) return s;
+    const project = s.projectId ? state.projects.find((p) => p.id === s.projectId) : undefined;
+    if (project) {
+      project.dirs = [...new Set([...project.dirs, ...added])];
+      await m.emit("projects-changed", { projectId: project.id });
+      for (const c of Object.values(state.sessions).filter((c) => c.projectId === project.id)) {
+        const dirs = [...new Set([...project.dirs, project.contextDir, ...c.extraDirs])].filter((d) => d !== c.cwd);
+        Object.assign(c, { additionalDirs: dirs, dirsChanged: true });
+        if (c !== s) await showInfo(c);
+      }
+    } else Object.assign(s, { additionalDirs: [...s.additionalDirs, ...added], extraDirs: [...s.extraDirs, ...added], dirsChanged: true });
+    const notice: Entry = { type: "addedDirs", paths: added, to: project ? "project" : "chat" };
+    // Mid-turn the notice waits for the turn to end, as session.rs `after_turn` does.
+    if (s.running) (afterTurn[sessionId] ??= []).push(notice);
+    else await show(sessionId, (state.transcripts[sessionId] ??= []).length, notice);
+    await showInfo(s);
+    return s;
   };
 
   return {
@@ -593,26 +678,16 @@ export function chatReplies(m: Mock): Replies {
       await showInfo(s);
       return s;
     },
-    // session.rs `add_dirs`: a project chat's repos join the project (every chat in it follows), a quick chat keeps them;
-    // the notice waits for a running turn to end there, here it shows at once.
-    add_chat_dirs: async ({ sessionId, paths }: { sessionId: string; paths: string[] }): Promise<SessionInfo> => {
-      const s = session(sessionId);
-      const added = [...new Set(paths.map((p) => p.replace(/(.)\/+$/, "$1")))].filter((p) => p !== s.cwd && !s.additionalDirs.includes(p));
-      if (!added.length) return s;
-      const project = s.projectId ? state.projects.find((p) => p.id === s.projectId) : undefined;
-      if (project) {
-        project.dirs = [...new Set([...project.dirs, ...added])];
-        await m.emit("projects-changed", { projectId: project.id });
-        for (const c of Object.values(state.sessions).filter((c) => c.projectId === project.id)) {
-          const dirs = [...new Set([...project.dirs, project.contextDir, ...c.extraDirs])].filter((d) => d !== c.cwd);
-          Object.assign(c, { additionalDirs: dirs, dirsChanged: true });
-          if (c !== s) await showInfo(c);
-        }
-      } else Object.assign(s, { additionalDirs: [...s.additionalDirs, ...added], extraDirs: [...s.extraDirs, ...added], dirsChanged: true });
-      const list = (state.transcripts[sessionId] ??= []);
-      await show(sessionId, list.length, { type: "addedDirs", paths: added, to: project ? "project" : "chat" });
-      await showInfo(s);
-      return s;
+    add_chat_dirs: ({ sessionId, paths }: { sessionId: string; paths: string[] }) => addDirs(sessionId, paths),
+    // session.rs `answer_folders`: Add goes through the add-repos flow (add_chat_dirs), then the waiting agent hears it.
+    answer_folder_request: async ({ sessionId, index, add }: { sessionId: string; index: number; add: boolean }): Promise<SessionInfo> => {
+      const request = shown(sessionId, index);
+      if (request?.type !== "folderRequest") throw new Error("no folder request at that index");
+      if (request.answer != null) throw new Error("this request was already answered");
+      if (add) await addDirs(sessionId, request.paths);
+      await show(sessionId, index, { ...request, answer: add ? "added" : "declined" });
+      state.turns[sessionId]?.resume?.();
+      return session(sessionId);
     },
     respond_permission: async ({ sessionId, index, optionId }: { sessionId: string; index: number; optionId: string | null }) => {
       const request = shown(sessionId, index);
@@ -642,6 +717,7 @@ export function chatReplies(m: Mock): Replies {
     },
     cancel_turn: async ({ sessionId }: { sessionId: string }) => {
       stopTurn(state.turns[sessionId]);
+      await flushAfterTurn(sessionId);
       await showInfo(Object.assign(session(sessionId), { running: false, stopReason: "cancelled" }));
       return null;
     },

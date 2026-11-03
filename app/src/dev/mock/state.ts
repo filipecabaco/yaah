@@ -9,6 +9,7 @@ import { seedProviders } from "./providers";
 import { seedSettings } from "./settings";
 import { seedSkills } from "./skills";
 import { seedSources } from "./sources";
+import { seedTerminals } from "./terminals";
 import { linkSeededProjects } from "./work-items";
 
 export function createState({ firstRun }: { firstRun: boolean }) {
@@ -23,6 +24,7 @@ export function createState({ firstRun }: { firstRun: boolean }) {
     ...seedSkills(),
     ...seedMcp(),
     ...seedProviders(),
+    ...seedTerminals(),
   };
   linkSeededProjects(state);
   return state;

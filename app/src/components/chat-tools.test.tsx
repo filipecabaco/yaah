@@ -78,12 +78,15 @@ describe("tool cards", () => {
 
   it("use a wide column, and messages keep a readable measure", async () => {
     const { log } = await commandTurn();
-    expect(log.className).toContain("max-w-[min(100%,1400px)]");
-    expect(
-      within(log)
-        .getByText(/Discounts now apply before tax/)
-        .closest(".max-w-\\[75ch\\]"),
-    ).not.toBeNull();
+    // The shared column (index.css `.chat-column`), in a pane-sized container.
+    expect(log.classList).toContain("chat-column");
+    expect(log.parentElement?.classList).toContain("@container");
+    const prose = within(log)
+      .getByText(/Discounts now apply before tax/)
+      .closest("[data-align]");
+    expect(prose).toHaveAttribute("data-align", "start");
+    expect(prose?.className).toContain("max-w-[80ch]");
+    expect(prose?.className).not.toContain("ml-auto");
   });
 });
 

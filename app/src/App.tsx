@@ -1,5 +1,5 @@
 import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, FolderGit2, MessageSquarePlus } from "lucide-react";
+import { ChevronDown, FolderGit2, MessageSquarePlus, SquareTerminal } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark } from "@/components/brand/mark";
 import { Chat, StartingChat } from "@/components/chat";
@@ -13,6 +13,8 @@ import type { NewProjectMode } from "@/components/new-project-dialog";
 import { preloadSettings } from "@/components/settings/tab-code";
 import { PanePicker } from "@/components/pane-picker";
 import { PaneGrid } from "@/components/panes";
+import { TerminalPane } from "@/components/terminal/terminal-pane";
+import { useTerminals } from "@/components/terminal/use-terminals";
 import { focusPaneDom } from "@/lib/pane-focus";
 import { CollapsedTitleBar, Sidebar } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
@@ -21,7 +23,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useShortcuts } from "@/hooks/use-shortcuts";
 import { contentKey, useYaah, type Selection } from "@/hooks/use-yaah";
 import { TranscriptsContext } from "@/hooks/use-transcript";
-import { api, canChat, type AgentProfile, type SessionInfo } from "@/lib/api";
+import { api, canChat, mayListSessions, type AgentProfile, type SessionInfo } from "@/lib/api";
 import { onOpenAgentSwitch, onOpenComponent, onOpenSettings } from "@/lib/app-events";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
 import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
@@ -83,6 +85,8 @@ export default function App() {
   );
   // Everything below acts on the focused pane: selecting shows it there.
   const panes = y.panes;
+  // Terminal panes: ⌘T, the home screen, the picker, ⌘K and tool cards' "Open as pane" open them.
+  const terminals = useTerminals(y);
   const select = y.setSelection;
   const openChat = (id: string) => select({ kind: "chat", id });
   const selection = y.selection;
@@ -196,6 +200,7 @@ export default function App() {
       if (to) focusPaneDom(to);
     },
     toggleSidebar: panes.toggleSidebar,
+    newTerminal: terminals.openHere,
   });
 
   const chatActions = useMemo(
@@ -247,6 +252,7 @@ export default function App() {
                 current={y.agentId}
                 currentHint={formatKeys(SHORTCUTS.newChat.keys)}
                 onPick={sidebar.onNewQuickChatWith}
+                extra={y.agents.some(mayListSessions) ? { label: "Resume a session…", onSelect: () => setPalette({ kind: "resume" }) } : undefined}
               >
                 <Button className="rounded-l-none border-l-primary-foreground/20 px-2" aria-label="Start a quick chat with…">
                   <ChevronDown />
@@ -256,6 +262,9 @@ export default function App() {
           </div>
           <Button variant="outline" onClick={() => setCreatingProject("name")}>
             <FolderGit2 /> New project <Kbd className="ml-1">{formatKeys(SHORTCUTS.newProject.keys)}</Kbd>
+          </Button>
+          <Button variant="outline" onClick={() => terminals.open({}, "here")}>
+            <SquareTerminal /> New terminal <Kbd className="ml-1">{formatKeys(SHORTCUTS.newTerminal.keys)}</Kbd>
           </Button>
         </div>
       </div>
@@ -340,6 +349,20 @@ export default function App() {
       ) : (
         blank
       );
+    } else if (c?.kind === "terminal") {
+      labels[p.id] = `Terminal: ${c.cwd ?? "default folder"}`;
+      contents[p.id] = (
+        <TerminalPane
+          pane={p.id}
+          content={c}
+          focused={focused}
+          onContent={(next) => setPaneContent(p.id, next)}
+          onClose={() => {
+            if (panes.close(p.id)) focusPaneDom(panes.focusedId());
+            else setPaneContent(p.id, null);
+          }}
+        />
+      );
     } else if (c?.kind === "picker") {
       labels[p.id] = "Open in this pane";
       contents[p.id] = (
@@ -352,6 +375,8 @@ export default function App() {
           onNewChat={(id, repos) => withAgent(() => y.newQuickChat(undefined, id, repos), id)}
           onNewProject={() => setCreatingProject("name")}
           onOpen={(s) => setPaneContent(p.id, s)}
+          onNewTerminal={(cwd) => setPaneContent(p.id, { kind: "terminal", cwd })}
+          onResume={(accountId, s) => y.resumeSession(accountId, s, p.id)}
           // Esc on an empty search: the pane goes (the last one goes home instead).
           onClose={() => {
             if (panes.close(p.id)) focusPaneDom(panes.focusedId());
@@ -433,6 +458,7 @@ export default function App() {
                 onIntegrations={(service) => setSetup({ kind: "integrations", service })}
                 onSettings={(tab) => setSetup({ kind: "settings", tab })}
                 onHelp={() => setHelp(true)}
+                terminals={terminals}
               />
               <ShortcutsDialog open={help} onClose={() => setHelp(false)} />
               <Suspense>

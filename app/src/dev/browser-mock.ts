@@ -12,11 +12,13 @@ import { libraryReplies, pickFolder } from "./mock/library";
 import { mcpReplies } from "./mock/mcp";
 import { projectReplies } from "./mock/projects";
 import { providerReplies } from "./mock/providers";
+import { resumeReplies } from "./mock/resume";
 import { settingsReplies } from "./mock/settings";
 import { skillReplies } from "./mock/skills";
 import { sourceReplies } from "./mock/sources";
 import { createState } from "./mock/state";
 import { workItemReplies } from "./mock/work-items";
+import { terminalReplies } from "./mock/terminals";
 import { flushTranscripts } from "@/lib/transcripts";
 
 export type BrowserMockOptions = {
@@ -50,6 +52,7 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
   disposePrevious = () => {
     for (const turn of Object.values(state.turns)) stopTurn(turn);
     for (const t of timers) clearTimeout(t);
+    for (const t of Object.values(state.terminals)) clearInterval(t.timer);
   };
 
   const replies: Replies = {
@@ -64,6 +67,8 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     ...mcpReplies(m),
     ...providerReplies(m),
     ...workItemReplies(m),
+    ...terminalReplies(m),
+    ...resumeReplies(m),
     // Plugins: a folder picker (a sample folder on the library screens, cancelled elsewhere), and links and folders that open nowhere.
     "plugin:dialog|open": (args: unknown) => pickFolder(args),
     "plugin:opener|open_url": () => null,

@@ -15,7 +15,6 @@ import {
   FolderPlus,
   Globe,
   Info,
-  LayoutPanelTop,
   Loader2,
   LogIn,
   Paperclip,
@@ -36,10 +35,11 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CopyMenu, type MenuAction } from "@/components/menus";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
-import { PatchView, TextDiff, UiTree } from "@/components/ui-render";
-import type { FormHost } from "@/components/ui-form-host";
+import { PatchView, TextDiff } from "@/components/ui-render";
+import { ToolTerminal } from "@/components/terminal/tool-terminal";
+import { FolderRequestEntry, UiEntry } from "@/components/ui-entry";
 import { api, type Entry, type ToolContent } from "@/lib/api";
-import { openComponent, openSettings } from "@/lib/app-events";
+import { openSettings } from "@/lib/app-events";
 import { baseName, compactPath, elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
 import { readToolText, toolTextLayout } from "@/lib/tool-output";
@@ -85,6 +85,8 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inT
       return <SwitchEntry entry={entry} />;
     case "addedDirs":
       return <AddedDirsEntry entry={entry} />;
+    case "folderRequest":
+      return <FolderRequestEntry entry={entry} index={index} />;
   }
 });
 
@@ -99,12 +101,12 @@ const quoted = (text: string) =>
 function UserMessage({ entry }: { entry: Of<"user"> }) {
   const pane = useChat()?.pane;
   return (
-    <div className="flex max-w-[75ch] flex-col items-end gap-1 text-sm">
+    <div data-align="end" className="ml-auto flex w-fit max-w-[min(75ch,85%)] flex-col items-end gap-1 text-sm">
       <CopyMenu
         act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }, pane) }]}
         actions={[{ label: "Copy text", text: () => entry.text }]}
       >
-        <div className="max-w-[85%] rounded-lg bg-muted px-3 py-2 whitespace-pre-wrap">{entry.text}</div>
+        <div className="max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">{entry.text}</div>
       </CopyMenu>
       {entry.attachments.length > 0 && (
         <div className="flex gap-1">
@@ -129,7 +131,7 @@ function AgentMessage({ entry }: { entry: Of<"agent"> }) {
       ]}
       actions={[{ label: "Copy text", text: () => entry.text }]}
     >
-      <div className="max-w-[75ch] text-sm">
+      <div data-align="start" className="max-w-[80ch] text-sm">
         <Markdown>{entry.text}</Markdown>
       </div>
     </CopyMenu>
@@ -302,7 +304,7 @@ function ToolContentView({ content, failed }: { content: ToolContent; failed: bo
     case "diff":
       return <TextDiff path={content.path} oldText={content.oldText ?? ""} newText={content.newText} />;
     case "terminal":
-      return <p className="text-xs text-muted-foreground">Terminal output isn't shown in this PoC.</p>;
+      return <ToolTerminal terminalId={content.terminalId} keptOutput={content.keptOutput} exitStatus={content.exitStatus} />;
   }
 }
 
@@ -522,53 +524,6 @@ function NoticesCard({ items }: { items: Of<"notices">["items"] }) {
           ))}
         </ul>
       </div>
-    </CopyMenu>
-  );
-}
-
-function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
-  const sessionId = useChat()?.sessionId;
-  // Forms in this UI answer through its transcript entry (and a waiting ui_ask, if any),
-  // and share their draft with the agent (ui_get_values / ui_set_values).
-  const form = useMemo<FormHost>(
-    () => ({
-      answer: entry.answer,
-      asking: !!entry.askId,
-      draft: entry.draft,
-      draftBy: entry.draftBy,
-      onSubmit: sessionId ? (values) => api.answerUi(sessionId, index, values) : undefined,
-      onEdit: sessionId ? (values) => api.editUi(sessionId, index, values).then(() => undefined) : undefined,
-    }),
-    [entry.answer, entry.askId, entry.draft, entry.draftBy, sessionId, index],
-  );
-  return (
-    <CopyMenu
-      act={() => {
-        const name = entry.component;
-        return name ? [{ label: "Open in Component library", icon: <LayoutPanelTop />, onSelect: () => openComponent(name) }] : [];
-      }}
-      actions={[
-        { label: "Copy UI JSON", text: () => JSON.stringify(entry.tree, null, 2) },
-        { label: "Copy props JSON", text: () => JSON.stringify(entry.props, null, 2) },
-      ]}
-    >
-      <figure className="flex flex-col gap-1.5">
-        <figcaption className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <LayoutPanelTop className="size-3" />
-          {entry.title ?? (entry.component ? null : "UI")}
-          {entry.askId && entry.answer == null && (
-            <Badge variant="secondary" className="h-4 px-1 text-[10px]">
-              waiting for you
-            </Badge>
-          )}
-          {entry.component && entry.version != null && (
-            <Badge variant="outline" className="h-4 px-1 font-mono text-[10px]">
-              {entry.component} v{entry.version}
-            </Badge>
-          )}
-        </figcaption>
-        <UiTree tree={entry.tree} props={entry.props} form={form} />
-      </figure>
     </CopyMenu>
   );
 }

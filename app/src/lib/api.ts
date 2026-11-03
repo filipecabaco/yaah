@@ -32,6 +32,8 @@ export type AgentReport = {
   additionalDirs: boolean;
   /** Takes a client system prompt (ACP `systemPrompt`); yaah's UI guide goes there. */
   systemPrompt?: boolean;
+  /** Lists its own sessions (ACP `session/list`), for "Resume a session…". Absent: unknown until it runs again. */
+  listSessions?: boolean;
   checkedAt: number;
 };
 
@@ -350,6 +352,24 @@ export type SessionInfo = {
 
 export type SlashCommand = { name: string; description: string; input?: { hint?: string } | null };
 
+/** One of an agent's own sessions, e.g. started in its CLI (session/resume.rs `AgentSession`). */
+export type AgentSession = {
+  /** The agent's ACP session id. */
+  sessionId: string;
+  title: string | null;
+  /** Its working directory. */
+  cwd: string;
+  /** Last activity, Unix seconds. */
+  updatedAt: number | null;
+  /** The chat that already holds it: resuming opens that chat. */
+  alreadyInYaah?: string;
+};
+/** A page of them; `nextCursor` fetches the next. */
+export type AgentSessions = { sessions: AgentSession[]; nextCursor: string | null };
+
+/** Profiles "Resume a session…" offers: those that list their sessions, or haven't said yet (they're asked when picked). */
+export const mayListSessions = (agent: AgentProfile): boolean => agent.report?.listSessions !== false;
+
 /** The sidebar: hidden to a strip, and its width in CSS pixels (220–480). */
 export type SidebarState = { collapsed: boolean; width: number };
 export const SIDEBAR = { min: 220, max: 480, default: 288 } as const;
@@ -370,6 +390,9 @@ export type GeneralSettings = {
   version: string;
   /** Teach agents about yaah's UI (Settings → Chat). */
   teachAgents: boolean;
+  /** The app "Open in terminal" uses: "system" or one of `terminalApps` (terminal_apps.rs). */
+  terminalApp?: string;
+  terminalApps?: { id: string; label: string }[];
 };
 
 /** How an agent hears about yaah's UI (`agent_guide.rs` `Route`). */
@@ -433,7 +456,8 @@ export type PermissionOption = {
 export type ToolContent =
   | { type: "content"; content: { type: string; text?: string } }
   | { type: "diff"; path: string; oldText: string | null; newText: string }
-  | { type: "terminal"; terminalId: string };
+  /** An agent's command in a terminal yaah runs (acp_terminals.rs); once released, its last bytes (base64) and exit are kept here. */
+  | { type: "terminal"; terminalId: string; keptOutput?: string; exitStatus?: { exitCode: number | null; signal: string | null } | null };
 
 export type PlanItem = {
   content: string;
@@ -485,7 +509,9 @@ export type Entry =
   /** The chat moved to another agent (`switch_agent`); `label` is the new agent's, `from` the one before. */
   | { type: "switch"; accountId: string; label: string; from: string | null }
   /** Folders added to the chat as it went (`add_chat_dirs`): to its project, or to this chat only. */
-  | { type: "addedDirs"; paths: string[]; to: "project" | "chat" };
+  | { type: "addedDirs"; paths: string[]; to: "project" | "chat" }
+  /** The agent asked to add folders to the chat (`ui_request_folders`) and waits for Add / Not now. */
+  | { type: "folderRequest"; paths: string[]; reason: string; askId: string | null; answer: "added" | "declined" | "cancelled" | null };
 
 /** A page of a transcript (`get_entries`). */
 export type EntryPage = { entries: Entry[]; from: number; total: number };
@@ -735,6 +761,8 @@ export const api = {
     }),
   /** Add repos to a chat as it goes: to its project when it has one, else to the chat (docs/research/chat-repos-contract.md). */
   addChatDirs: (sessionId: string, paths: string[]) => invoke<SessionInfo>("add_chat_dirs", { sessionId, paths }),
+  /** Answer the agent's folder request at `index`: `add` adds them as `addChatDirs` does, then the agent hears it. */
+  answerFolderRequest: (sessionId: string, index: number, add: boolean) => invoke<SessionInfo>("answer_folder_request", { sessionId, index, add }),
   setChatProject: (sessionId: string, projectId: string | null) => invoke<SessionInfo>("set_chat_project", { sessionId, projectId }),
   /** Make a project from a chat's folder and file the chat under it. */
   promoteChat: (sessionId: string, name: string) => invoke<[Project, SessionInfo]>("promote_chat", { sessionId, name }),
@@ -753,6 +781,12 @@ export const api = {
   sendPrompt: (sessionId: string, text: string, mentions: string[] = []) => invoke<void>("send_prompt", { sessionId, text, mentions }),
   /** The chat's next message goes to `accountId`'s agent, in a fresh session, with the conversation so far. Refused mid-turn. */
   switchAgent: (sessionId: string, accountId: string) => invoke<SessionInfo>("switch_agent", { sessionId, accountId }),
+  /** A page of `accountId`'s own sessions (started in its CLI, say), from that profile's agent; optionally only those in `cwd`. */
+  listAgentSessions: (accountId: string, cwd?: string, cursor?: string) =>
+    invoke<AgentSessions>("list_agent_sessions", { accountId, cwd: cwd ?? null, cursor: cursor ?? null }),
+  /** Bring one in as a chat with its history (or the chat that already holds it). */
+  importAgentSession: (accountId: string, s: Pick<AgentSession, "sessionId" | "cwd" | "title">) =>
+    invoke<SessionInfo>("import_agent_session", { accountId, sessionId: s.sessionId, cwd: s.cwd, title: s.title }),
   renameSession: (sessionId: string, title: string) => invoke<SessionInfo>("rename_session", { sessionId, title }),
   deleteSession: (sessionId: string) => invoke<void>("delete_session", { sessionId }),
   searchFiles: (sessionId: string, query: string, limit = 30) => invoke<FileMatch[]>("search_files", { sessionId, query, limit }),

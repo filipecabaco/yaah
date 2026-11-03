@@ -66,6 +66,14 @@ describe("yaah's UI tools", () => {
     expect(text(ui("ui_get_values"), "completed", { id: "trip" })).toBe("Read your answers");
   });
 
+  it("ui_request_folders names the folder it asks to add", () => {
+    const yaah = { paths: ["/Users/dev/Documents/workspace/yaah"], reason: "to review its diff" };
+    expect(label(ui("ui_request_folders"), "in_progress", yaah)).toEqual({ text: "Asking to add ~/Documents/workspace/yaah", busy: true });
+    expect(text(ui("ui_request_folders"), "completed", yaah)).toBe("Asked to add ~/Documents/workspace/yaah");
+    expect(text(ui("ui_request_folders"), "completed", { paths: ["/a", "/b"] })).toBe("Asked to add 2 folders");
+    expect(text(ui("ui_request_folders"), "failed", {})).toBe("Couldn't ask to add folders");
+  });
+
   it("ui_save_component stores the component, then names the version it got", () => {
     expect(label(ui("ui_save_component"), "in_progress", { name: "deploy-card" })).toEqual({ text: "Storing deploy-card", busy: true });
     expect(text(ui("ui_save_component"), "completed", { name: "deploy-card" }, "Saved `deploy-card` v3 to the library.")).toBe(

@@ -4,7 +4,17 @@
 // use-yaah.ts and Rust saves it (settings.rs `layout`, checked and pruned by layout.rs).
 
 /** What a pane shows; null is the home screen. */
-export type Selection = { kind: "project"; id: string } | { kind: "chat"; id: string } | { kind: "components" } | { kind: "picker" } | null;
+/**
+ * What a pane shows; null is the home screen. A terminal is a shell in `cwd` (the default folder
+ * when there is none); `id` is its running shell, which a restart leaves naming nothing.
+ */
+export type Selection =
+  | { kind: "project"; id: string }
+  | { kind: "chat"; id: string }
+  | { kind: "components" }
+  | { kind: "picker" }
+  | { kind: "terminal"; cwd?: string; id?: string }
+  | null;
 
 export type Pane = { type: "pane"; id: string; content: Selection };
 /** `row`: `a` left of `b`; `column`: `a` above `b`. `ratio` is `a`'s share. */
@@ -123,6 +133,7 @@ export const focusPane = (layout: Layout, id: string): Layout =>
 export function sameContent(a: Selection, b: Selection): boolean {
   if (a === b) return true;
   if (!a || !b || a.kind !== b.kind) return false;
+  if (a.kind === "terminal") return b.kind === "terminal" && a.id === b.id && a.cwd === b.cwd;
   return !("id" in a) || a.id === (b as { id: string }).id;
 }
 

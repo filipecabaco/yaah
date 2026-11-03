@@ -10,6 +10,7 @@ import { draftIntoComposer, useChat } from "@/components/chat-context";
 import { ErrorText } from "@/components/error-text";
 import { UiChoice, UiForm, UiRank, UiSelect, UiSlider, UiTextfield, UiToggle } from "@/components/ui-form";
 import { FormHostContext, type FormHost } from "@/components/ui-form-host";
+import { useUiView } from "@/components/ui-view";
 import { branch, collectTabs, eachScopes, requiredFields, resolve, resolveProps, type Scope } from "@/components/ui-bindings";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -88,10 +89,11 @@ const variant = (v: unknown, fallback: Variant): Variant => ((VARIANTS as readon
 /** An agent UI tree with its props. `form` connects its forms to the transcript entry. */
 export function UiTree({ tree, props, form }: { tree: unknown; props: unknown; form?: FormHost }) {
   useEffect(preloadUiBlocks, []);
+  const { expanded } = useUiView();
   return (
     <UiErrorBoundary tree={tree}>
       <FormHostContext.Provider value={form}>
-        <div className="flex flex-col gap-3 text-sm">
+        <div data-expanded={expanded || undefined} className={cn("flex flex-col gap-3 text-sm", expanded && "h-full min-h-0")}>
           <UiNode node={tree} scope={asObj(props)} />
         </div>
       </FormHostContext.Provider>
@@ -852,8 +854,10 @@ function LiveSource({
   }, [key, session, interval, keep, paused, nonce, onScreen]);
 
   const name = typeof as === "string" && as ? as : "data";
+  // Expanded, what it feeds fills the dialog (a diff review grows to its height).
+  const { expanded } = useUiView();
   return (
-    <div ref={box} className="flex flex-col gap-2">
+    <div ref={box} className={cn("flex flex-col gap-2", expanded && "min-h-0 flex-1")}>
       {state.data === undefined && state.error == null ? (
         <div className="h-24 animate-pulse rounded-md bg-muted" />
       ) : (

@@ -1,6 +1,18 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { AlertTriangle, ArrowUp, ChevronDown, FileText, FolderGit2, FolderPlus, Repeat, RotateCw, SquareSlash, Square } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowUp,
+  ChevronDown,
+  FileText,
+  FolderGit2,
+  FolderPlus,
+  Repeat,
+  RotateCw,
+  SquareSlash,
+  Square,
+  SquareTerminal,
+} from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark } from "@/components/brand/mark";
 import { Hint } from "@/components/shortcuts";
@@ -19,6 +31,7 @@ import {
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type AgentProfile, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
+import { openInTerminalApp } from "@/lib/terminal-api";
 import { onOpenAddRepos, openAddRepos, openAgentSwitch } from "@/lib/app-events";
 import { baseName, compactPath, elapsedText, plural, startingText } from "@/lib/format";
 import { errorMessage } from "@/lib/narrow";
@@ -155,6 +168,11 @@ function ChatFolders({ roots, pending, inProject, onAdd }: { roots: string[]; pe
         ))}
         {pending && <p className="px-2 py-1 text-xs text-muted-foreground">New folders reach the agent with your next message.</p>}
         <DropdownMenuSeparator />
+        {roots[0] && (
+          <DropdownMenuItem onSelect={() => openInTerminalApp(roots[0])}>
+            <SquareTerminal /> Open in terminal
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem onSelect={onAdd}>
           <FolderPlus /> Add repositories…
         </DropdownMenuItem>
@@ -227,7 +245,7 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
         const el = e.currentTarget;
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
       }}
-      className="min-h-0 flex-1 overflow-y-auto"
+      className="@container min-h-0 flex-1 overflow-y-auto"
     >
       {hasEarlier && (
         <button
@@ -239,12 +257,7 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
           Show earlier messages
         </button>
       )}
-      <div
-        className="mx-auto flex w-full max-w-[min(100%,1400px)] flex-col gap-3 px-4 py-6"
-        role="log"
-        aria-label="Conversation"
-        aria-busy={running || !transcript}
-      >
+      <div className="chat-column flex flex-col gap-3 py-6" role="log" aria-label="Conversation" aria-busy={running || !transcript}>
         {transcript?.error ? (
           <TranscriptEntry
             entry={{ type: "error", message: transcript.error, loginAccount: null }}
@@ -517,8 +530,8 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   ).filter((g) => g.list.length > 0);
   return (
     // The composer lines up with the transcript's column: the same edges as the cards and UI above it.
-    <div className="border-t py-3">
-      <div className="relative mx-auto flex w-full max-w-[min(100%,1400px)] items-end gap-2 px-4">
+    <div className="@container border-t py-3">
+      <div className="chat-column relative flex items-end gap-2">
         {showList && (
           <Command
             ref={list}
@@ -535,7 +548,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
             }
             // Keep focus in the textarea when an item is clicked.
             onMouseDown={(e) => e.preventDefault()}
-            className="absolute bottom-full left-4 z-10 mb-2 h-auto w-[min(42rem,calc(100%-2rem))] shadow-md ring-1 ring-foreground/10"
+            className="absolute bottom-full left-(--chat-gutter) z-10 mb-2 h-auto w-[min(42rem,calc(100%-2*var(--chat-gutter)))] shadow-md ring-1 ring-foreground/10"
           >
             <CommandList id={listId}>
               {items.length === 0 ? (
@@ -620,7 +633,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
           </Hint>
         )}
       </div>
-      <ErrorText error={error} className="mx-auto mt-1 w-full max-w-[min(100%,1400px)] px-4" />
+      <ErrorText error={error} className="chat-column mt-1" />
     </div>
   );
 }
@@ -707,8 +720,8 @@ export function StartingChat({ start, agents, onDismiss }: { start: Starting; ag
           </div>
         )}
       </div>
-      <div className="border-t py-3">
-        <div className="mx-auto flex w-full max-w-[min(100%,1400px)] items-end gap-2 px-4">
+      <div className="@container border-t py-3">
+        <div className="chat-column flex items-end gap-2">
           <Textarea
             disabled
             placeholder={failed ? `${label} didn't start` : `${label} is starting…`}

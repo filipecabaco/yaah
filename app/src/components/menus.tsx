@@ -17,7 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Copy, ExternalLink, FolderInput, FolderOpen, FolderPlus, MessageSquare, Pencil, Square, Trash2 } from "lucide-react";
+import { Copy, ExternalLink, FolderInput, FolderOpen, FolderPlus, MessageSquare, Pencil, Square, SquareTerminal, Trash2 } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/context-menu";
 import { api, type SessionInfo } from "@/lib/api";
 import { isWebUrl, openExternal } from "@/lib/links";
+import { openInTerminalApp } from "@/lib/terminal-api";
 import { actionsAt, type MenuAction } from "@/lib/menu-actions";
 import { formatKeys, isMac, MOD, SHORTCUTS } from "@/lib/shortcuts";
 
@@ -56,6 +57,9 @@ function FolderItems({ path }: { path: string }) {
     <>
       <ContextMenuItem onSelect={() => reveal(path)}>
         <FolderOpen /> {REVEAL_LABEL}
+      </ContextMenuItem>
+      <ContextMenuItem onSelect={() => openInTerminalApp(path)}>
+        <SquareTerminal /> Open in terminal
       </ContextMenuItem>
       <ContextMenuSeparator />
       <CopyMenuItem text={path}>

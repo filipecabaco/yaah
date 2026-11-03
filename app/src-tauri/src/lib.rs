@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod acp;
+pub mod acp_terminals;
 pub mod agent_conformance;
 pub mod agent_guide;
 pub mod agent_install;
@@ -25,6 +26,9 @@ pub mod session;
 pub mod settings;
 pub mod skills;
 pub mod sources;
+pub mod terminal_apps;
+mod terminal_commands;
+pub mod terminals;
 mod ui_files;
 mod ui_libraries;
 mod ui_library;
@@ -161,6 +165,7 @@ pub fn run() {
             commands::new_session,
             commands::new_quick_chat,
             commands::add_chat_dirs,
+            commands::answer_folder_request,
             commands::set_chat_project,
             commands::promote_chat,
             commands::list_sessions,
@@ -168,6 +173,8 @@ pub fn run() {
             commands::get_entries,
             commands::send_prompt,
             commands::switch_agent,
+            commands::list_agent_sessions,
+            commands::import_agent_session,
             commands::answer_ui,
             commands::edit_ui,
             commands::rename_session,
@@ -175,6 +182,17 @@ pub fn run() {
             commands::search_files,
             commands::cancel_turn,
             commands::respond_permission,
+            terminal_commands::terminal_open,
+            terminal_commands::terminal_attach,
+            terminal_commands::terminal_detach,
+            terminal_commands::terminal_ack,
+            terminal_commands::terminal_write,
+            terminal_commands::terminal_resize,
+            terminal_commands::terminal_close,
+            terminal_commands::terminal_kill,
+            terminal_commands::terminal_default_dir,
+            terminal_commands::open_in_terminal,
+            terminal_commands::set_terminal_app,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -184,6 +202,8 @@ pub fn run() {
                 && let Some(hub) = app.try_state::<Arc<Hub>>()
             {
                 hub.flush();
+                // No shell or agent command outlives the app.
+                hub.terminals().close_all();
             }
         });
 }

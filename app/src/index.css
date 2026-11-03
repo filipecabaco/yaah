@@ -86,6 +86,25 @@
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
+  /* Terminals (components/terminal/theme.ts): background and text follow the theme; the 16 ANSI colours are tuned per mode. */
+  --terminal-background: var(--card);
+  --terminal-selection: oklch(0.708 0 0 / 40%);
+  --terminal-ansi-0: #000000;
+  --terminal-ansi-1: #c4262b;
+  --terminal-ansi-2: #107c41;
+  --terminal-ansi-3: #8a6d00;
+  --terminal-ansi-4: #0451a5;
+  --terminal-ansi-5: #a626a4;
+  --terminal-ansi-6: #0b7a99;
+  --terminal-ansi-7: #6e6e6e;
+  --terminal-ansi-8: #5c5c5c;
+  --terminal-ansi-9: #e0474c;
+  --terminal-ansi-10: #16a05a;
+  --terminal-ansi-11: #a88400;
+  --terminal-ansi-12: #2a78d6;
+  --terminal-ansi-13: #c13cc0;
+  --terminal-ansi-14: #0e96bb;
+  --terminal-ansi-15: #8a8a8a;
 }
 
 .dark {
@@ -122,6 +141,23 @@
   --sidebar-accent-foreground: oklch(0.985 0 0);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.556 0 0);
+  --terminal-selection: oklch(0.556 0 0 / 45%);
+  --terminal-ansi-0: #1f1f1f;
+  --terminal-ansi-1: #f14c4c;
+  --terminal-ansi-2: #23d18b;
+  --terminal-ansi-3: #e5c07b;
+  --terminal-ansi-4: #3b8eea;
+  --terminal-ansi-5: #d670d6;
+  --terminal-ansi-6: #29b8db;
+  --terminal-ansi-7: #d4d4d4;
+  --terminal-ansi-8: #808080;
+  --terminal-ansi-9: #ff6b6b;
+  --terminal-ansi-10: #3ee6a0;
+  --terminal-ansi-11: #f5d58a;
+  --terminal-ansi-12: #6aaaf2;
+  --terminal-ansi-13: #e394e3;
+  --terminal-ansi-14: #5fd0ec;
+  --terminal-ansi-15: #ffffff;
 }
 
 @layer base {
@@ -134,6 +170,17 @@
   html {
     @apply font-sans;
   }
+}
+/* A chat's column: the transcript and the composer share it, so their edges line up. It scales
+   with its pane (each split pane is its own `@container`): gutters from 1rem in a narrow pane to
+   3rem in a wide one, and up to 2048px wide, so a full-screen window isn't mostly margin. Inside,
+   user messages hug its right edge, agent prose keeps its left edge, and cards take its width. */
+.chat-column {
+  --chat-gutter: clamp(1rem, 3cqi, 3rem);
+  width: 100%;
+  max-width: 2048px;
+  margin-inline: auto;
+  padding-inline: var(--chat-gutter);
 }
 /* Transcript entries off screen skip layout and paint until scrolled to, so long chats open fast.
    `auto` keeps an entry's last drawn height once it has been on screen. */

@@ -2,7 +2,17 @@
 // either fetched from a Rust command or applied from a Rust event.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, events, type AgentProfile, type NewProjectOptions, type Project, type SessionInfo, type StartStage, type WorkItem } from "@/lib/api";
+import {
+  api,
+  events,
+  type AgentProfile,
+  type AgentSession,
+  type NewProjectOptions,
+  type Project,
+  type SessionInfo,
+  type StartStage,
+  type WorkItem,
+} from "@/lib/api";
 import { TranscriptStore } from "@/lib/transcripts";
 import type { Selection } from "@/lib/layout";
 import { useLayout } from "@/hooks/use-layout";
@@ -253,6 +263,20 @@ export function useYaah() {
     if (typeof dir === "string") await newQuickChat(dir);
   }, [newQuickChat]);
 
+  /**
+   * "Resume a session…": bring one of an agent's own sessions in as a chat (Rust records its
+   * history; one yaah already has comes back as that chat) and open it in `pane`.
+   */
+  const resumeSession = useCallback(
+    async (accountId: string, s: AgentSession, pane: string = focusedId()) => {
+      const info = await api.importAgentSession(accountId, s);
+      setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
+      openIn(pane, { kind: "chat", id: info.sessionId });
+      return info;
+    },
+    [focusedId, openIn],
+  );
+
   /** File a chat under a project, or back out of one (null). */
   const moveChat = useCallback(async (id: string, projectId: string | null) => {
     const info = await api.setChatProject(id, projectId);
@@ -345,6 +369,7 @@ export function useYaah() {
     newChat,
     newQuickChat,
     newChatInFolder,
+    resumeSession,
     moveChat,
     promoteChat,
     renameChat,

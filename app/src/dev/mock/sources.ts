@@ -3,7 +3,7 @@
 // update; Linear's are made up, and the tracker items' come from work-items.ts.
 import type { ConnectionInfo } from "@/lib/api";
 import { asArray, asNumber, asObj, asString, type Obj } from "@/lib/narrow";
-import type { Mock, Replies } from "./context";
+import { home, type Mock, type Replies } from "./context";
 import { sourceSamples } from "./fixtures";
 import { workItemSource } from "./work-items";
 
@@ -121,6 +121,16 @@ function gitDiff(source: Obj): unknown {
   return { ...sample, range, staged: !!source.staged, files, text, additions: sum("additions"), deletions: sum("deletions") };
 }
 
+/** sources/git.rs `folder`: a git source's `repo` must be one of the chat's folders. */
+function checkRepo(state: Mock["state"], source: Obj, session: string | null | undefined) {
+  const repo = asString(source.repo)?.trim();
+  if (!repo || !asString(source.kind)?.startsWith("git.")) return;
+  const norm = (p: string) => p.replace(/^~(?=\/|$)/, home).replace(/(.)\/+$/, "$1");
+  const chat = session ? state.sessions[session] : undefined;
+  const folders = chat ? [chat.cwd, ...chat.additionalDirs].map(norm) : [];
+  if (!folders.includes(norm(repo))) throw new Error(`\`${repo}\` isn't one of this chat's folders: add it with /repos`);
+}
+
 export function sourceReplies({ state }: Mock): Replies {
   function read(source: Obj): unknown {
     const kind = asString(source.kind) ?? "";
@@ -159,7 +169,10 @@ export function sourceReplies({ state }: Mock): Replies {
   }
 
   return {
-    read_source: ({ source }: { source: unknown }) => read(asObj(source)),
+    read_source: ({ source, session }: { source: unknown; session?: string | null }) => {
+      checkRepo(state, asObj(source), session);
+      return read(asObj(source));
+    },
     // "Open in editor" from a diff: nothing to open in the browser.
     open_in_editor: () => null,
     list_connections: (): ConnectionInfo[] => state.connections,

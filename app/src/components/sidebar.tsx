@@ -13,6 +13,7 @@ import {
   LogIn,
   MessageSquare,
   MessageSquarePlus,
+  SquareTerminal,
   PanelLeftClose,
   PanelLeftOpen,
   Pencil,
@@ -22,6 +23,7 @@ import {
   Trash2,
   Settings,
 } from "lucide-react";
+import { openInTerminalApp } from "@/lib/terminal-api";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark, Wordmark } from "@/components/brand/mark";
 import { ChatMenu, CopyMenuItem } from "@/components/menus";
@@ -602,6 +604,11 @@ function ProjectMenu({
         <ContextMenuItem onSelect={() => onAddRepos(project.id)}>
           <FolderGit2 /> Add repos…
         </ContextMenuItem>
+        {project.dirs[0] && (
+          <ContextMenuItem onSelect={() => openInTerminalApp(project.dirs[0])}>
+            <SquareTerminal /> Open in terminal
+          </ContextMenuItem>
+        )}
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <CircleDot /> Status

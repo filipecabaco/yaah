@@ -29,7 +29,9 @@ async fn main() {
     let arg = args.first().cloned().unwrap_or_else(|| r#"{"kind":"system"}"#.into());
     let source: serde_json::Value = serde_json::from_str(&arg).expect("a JSON source");
     let s = yaah_lib::sources::Sources::new();
-    match s.read_in(&source, cwd.as_deref()).await {
+    // `--in` is the chat's folder; a `repo` in the source can only name that same folder here.
+    let roots: Vec<std::path::PathBuf> = cwd.into_iter().collect();
+    match s.read_in(&source, &roots).await {
         Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap()),
         Err(e) => eprintln!("error: {e}"),
     }

@@ -7,12 +7,13 @@
 // survive re-renders and live refreshes; a file that changed since it was
 // viewed comes back unviewed.
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import { Check, ClipboardCopy, Copy, ExternalLink, FileWarning, MessageSquareText, Undo2 } from "lucide-react";
+import { Check, ClipboardCopy, Copy, ExternalLink, FileWarning, Maximize2, MessageSquareText, Undo2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
 import { FormHostContext } from "@/components/ui-form-host";
+import { inlineMax, useUiView } from "@/components/ui-view";
 import type { Hunk } from "@/components/diff/model";
 import { hunkText, hunkTop, rowsOf, useWrap, WRAP_MAX } from "@/components/diff/lines";
 import { DiffRows, WrapToggle } from "@/components/diff/rows";
@@ -110,6 +111,8 @@ export default function DiffReview({
   name?: string;
 }) {
   const chat = useChat();
+  // In the expanded dialog the list and the diff fill its height; inline they stop at 34 rem.
+  const { expanded, expand } = useUiView();
   const files = useMemo(() => reviewFiles(text, meta), [text, meta]);
   const [viewed, setViewed] = useViewed(name || "viewed", range || "HEAD");
   const isViewed = useCallback((f: ReviewFile) => viewed[f.path] === f.hash, [viewed]);
@@ -286,7 +289,7 @@ export default function DiffReview({
       ))}
     </div>
   ) : (
-    <nav aria-label="Files" className="flex max-h-[34rem] w-64 shrink-0 flex-col gap-px overflow-y-auto border-r p-1">
+    <nav aria-label="Files" className={cn("flex w-64 shrink-0 flex-col gap-px overflow-y-auto border-r p-1", inlineMax(expanded, "max-h-[34rem]"))}>
       {files.map((f) => (
         <div key={f.path} className={cn("flex items-center gap-1.5 rounded-md pr-1.5", f === current ? "bg-muted" : "hover:bg-muted/60")}>
           <button
@@ -315,8 +318,12 @@ export default function DiffReview({
       tabIndex={0}
       onKeyDown={onKeyDown}
       aria-label={title ? `Review: ${title}` : "Review changes"}
-      className="flex flex-col overflow-hidden rounded-md border outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      className={cn(
+        "flex flex-col overflow-hidden rounded-md border outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+        expanded && "min-h-[24rem] flex-1",
+      )}
       data-layout={narrow ? "tabs" : "list"}
+      data-expanded={expanded || undefined}
     >
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1.5 text-xs">
         {title && <span className="min-w-0 truncate font-medium">{title}</span>}
@@ -338,6 +345,11 @@ export default function DiffReview({
             </span>
           )}
           <WrapToggle wrap={wrap} onChange={setWrap} disabled={rows.length > WRAP_MAX} />
+          {expand && (
+            <Button variant="ghost" size="icon-xs" aria-label="Expand" title="Expand (F)" onClick={expand}>
+              <Maximize2 />
+            </Button>
+          )}
         </span>
       </div>
       {truncated && (
@@ -345,14 +357,14 @@ export default function DiffReview({
           <FileWarning className="size-3.5" /> The diff is over 4 MB and was cut: some files’ changes aren’t shown.
         </p>
       )}
-      <div className={cn("flex min-h-0", narrow ? "flex-col" : "flex-row")}>
+      <div className={cn("flex min-h-0", narrow ? "flex-col" : "flex-row", expanded && "flex-1")}>
         {list}
         {current && (
           <div
             ref={body}
             tabIndex={-1}
             aria-label={`Diff of ${current.path}`}
-            className="relative max-h-[34rem] min-w-0 flex-1 overflow-auto outline-none"
+            className={cn("relative min-w-0 flex-1 overflow-auto outline-none", inlineMax(expanded, "max-h-[34rem]"))}
           >
             <div data-sticky className="sticky top-0 left-0 z-10 flex flex-wrap items-center gap-x-2 gap-y-1 border-b bg-background px-3 py-1.5">
               <StatusMark status={current.status} />

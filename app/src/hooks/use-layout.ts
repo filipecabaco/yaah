@@ -119,11 +119,11 @@ export function useLayout() {
       setPaneContent,
       /** The library goes back to what pane `id` showed before it. */
       closeLibrary: (id: string) => void setPaneContent(id, beforeLibrary.current.get(id) ?? null),
-      /** Split the focused pane (`row`: to the right, `column`: downward); returns the new pane, which has the focus. */
-      split: (dir: Split["dir"]) => {
+      /** Split the focused pane (`row`: to the right, `column`: downward), the new pane on `content` (the picker by default); returns it, with the focus. */
+      split: (dir: Split["dir"], content?: Selection) => {
         let id = current.current.focused;
         apply((l) => {
-          const r = splitPane(l, l.focused, dir);
+          const r = splitPane(l, l.focused, dir, content);
           id = r.id;
           return r.layout;
         });

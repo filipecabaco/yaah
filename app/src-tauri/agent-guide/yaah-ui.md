@@ -93,7 +93,7 @@ Instant, with a file list, viewed ticks and "ask about this" on every hunk:
 
 | To show | Don't paste | Reference |
 | --- | --- | --- |
-| A diff | its text in `patch` or `diff` | `diff-review` (`range`, `staged`, `paths`), or `live` on `git.diff` |
+| A diff | its text in `patch` or `diff` | `diff-review` (`range`, `staged`, `paths`, `repo`), or `live` on `git.diff` |
 | History | `git log` output | `live` on `git.log` (`range`, `limit`, `paths`) |
 | Working tree | `git status` output | `live` on `git.status`, or `git-status` |
 | A commit, or a committed file | `git show` output | `live` on `git.show` (`rev`, `path`), its `{{data.text}}` into `textfile` |
@@ -102,6 +102,14 @@ Instant, with a file list, viewed ticks and "ask about this" on every hunk:
 | Logs | the log text | `live` on `docker.logs` (`container`, `tail`), or `container-logs` |
 
 `source_read` with the same source shows you the data first when you need to look before you design the UI; you don't have to repeat what it returned.
+
+**Another repository.** Git sources and `diff-review` read the chat's own folder, or with `repo` (an absolute path or `~/…`) another of its folders: the ones the user added, or its project's repos. Anything else is refused. For a repository outside them ("the diff of my project in ~/work/api"), call `ui_request_folders { "paths": ["~/work/api"], "reason": "to review its diff" }` once: the user sees Add / Not now in the chat, and the answer comes back in the same turn. Then:
+
+```json
+{ "type": "diff-review", "props": { "repo": "~/work/api", "range": "HEAD~1", "title": "api: the last commit" } }
+```
+
+Never loop shell commands (`ls`, `find`, `git -C …`) to find or read a repository: each one stops for the user's permission. After Not now, don't ask again; carry on without it.
 
 ## When a call is refused
 

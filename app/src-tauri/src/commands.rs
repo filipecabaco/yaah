@@ -334,11 +334,29 @@ pub async fn add_chat_dirs(
     session_id: String,
     paths: Vec<String>,
 ) -> Result<SessionInfo, String> {
-    hub.add_dirs(&session_id, &paths, |project_id, dirs| match projects.get(project_id) {
+    add_dirs(&hub, &projects, &session_id, &paths)
+}
+
+fn add_dirs(hub: &Hub, projects: &Projects, session_id: &str, paths: &[String]) -> Result<SessionInfo, String> {
+    hub.add_dirs(session_id, paths, |project_id, dirs| match projects.get(project_id) {
         Ok(_) => projects.add_dirs(project_id, dirs).map(Some),
         // Filed under a project that's gone: the chat keeps them itself.
         Err(_) => Ok(None),
     })
+}
+
+/// The user's answer to the agent's `ui_request_folders` at `index`: `add` adds the
+/// folders as "Add repositories…" does, then the waiting agent hears it.
+#[tauri::command]
+pub async fn answer_folder_request(
+    hub: State<'_, Arc<Hub>>,
+    projects: State<'_, Projects>,
+    session_id: String,
+    index: usize,
+    add: bool,
+) -> Result<SessionInfo, String> {
+    hub.answer_folders(&session_id, index, add, |paths| add_dirs(&hub, &projects, &session_id, paths).map(|_| ()))?;
+    hub.session_info(&session_id)
 }
 
 /// File a chat under a project (or none, with `project_id` null).
@@ -413,6 +431,33 @@ pub async fn send_prompt(hub: State<'_, Arc<Hub>>, session_id: String, text: Str
 #[tauri::command]
 pub fn switch_agent(hub: State<'_, Arc<Hub>>, session_id: String, account_id: String) -> Result<SessionInfo, String> {
     hub.switch_agent(&session_id, &account_id)
+}
+
+/// "Resume a session…": a page of the sessions a profile's agent has (ACP `session/list`,
+/// on that profile's own agent process), marked when yaah already has one as a chat.
+#[tauri::command]
+pub async fn list_agent_sessions(
+    hub: State<'_, Arc<Hub>>,
+    account_id: String,
+    cwd: Option<String>,
+    cursor: Option<String>,
+) -> Result<session::AgentSessions, String> {
+    hub.list_agent_sessions(&account_id, cwd.as_deref(), cursor.as_deref()).await
+}
+
+/// Bring an agent's session into yaah as a chat, its history replayed into the transcript
+/// (or open the chat that already holds it). Filed under the project whose folder holds `cwd`.
+#[tauri::command]
+pub async fn import_agent_session(
+    hub: State<'_, Arc<Hub>>,
+    projects: State<'_, Projects>,
+    account_id: String,
+    session_id: String,
+    cwd: String,
+    title: Option<String>,
+) -> Result<SessionInfo, String> {
+    let projects = projects.list()?;
+    hub.import_agent_session(&account_id, &session_id, &cwd, title.as_deref(), &projects).await
 }
 
 #[tauri::command]

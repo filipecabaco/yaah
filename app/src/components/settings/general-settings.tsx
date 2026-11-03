@@ -6,11 +6,13 @@ import { FolderOpen, FolderPlus, Monitor, Moon, Sun, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ErrorText } from "@/components/error-text";
 import { Page, Section } from "@/components/settings/parts";
 import { ThemePicker } from "@/components/settings/theme-picker";
 import { api, type Appearance, type GeneralSettings } from "@/lib/api";
 import { compactPath } from "@/lib/format";
+import { terminalApi } from "@/lib/terminal-api";
 import { BUNDLED, setAppearance, setThemes } from "@/lib/theme";
 
 const APPEARANCE: { id: Appearance; label: string; icon: ReactNode }[] = [
@@ -112,6 +114,29 @@ export function GeneralSettings() {
           <FolderPlus /> Add folder…
         </Button>
       </Section>
+
+      {s.terminalApps && s.terminalApps.length > 0 && (
+        <Section title="Terminal app" about="What “Open in terminal” opens a folder in (chat headers, the sidebar's menus, ⌘K).">
+          <Select
+            value={s.terminalApp ?? "system"}
+            onValueChange={(id) => {
+              setS((x) => (x ? { ...x, terminalApp: id } : x));
+              terminalApi.setTerminalApp(id).catch(setError);
+            }}
+          >
+            <SelectTrigger className="w-72" aria-label="Terminal app">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {s.terminalApps.map((a) => (
+                <SelectItem key={a.id} value={a.id}>
+                  {a.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Section>
+      )}
 
       <Section title="Data" about="Everything yaah keeps is on this machine.">
         <ul className="flex flex-col divide-y rounded-lg border">
