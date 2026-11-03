@@ -1,0 +1,177 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "gitlab-issue",
+  "description": "A GitLab issue, live through the user's GitLab connection (Settings → Integrations; gitlab.com or a self-managed instance): reference and title, open/closed, labels, assignee, milestone and due date, the description and the latest comments (system notes left out). Refreshes every minute. Use when talking about a GitLab issue, or on a project started from one.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "project": {
+        "type": "string",
+        "description": "The project's full path, \"group/project\" or \"group/subgroup/project\"."
+      },
+      "iid": {
+        "type": "number",
+        "description": "The issue's number in the project (the #7 in group/project#7)."
+      }
+    },
+    "required": [
+      "project",
+      "iid"
+    ]
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "gitlab.issue",
+        "project": "{{project}}",
+        "iid": "{{iid}}"
+      },
+      "every": 60000,
+      "as": "issue"
+    },
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "#{{issue.iid}} {{issue.title}}",
+          "description": "{{issue.project}} · opened by {{issue.author}}"
+        },
+        "children": [
+          {
+            "type": "stack",
+            "props": {
+              "direction": "row",
+              "gap": "sm",
+              "align": "center",
+              "wrap": true
+            },
+            "children": [
+              {
+                "type": "badge",
+                "props": {
+                  "text": "{{issue.stateLabel}}",
+                  "variant": "default"
+                }
+              },
+              {
+                "each": "issue.labels",
+                "as": "label",
+                "children": [
+                  {
+                    "type": "badge",
+                    "props": {
+                      "text": "{{label}}",
+                      "variant": "outline"
+                    }
+                  }
+                ]
+              },
+              {
+                "if": "issue.assignee",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "{{issue.assignee}}",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "if": "issue.milestone",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "· {{issue.milestone}}",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "if": "issue.dueDate",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "· due {{issue.dueDate}}",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "link",
+                "props": {
+                  "text": "Open in GitLab",
+                  "href": "{{issue.url}}"
+                }
+              }
+            ]
+          },
+          {
+            "if": "issue.description",
+            "children": [
+              {
+                "type": "markdown",
+                "props": {
+                  "text": "{{issue.description}}"
+                }
+              }
+            ]
+          },
+          {
+            "if": "issue.comments",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "Latest comments ({{issue.comments.length}})",
+                  "open": true
+                },
+                "children": [
+                  {
+                    "each": "issue.comments",
+                    "as": "c",
+                    "children": [
+                      {
+                        "type": "text",
+                        "props": {
+                          "text": "{{c.author}} · {{c.at}}",
+                          "size": "sm",
+                          "weight": "medium"
+                        }
+                      },
+                      {
+                        "type": "markdown",
+                        "props": {
+                          "text": "{{c.body}}"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "An issue",
+      "props": {
+        "project": "gitlab-org/gitlab",
+        "iid": 1
+      }
+    }
+  ]
+}

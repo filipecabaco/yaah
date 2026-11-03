@@ -11,6 +11,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api, PROJECT_STATUSES, canChat, type AgentProfile, type Project, type ProjectStatus, type SessionInfo } from "@/lib/api";
 import { baseName, compactPath } from "@/lib/format";
 import { ErrorText } from "@/components/error-text";
+import { ProjectLinkPill, ProjectLinkSection } from "@/components/project-link";
 
 type Props = {
   project: Project;
@@ -19,22 +20,44 @@ type Props = {
   onChange: (p: Project) => void;
   onDelete: (id: string) => Promise<void>;
   onOpenChat: (id: string) => void;
-  onNewChat: (projectId: string) => Promise<void>;
+  onNewChat: (projectId: string) => Promise<unknown>;
   onLogin: (agent: AgentProfile) => void;
   /** Set by the sidebar's Delete… item: show the delete confirmation. */
   askDelete?: boolean;
   onAskDeleteSeen?: () => void;
+  /** Set by the sidebar's Rename…: focus the name to edit it. */
+  askRename?: boolean;
+  onAskRenameSeen?: () => void;
+  /** Something to know about this project right now (a chat that didn't open when it was started from an issue). */
+  notice?: string;
 };
 
-export function ProjectView({ project, chats, account, onChange, onDelete, onOpenChat, onNewChat, onLogin, askDelete, onAskDeleteSeen }: Props) {
+export function ProjectView({
+  project,
+  chats,
+  account,
+  onChange,
+  onDelete,
+  onOpenChat,
+  onNewChat,
+  onLogin,
+  askDelete,
+  onAskDeleteSeen,
+  askRename,
+  onAskRenameSeen,
+  notice,
+}: Props) {
   const [name, setName] = useState(project.name);
   const [brief, setBrief] = useState<string | null>(null);
   const [briefSaved, setBriefSaved] = useState(true);
+  /** Bumped when Rust rewrote the brief (a refresh or unlink), to read it again. */
+  const [briefVersion, setBriefVersion] = useState(0);
   const [starting, setStarting] = useState(false);
   const [picking, setPicking] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(!!askDelete);
   const [error, setError] = useState<unknown>(null);
   const deleteSection = useRef<HTMLElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
 
   // Another project: start over. A rename from elsewhere: show the new name.
   const [shown, setShown] = useState({ id: project.id, name: project.name, askDelete });
@@ -61,13 +84,24 @@ export function ProjectView({ project, chats, account, onChange, onDelete, onOpe
     return () => {
       live = false;
     };
-  }, [project.id]);
+  }, [project.id, briefVersion]);
 
   useEffect(() => {
     if (!askDelete) return;
     deleteSection.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     onAskDeleteSeen?.();
   }, [askDelete, onAskDeleteSeen]);
+
+  useEffect(() => {
+    if (!askRename) return;
+    // After the menu that asked has closed and handed focus back.
+    const t = setTimeout(() => {
+      nameInput.current?.focus();
+      nameInput.current?.select();
+      onAskRenameSeen?.();
+    });
+    return () => clearTimeout(t);
+  }, [askRename, onAskRenameSeen]);
 
   /** Runs a change, showing what went wrong if it fails. */
   const run = (f: () => Promise<unknown>) => {
@@ -79,12 +113,15 @@ export function ProjectView({ project, chats, account, onChange, onDelete, onOpe
     if (name.trim() && name.trim() !== project.name) run(async () => onChange(await api.renameProject(project.id, name)));
   }
 
-  function saveBrief() {
+  /** Writes unsaved brief edits (also before Rust rewrites the brief's issue block). */
+  async function flushBrief() {
     if (brief == null || briefSaved) return;
-    run(async () => {
-      await api.writeBrief(project.id, brief);
-      setBriefSaved(true);
-    });
+    await api.writeBrief(project.id, brief);
+    setBriefSaved(true);
+  }
+
+  function saveBrief() {
+    run(flushBrief);
   }
 
   async function newChat() {
@@ -104,6 +141,7 @@ export function ProjectView({ project, chats, account, onChange, onDelete, onOpe
       <div className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-8">
         <header className="flex items-center gap-3">
           <Input
+            ref={nameInput}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onBlur={rename}
@@ -125,7 +163,24 @@ export function ProjectView({ project, chats, account, onChange, onDelete, onOpe
           </Select>
         </header>
 
+        {project.link && (
+          <div className="-mt-6 flex min-w-0 px-1">
+            <ProjectLinkPill link={project.link} />
+          </div>
+        )}
+
         <ErrorText error={error} className="-mt-4 text-sm whitespace-pre-wrap" />
+        <ErrorText error={notice} className="-mt-4 text-sm whitespace-pre-wrap" />
+
+        {project.link && (
+          <ProjectLinkSection
+            key={project.id}
+            project={{ ...project, link: project.link }}
+            onChange={onChange}
+            beforeBriefChange={flushBrief}
+            onBriefChanged={() => setBriefVersion((v) => v + 1)}
+          />
+        )}
 
         <section className="flex flex-col gap-2">
           <div className="flex items-center justify-between">

@@ -45,6 +45,20 @@ pub fn set_appearance(a: &str) -> Result<(), String> {
     set("appearance", json!(a))
 }
 
+// ── agents ───────────────────────────────────────────────────────────────────
+/// Whether chats teach their agent about yaah's UI (`agent_guide.rs`). On unless turned off.
+fn teach_agents_in(s: &Map<String, Value>) -> bool {
+    s.get("teachAgents").and_then(Value::as_bool).unwrap_or(true)
+}
+
+pub fn teach_agents() -> bool {
+    teach_agents_in(&load())
+}
+
+pub fn set_teach_agents(on: bool) -> Result<(), String> {
+    set("teachAgents", json!(on))
+}
+
 // ── themes ───────────────────────────────────────────────────────────────────
 /// VS Code colour themes the user dropped in (`*.json`, the file a theme extension
 /// keeps in `themes/`). Only a file *name* crosses the API, never
@@ -241,6 +255,7 @@ pub fn general() -> Value {
         "appearance": appearance_in(&s),
         "theme": theme_in(&s),
         "toolCards": tool_cards_in(&s),
+        "teachAgents": teach_agents_in(&s),
         "customThemes": custom_themes(),
         "workspaceRoots": crate::repos::roots(),
         "dataDirs": data_dirs(),
@@ -295,6 +310,9 @@ mod tests {
         assert_eq!((rules["Bash"].as_str(), rules["ToolSearch"].as_str()), (Some("expanded"), Some("auto")), "the user's own win over the defaults");
         assert!(rules.get("Read").is_none(), "unknown modes are ignored");
         assert_eq!(theme_in(&Map::new()), json!({ "light": "yaah", "dark": "yaah" }));
+        assert!(teach_agents_in(&Map::new()), "agents are taught about yaah's UI unless turned off");
+        assert!(!teach_agents_in(&serde_json::from_value(json!({ "teachAgents": false })).unwrap()));
+        assert!(teach_agents_in(&serde_json::from_value(json!({ "teachAgents": "no" })).unwrap()), "only a real false turns it off");
         assert!(set_tool_card(" ", Some("auto")).is_err() && set_tool_card("Bash", Some("sideways")).is_err());
     }
 

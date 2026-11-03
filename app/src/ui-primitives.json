@@ -913,10 +913,11 @@
     "bindings": "Any string inside props or text can contain {{path}} to insert a value from the component's props (e.g. {{user.name}}, {{items.0}}). A string that is exactly \"{{path}}\" passes the value through unchanged, so arrays and numbers keep their type.",
     "each": "{ each: \"path.to.array\", as: \"item\", index?: \"i\", key?: \"id\", children: [nodes] } repeats children once per element, with {{item}} and {{i}} bound. Give `key` (a field of each item) whenever the list can change or reorder between renders, so open sections and other UI state stay with their item.",
     "if": "{ if: \"path\", children: [nodes], else?: [nodes] } renders children when the value is truthy (non-empty string/array, true, non-zero).",
-    "components": "Using a library component as a node passes its props: { type: \"deploy-status\", props: { env: \"{{env}}\" } }."
+    "components": "Using a library component as a node passes its props: { type: \"deploy-status\", props: { env: \"{{env}}\" } }.",
+    "libraries": "Components from an installed component library are referenced by qualified name, library/name: { type: \"acme/pr-card\", props: { … } }. They are read-only; save your own variant under an unqualified name."
   },
   "sources": {
-    "about": "Data the app reads itself. Use with a `live` node (and source_read to look first). GitHub and Linear sources use the connections the user made in Settings → Integrations (read-only; you never see a token). Database sources take a `connection` name from ui_catalog `connections`; credentials never reach you.",
+    "about": "Data the app reads itself. Use with a `live` node (and source_read to look first). GitHub, GitLab and Linear sources use the connections the user made in Settings → Integrations (read-only; you never see a token). Database sources take a `connection` name from ui_catalog `connections`; credentials never reach you.",
     "kinds": {
       "system": {
         "params": {},
@@ -975,6 +976,37 @@
         },
         "returns": "[{ number, title, url, author, branch, draft, review, checks (summary text), checksTone, updatedAt }]"
       },
+      "github.issue": {
+        "params": {
+          "repo": "\"owner/name\" (required)",
+          "number": "issue number (required)"
+        },
+        "returns": "{ repo, number, ref (\"owner/name#12\"), title, url, body, state (open|closed), stateLabel (Open|Closed|Not planned), author, assignee, assignees: [logins], labels: [names], milestone, commentCount, comments: [{ author, body, at }] (the latest 30, oldest first), createdAt, updatedAt, closedAt, isPullRequest } — public repos work without a connection"
+      },
+      "github.issues": {
+        "params": {
+          "repo": "\"owner/name\" (required)",
+          "state": "open (default) | closed | all",
+          "limit": "default 30, max 100 (pull requests are left out, so fewer may come back)"
+        },
+        "returns": "[{ number, title, url, state, stateLabel, author, assignee, labels: [names], comments (count), updatedAt }] — most recently updated first"
+      },
+      "gitlab.issue": {
+        "params": {
+          "project": "full path, \"group/project\" or \"group/sub/project\" (required)",
+          "iid": "the issue's number in the project (required)"
+        },
+        "returns": "{ project, iid, ref (\"group/project#7\"), title, url, description, state (opened|closed), stateLabel (Open|Closed), author, assignee, assignees: [names], labels: [names], milestone, dueDate, commentCount, comments: [{ author, body, at }] (the latest 30 by people, oldest first; system notes left out), createdAt, updatedAt, closedAt }"
+      },
+      "gitlab.issues": {
+        "params": {
+          "project": "full path; without it, issues across GitLab",
+          "scope": "assigned_to_me (default without a project) | created_by_me | all (default with a project)",
+          "state": "opened (default) | closed | all",
+          "limit": "default 30, max 100"
+        },
+        "returns": "[{ iid, ref, title, url, state, stateLabel, author, assignee, labels: [names], updatedAt }] — most recently updated first"
+      },
       "linear.issue": {
         "params": {
           "id": "issue identifier, e.g. \"ENG-142\" (required)"
@@ -989,6 +1021,12 @@
           "limit": "default 50, max 250"
         },
         "returns": "[{ id, title, url, state, stateType, priority, priorityVariant, estimate, assignee, updatedAt }]"
+      },
+      "linear.project": {
+        "params": {
+          "id": "the project's slug id (the hex end of its URL, e.g. \"3f9a1c2b7d4e\") or UUID (required)"
+        },
+        "returns": "{ id, uuid, name, url, description (its write-up, else the summary), summary, state, stateType, progressPct, lead, teams: [names], startDate, targetDate, updatedAt, issueCount, issuesDone, issues: [{ id, title, state, stateType, assignee, done }] (first 100) }"
       },
       "linear.board": {
         "params": {

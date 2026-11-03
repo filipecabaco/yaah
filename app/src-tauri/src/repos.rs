@@ -23,6 +23,12 @@ pub struct Repo {
     /// `owner/repo` (or the raw URL) of the `origin` remote.
     pub remote: Option<String>,
     pub branch: Option<String>,
+    /// The `origin` remote's URL as configured.
+    #[serde(skip)]
+    pub origin: Option<String>,
+    /// A linked worktree (its `.git` is a file), not the main checkout.
+    #[serde(skip)]
+    pub worktree: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -108,17 +114,62 @@ pub fn describe(dir: &Path) -> Option<Repo> {
     }
     // A worktree's `.git` is a file: `gitdir: <main>/.git/worktrees/<name>`. HEAD
     // lives there; the config lives in the main repo's .git (its `commondir`).
-    let (head_dir, common_dir) = if git.is_dir() {
-        (git.clone(), git)
-    } else {
+    let worktree = !git.is_dir();
+    let (head_dir, common_dir) = if worktree {
         let gitdir = std::fs::read_to_string(&git).ok()?;
         let gitdir = dir.join(gitdir.trim().strip_prefix("gitdir:")?.trim());
         let common = std::fs::read_to_string(gitdir.join("commondir")).map_or_else(|_| gitdir.clone(), |c| gitdir.join(c.trim()));
         (gitdir, common)
+    } else {
+        (git.clone(), git)
     };
     let branch = std::fs::read_to_string(head_dir.join("HEAD")).ok().and_then(|h| h.trim().strip_prefix("ref: refs/heads/").map(str::to_owned));
-    let remote = std::fs::read_to_string(common_dir.join("config")).ok().and_then(|c| origin_url(&c)).map(|u| short_remote(&u));
-    Some(Repo { name: dir.file_name()?.to_string_lossy().into_owned(), path: dir.to_string_lossy().into_owned(), remote, branch })
+    let origin = std::fs::read_to_string(common_dir.join("config")).ok().and_then(|c| origin_url(&c));
+    Some(Repo {
+        name: dir.file_name()?.to_string_lossy().into_owned(),
+        path: dir.to_string_lossy().into_owned(),
+        remote: origin.as_deref().map(short_remote),
+        branch,
+        worktree,
+        origin,
+    })
+}
+
+/// The host and path of a git remote URL, lowercased, without `.git` or slashes
+/// around the path: `https://github.com/o/r.git`, `git@github.com:o/r`,
+/// `ssh://git@host:2222/group/sub/proj.git` and `https://user@host/o/r/` all work.
+pub fn remote_host_path(url: &str) -> Option<(String, String)> {
+    let url = url.trim();
+    let (host, path) = if let Some((scheme, rest)) = url.split_once("://") {
+        if !matches!(scheme, "https" | "http" | "ssh" | "git" | "git+ssh" | "ssh+git") {
+            return None;
+        }
+        let (authority, path) = rest.split_once('/')?;
+        let host = authority.rsplit('@').next()?;
+        // An `ssh://host:port` port, or an `https://host:8443` one.
+        (host.split(':').next()?, path)
+    } else {
+        // scp-like: `[user@]host:path` (a `:` before any `/`).
+        let (before, path) = url.split_once(':')?;
+        if before.contains('/') {
+            return None;
+        }
+        (before.rsplit('@').next()?, path)
+    };
+    let path = path.trim_matches('/');
+    let path = path.strip_suffix(".git").unwrap_or(path).trim_end_matches('/');
+    if host.is_empty() || path.is_empty() {
+        return None;
+    }
+    Some((host.to_lowercase(), path.to_lowercase()))
+}
+
+/// The repos whose `origin` is `path` (`owner/repo`, `group/sub/proj`) on `host`.
+/// Main checkouts win; worktrees of it count only when there's no main checkout.
+pub fn matching<'a>(repos: &'a [Repo], host: &str, path: &str) -> Vec<&'a Repo> {
+    let want = (host.to_lowercase(), path.trim_matches('/').to_lowercase());
+    let all: Vec<&Repo> = repos.iter().filter(|r| r.origin.as_deref().and_then(remote_host_path).is_some_and(|hp| hp == want)).collect();
+    if all.iter().any(|r| !r.worktree) { all.into_iter().filter(|r| !r.worktree).collect() } else { all }
 }
 
 fn origin_url(config: &str) -> Option<String> {
@@ -207,6 +258,55 @@ mod tests {
         assert_eq!(short_remote("git@github.com:supabase/realtime.git"), "supabase/realtime");
         assert_eq!(short_remote("https://github.com/supabase/realtime"), "supabase/realtime");
         assert_eq!(short_remote("https://example.org/x.git"), "https://example.org/x.git");
+    }
+
+    #[test]
+    fn remote_hosts_and_paths() {
+        let gh = Some(("github.com".to_owned(), "supabase/realtime".to_owned()));
+        for url in [
+            "https://github.com/supabase/realtime",
+            "https://github.com/supabase/realtime.git",
+            "https://github.com/Supabase/Realtime/",
+            "https://x-access-token@github.com/supabase/realtime.git",
+            "git@github.com:supabase/realtime.git",
+            "git@github.com:/supabase/realtime",
+            "ssh://git@github.com/supabase/realtime.git",
+            "ssh://git@github.com:22/supabase/realtime",
+            "github.com:supabase/realtime",
+        ] {
+            assert_eq!(remote_host_path(url), gh, "{url}");
+        }
+        assert_eq!(
+            remote_host_path("ssh://git@gitlab.example.com:2222/group/sub/proj.git"),
+            Some(("gitlab.example.com".into(), "group/sub/proj".into()))
+        );
+        assert_eq!(remote_host_path("https://gitlab.example.com:8443/group/proj"), Some(("gitlab.example.com".into(), "group/proj".into())));
+        for bad in ["", "/local/path/repo", "../relative", "file:///srv/repo.git", "https://github.com", "git@github.com:"] {
+            assert_eq!(remote_host_path(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn matches_repos_by_origin_preferring_main_checkouts() {
+        let repo = |path: &str, origin: &str, worktree: bool| Repo {
+            name: path.into(),
+            path: path.into(),
+            remote: None,
+            branch: None,
+            origin: Some(origin.into()),
+            worktree,
+        };
+        let all = [
+            repo("/w/shop", "https://github.com/Acme/Shop.git", false),
+            repo("/w/shop-wt", "https://github.com/Acme/Shop.git", true),
+            repo("/w/fork", "git@github.com:me/shop.git", false),
+            repo("/w/api", "ssh://git@gitlab.example.com:2222/team/sub/api.git", false),
+        ];
+        let paths = |found: Vec<&Repo>| found.iter().map(|r| r.path.clone()).collect::<Vec<_>>();
+        assert_eq!(paths(matching(&all, "github.com", "acme/shop")), ["/w/shop"], "the worktree is left out next to its main checkout");
+        assert_eq!(paths(matching(&all[1..], "GitHub.com", "Acme/Shop/")), ["/w/shop-wt"], "a worktree alone still counts");
+        assert_eq!(paths(matching(&all, "gitlab.example.com", "team/sub/api")), ["/w/api"]);
+        assert!(matching(&all, "gitlab.com", "team/sub/api").is_empty(), "another host");
     }
 
     #[test]

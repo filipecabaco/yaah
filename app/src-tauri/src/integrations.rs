@@ -1,14 +1,16 @@
-//! Services yaah reads for the user: GitHub and Linear.
+//! Services yaah reads for the user: GitHub, Linear and GitLab.
 //!
 //! How they connect:
 //! - OAuth with public client IDs and **no client secret**: GitHub's Device
-//!   Flow (RFC 8628, no redirect) and PKCE (RFC 7636) for Linear, with the
-//!   provider calling back on the literal loopback `127.0.0.1:43117` (fixed:
-//!   redirect URIs are registered ahead of time).
+//!   Flow (RFC 8628, no redirect) and PKCE (RFC 7636) for Linear and GitLab, with
+//!   the provider calling back on the literal loopback `127.0.0.1:43117` (fixed:
+//!   redirect URIs are registered ahead of time). GitLab ships no client ID:
+//!   `YAAH_GITLAB_CLIENT_ID` turns its OAuth on, otherwise it's a personal access
+//!   token. GitLab also takes a base URL for self-managed instances.
 //! - Tokens in `~/.config/yaah/integrations.json` (0600), stamped with
 //!   `expires_at` and refreshed a couple of minutes early. Linear's last 24
 //!   hours; without refresh it worked one day and 401'd the next.
-//! - A personal API key or an env var (`LINEAR_API_KEY`, `GITHUB_TOKEN`) as the
+//! - A personal API key or an env var (`LINEAR_API_KEY`, `GITHUB_TOKEN`, `GITLAB_TOKEN`) as the
 //!   fallback for people who'd rather not use OAuth.
 //! - Public client IDs ship in the app (they aren't secrets);
 //!   `YAAH_<SERVICE>_CLIENT_ID` points at another registered OAuth app.
@@ -35,6 +37,7 @@ const SIGN_IN_WINDOW: Duration = Duration::from_secs(600);
 const API_TIMEOUT: Duration = Duration::from_secs(20);
 const GITHUB_API: &str = "https://api.github.com";
 const LINEAR_API: &str = "https://api.linear.app/graphql";
+pub(crate) const GITLAB_COM: &str = "https://gitlab.com";
 /// The largest answer read from GitHub or Linear (a diff, a base64 blob).
 const MAX_RESPONSE: usize = 64 << 20;
 const CANCELLED: &str = "a newer sign-in replaced this one";
@@ -74,7 +77,7 @@ const SERVICES: &[Service] = &[
         scopes: "repo read:org",
         key_env: "GITHUB_TOKEN",
         key_url: "https://github.com/settings/tokens",
-        about: "Pull requests, checks, diffs and reviews (pr-view, pr-list), read through GitHub's API with this connection.",
+        about: "Pull requests, checks, diffs and reviews (pr-view, pr-list) and issues (github-issue), read through GitHub's API with this connection.",
     },
     Service {
         id: "linear",
@@ -88,7 +91,23 @@ const SERVICES: &[Service] = &[
         scopes: "read",
         key_env: "LINEAR_API_KEY",
         key_url: "https://linear.app/settings/api",
-        about: "Issues, team boards and cycles (linear-issue, linear-issues, linear-board, linear-cycle). Read-only.",
+        about: "Issues, projects, team boards and cycles (linear-issue, linear-project, linear-issues, linear-board, linear-cycle). Read-only.",
+    },
+    Service {
+        id: "gitlab",
+        label: "GitLab",
+        flow: Flow::Pkce,
+        // No OAuth app ships for GitLab: with no YAAH_GITLAB_CLIENT_ID it's a personal access token.
+        client_id: "",
+        client_id_env: "YAAH_GITLAB_CLIENT_ID",
+        // On gitlab.com; a self-managed instance swaps in its own base URL.
+        auth_url: "https://gitlab.com/oauth/authorize",
+        token_url: "https://gitlab.com/oauth/token",
+        device_code_url: "",
+        scopes: "read_api read_user",
+        key_env: "GITLAB_TOKEN",
+        key_url: "https://gitlab.com/-/user_settings/personal_access_tokens?name=yaah&scopes=read_api",
+        about: "Issues (gitlab-issue) on gitlab.com or a self-managed instance, read through GitLab's API. Read-only.",
     },
 ];
 
@@ -96,8 +115,30 @@ fn service(id: &str) -> Result<&'static Service, String> {
     SERVICES.iter().find(|s| s.id == id).ok_or_else(|| format!("unknown integration `{id}`"))
 }
 
-fn client_id(s: &Service) -> String {
+fn client_id_from_env(s: &Service) -> String {
     std::env::var(s.client_id_env).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| s.client_id.to_owned())
+}
+
+/// A GitLab instance's base URL: `https://host[/path]`, no trailing slash. Empty means gitlab.com.
+pub(crate) fn gitlab_base(input: Option<&str>) -> Result<String, String> {
+    let raw = input.map(str::trim).filter(|s| !s.is_empty()).unwrap_or(GITLAB_COM).trim_end_matches('/');
+    let bad = || format!("`{raw}` isn't a GitLab address; use https://gitlab.example.com");
+    let url = Url::parse(raw).map_err(|_| bad())?;
+    if url.scheme() != "https" || url.host_str().is_none_or(str::is_empty) || url.query().is_some() || url.fragment().is_some() {
+        return Err(bad());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("put the token in the token field, not in the address".into());
+    }
+    Ok(url.as_str().trim_end_matches('/').to_owned())
+}
+
+/// `real` (a gitlab.com URL) on the instance at `base`; other services' URLs as they are.
+fn endpoint(svc: &Service, base: Option<&str>, real: &str) -> String {
+    match base {
+        Some(b) if svc.id == "gitlab" => format!("{b}{}", real.trim_start_matches(GITLAB_COM)),
+        _ => real.to_owned(),
+    }
 }
 
 /// Told when a connection changes: `{ service, ok, error? }`.
@@ -178,7 +219,8 @@ pub enum Auth {
 impl Auth {
     fn header(&self, svc: &str) -> String {
         match (self, svc) {
-            (Auth::Bearer(t), _) | (Auth::Key(t), "github") => format!("Bearer {t}"),
+            // GitLab takes personal access tokens as bearer tokens too.
+            (Auth::Bearer(t), _) | (Auth::Key(t), "github" | "gitlab") => format!("Bearer {t}"),
             (Auth::Key(k), _) => k.clone(),
         }
     }
@@ -186,7 +228,7 @@ impl Auth {
 
 // ── the store, and where requests go ────────────────────────────────────────
 
-struct Integrations {
+pub(crate) struct Integrations {
     store: JsonFile,
     /// Send `https://<host>/…` to `<base>/<host>/…` instead (tests' local server).
     base: Option<String>,
@@ -195,8 +237,10 @@ struct Integrations {
     port: u16,
     /// One second of the device flow's polling interval.
     tick: Duration,
-    /// Whether `LINEAR_API_KEY` / `GITHUB_TOKEN` count as a connection.
+    /// Whether `LINEAR_API_KEY` / `GITHUB_TOKEN` / `GITLAB_TOKEN` count as a connection.
     env_keys: bool,
+    /// OAuth client IDs that win over the built-in ones and `YAAH_<SERVICE>_CLIENT_ID` (tests).
+    client_ids: Vec<(&'static str, String)>,
     /// One refresh at a time: Linear rotates refresh tokens, so two concurrent
     /// reads refreshing at once would spend the same one twice.
     refreshing: tokio::sync::Mutex<()>,
@@ -206,7 +250,7 @@ struct Integrations {
 }
 
 impl Integrations {
-    fn user() -> &'static Self {
+    pub(crate) fn user() -> &'static Self {
         static USER: OnceLock<Integrations> = OnceLock::new();
         USER.get_or_init(|| Self {
             store: JsonFile::new(home().join(".config/yaah/integrations.json"), true),
@@ -214,9 +258,14 @@ impl Integrations {
             port: PORT,
             tick: Duration::from_secs(1),
             env_keys: true,
+            client_ids: vec![],
             refreshing: tokio::sync::Mutex::const_new(()),
             pending: Mutex::new(None),
         })
+    }
+
+    fn client_id(&self, s: &Service) -> String {
+        self.client_ids.iter().find(|(id, _)| *id == s.id).map_or_else(|| client_id_from_env(s), |(_, c)| c.clone())
     }
 
     fn url(&self, real: &str) -> String {
@@ -230,7 +279,7 @@ impl Integrations {
         self.store.read::<Map<String, Value>>().remove(id)
     }
 
-    fn put(&self, id: &str, token: Value) -> Result<(), String> {
+    pub(crate) fn put(&self, id: &str, token: Value) -> Result<(), String> {
         self.store.update(|all: &mut Map<String, Value>| {
             all.insert(id.to_owned(), token);
             Ok(())
@@ -299,9 +348,9 @@ impl Integrations {
         let Some(refresh_token) = token["refresh_token"].as_str().filter(|s| !s.is_empty()).map(str::to_owned) else {
             return Err("no refresh token".into());
         };
-        let cid = client_id(svc);
-        let r =
-            self.post_form(svc, svc.token_url, &[("grant_type", "refresh_token"), ("refresh_token", &refresh_token), ("client_id", &cid)]).await?;
+        let cid = self.client_id(svc);
+        let token_url = endpoint(svc, token["base_url"].as_str(), svc.token_url);
+        let r = self.post_form(svc, &token_url, &[("grant_type", "refresh_token"), ("refresh_token", &refresh_token), ("client_id", &cid)]).await?;
         let Some(access) = r["access_token"].as_str().map(str::to_owned) else {
             // A refresh token the provider no longer honours won't work later either:
             // drop it, so Settings asks to reconnect instead of showing "connected".
@@ -337,14 +386,33 @@ impl Integrations {
                     None => (false, "", false),
                 };
                 let account = t.and_then(|t| t["account"].as_str().map(str::to_owned));
-                json!({
+                let flow = match s.flow {
+                    Flow::Device => "device",
+                    // No OAuth app to sign in with: a key is the only way.
+                    Flow::Pkce if self.client_id(s).is_empty() => "key",
+                    Flow::Pkce => "browser",
+                };
+                let mut v = json!({
                     "id": s.id, "label": s.label, "about": s.about,
-                    "flow": if s.flow == Flow::Device { "device" } else { "browser" },
+                    "flow": flow,
                     "connected": connected, "via": via, "account": account, "needsReauth": needs_reauth,
                     "keyEnv": s.key_env, "keyUrl": s.key_url,
-                })
+                });
+                if s.id == "gitlab" {
+                    v["baseUrl"] = json!(t.and_then(|t| t["base_url"].as_str()).unwrap_or(GITLAB_COM));
+                }
+                v
             })
             .collect()
+    }
+
+    /// Whether reads from `id` would have a credential to try (stored or from the env).
+    pub(crate) fn connected(&self, id: &str) -> bool {
+        let Ok(svc) = service(id) else { return false };
+        match self.token(id) {
+            Some(t) => t["api_key"].is_string() || fresh(&t) || refreshable(&t),
+            None => self.env_key(svc).is_some(),
+        }
     }
 
     fn disconnect(&self, id: &str) -> Result<(), String> {
@@ -355,8 +423,12 @@ impl Integrations {
         })
     }
 
-    /// Who the credential belongs to; also proves it works.
-    async fn account(&self, svc: &Service, auth: &Auth) -> Result<String, String> {
+    /// Who the credential belongs to; also proves it works. `base` is GitLab's instance.
+    async fn account(&self, svc: &Service, auth: &Auth, base: Option<&str>) -> Result<String, String> {
+        if svc.id == "gitlab" {
+            let me = self.gitlab_request(auth, base.unwrap_or(GITLAB_COM), "/user").await?;
+            return me["username"].as_str().map(str::to_owned).ok_or_else(|| "GitLab didn't say who this is".into());
+        }
         if svc.id == "github" {
             let me: Value = serde_json::from_str(&self.github_request(Some(auth), "/user", "application/vnd.github+json").await?)
                 .map_err(|_| "GitHub: the answer wasn't JSON".to_owned())?;
@@ -366,24 +438,37 @@ impl Integrations {
         Ok(data["viewer"]["email"].as_str().or(data["viewer"]["name"].as_str()).unwrap_or("connected").to_owned())
     }
 
-    async fn set_key(&self, id: &str, key: &str) -> Result<Value, String> {
+    /// `base_url` is only for GitLab (a self-managed instance); empty means gitlab.com.
+    async fn set_key(&self, id: &str, key: &str, base_url: Option<&str>) -> Result<Value, String> {
         let svc = service(id)?;
         let key = key.trim();
         if key.is_empty() {
             return Err("paste a key".into());
         }
-        let who = self.account(svc, &Auth::Key(key.to_owned())).await.map_err(|e| format!("that key didn't work: {e}"))?;
-        self.put(id, json!({ "api_key": key, "account": who }))?;
+        let base = if id == "gitlab" { Some(gitlab_base(base_url)?) } else { None };
+        let who = self.account(svc, &Auth::Key(key.to_owned()), base.as_deref()).await.map_err(|e| format!("that key didn't work: {e}"))?;
+        let mut entry = json!({ "api_key": key, "account": who });
+        if let Some(b) = base {
+            entry["base_url"] = json!(b);
+        }
+        self.put(id, entry)?;
         Ok(json!({ "account": who }))
     }
 
     // ── connecting ──
 
-    async fn connect(&'static self, id: &str, notify: Notify) -> Result<Value, String> {
+    async fn connect(&'static self, id: &str, base_url: Option<&str>, notify: Notify) -> Result<Value, String> {
         let svc = service(id)?;
+        if self.client_id(svc).is_empty() {
+            return Err(format!(
+                "{} sign-in needs an OAuth app: set {} to its client ID, or paste a personal access token (read_api) instead",
+                svc.label, svc.client_id_env
+            ));
+        }
+        let base = if id == "gitlab" { Some(gitlab_base(base_url)?) } else { None };
         match svc.flow {
             Flow::Device => self.start_device(svc, notify).await,
-            Flow::Pkce => self.start_pkce(svc, notify).await,
+            Flow::Pkce => self.start_pkce(svc, base, notify).await,
         }
     }
 
@@ -392,7 +477,7 @@ impl Integrations {
     }
 
     async fn start_device(&'static self, svc: &'static Service, notify: Notify) -> Result<Value, String> {
-        let cid = client_id(svc);
+        let cid = self.client_id(svc);
         let r = self.post_form(svc, svc.device_code_url, &[("client_id", cid.as_str()), ("scope", svc.scopes)]).await?;
         let device_code = r["device_code"].as_str().ok_or_else(|| format!("{}: {}", svc.label, oauth_error(&r, "no device code")))?.to_owned();
         let interval = r["interval"].as_u64().unwrap_or(5);
@@ -421,7 +506,7 @@ impl Integrations {
             let Ok(t) = self.post_form(svc, svc.token_url, &form).await else { continue };
             if let Some(access) = t["access_token"].as_str().map(str::to_owned) {
                 let mut t = stamp(t);
-                t["account"] = self.account(svc, &Auth::Bearer(access)).await.map_or(Value::Null, Value::from);
+                t["account"] = self.account(svc, &Auth::Bearer(access), None).await.map_or(Value::Null, Value::from);
                 return self.put(svc.id, t);
             }
             match t["error"].as_str() {
@@ -432,7 +517,7 @@ impl Integrations {
         }
     }
 
-    async fn start_pkce(&'static self, svc: &'static Service, notify: Notify) -> Result<Value, String> {
+    async fn start_pkce(&'static self, svc: &'static Service, base: Option<String>, notify: Notify) -> Result<Value, String> {
         let verifier = URL_SAFE_NO_PAD.encode(secure_random(48));
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let state = URL_SAFE_NO_PAD.encode(secure_random(24));
@@ -444,9 +529,9 @@ impl Integrations {
         let port = server.server_addr().to_ip().map_or(self.port, |a| a.port());
         let redirect = format!("http://127.0.0.1:{port}/oauth/callback/{}", svc.id);
         let url = Url::parse_with_params(
-            &self.url(svc.auth_url),
+            &self.url(&endpoint(svc, base.as_deref(), svc.auth_url)),
             &[
-                ("client_id", client_id(svc).as_str()),
+                ("client_id", self.client_id(svc).as_str()),
                 ("redirect_uri", redirect.as_str()),
                 ("response_type", "code"),
                 ("state", state.as_str()),
@@ -462,7 +547,7 @@ impl Integrations {
             if cancel.load(Ordering::SeqCst) {
                 return;
             }
-            let outcome = code.and_then(|code| tauri::async_runtime::block_on(self.exchange(svc, &code, &verifier, &redirect)));
+            let outcome = code.and_then(|code| tauri::async_runtime::block_on(self.exchange(svc, base.as_deref(), &code, &verifier, &redirect)));
             let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
             if pending.as_ref().is_some_and(|p| Arc::ptr_eq(p, &cancel)) {
                 *pending = None;
@@ -493,8 +578,8 @@ impl Integrations {
         }
     }
 
-    async fn exchange(&self, svc: &Service, code: &str, verifier: &str, redirect: &str) -> Result<(), String> {
-        let cid = client_id(svc);
+    async fn exchange(&self, svc: &Service, base: Option<&str>, code: &str, verifier: &str, redirect: &str) -> Result<(), String> {
+        let cid = self.client_id(svc);
         let form = [
             ("client_id", cid.as_str()),
             ("code", code),
@@ -502,10 +587,13 @@ impl Integrations {
             ("grant_type", "authorization_code"),
             ("code_verifier", verifier),
         ];
-        let t = self.post_form(svc, svc.token_url, &form).await?;
+        let t = self.post_form(svc, &endpoint(svc, base, svc.token_url), &form).await?;
         let access = t["access_token"].as_str().ok_or_else(|| format!("{} refused the code: {}", svc.label, oauth_error(&t, "?")))?.to_owned();
         let mut t = stamp(t);
-        t["account"] = self.account(svc, &Auth::Bearer(access)).await.map_or(Value::Null, Value::from);
+        t["account"] = self.account(svc, &Auth::Bearer(access), base).await.map_or(Value::Null, Value::from);
+        if let Some(b) = base {
+            t["base_url"] = json!(b);
+        }
         self.put(svc.id, t)
     }
 
@@ -568,7 +656,7 @@ impl Integrations {
         }
     }
 
-    async fn github_get(&self, path: &str, accept: &str, require_auth: bool) -> Result<String, String> {
+    pub(crate) async fn github_get(&self, path: &str, accept: &str, require_auth: bool) -> Result<String, String> {
         let auth = if require_auth { Some(self.auth("github").await?) } else { self.auth("github").await.ok() };
         self.github_request(auth.as_ref(), path, accept).await
     }
@@ -578,9 +666,42 @@ impl Integrations {
         self.graphql(service("github")?, &format!("{GITHUB_API}/graphql"), &auth, query, vars).await
     }
 
-    async fn linear(&self, query: &str, vars: Value) -> Result<Value, String> {
+    pub(crate) async fn linear(&self, query: &str, vars: Value) -> Result<Value, String> {
         let auth = self.auth("linear").await?;
         self.graphql(service("linear")?, LINEAR_API, &auth, query, vars).await
+    }
+
+    /// The GitLab instance the connection is on.
+    pub(crate) fn gitlab_base_url(&self) -> String {
+        self.token("gitlab").and_then(|t| t["base_url"].as_str().map(str::to_owned)).unwrap_or_else(|| GITLAB_COM.to_owned())
+    }
+
+    /// A GitLab REST GET under `/api/v4` on the instance at `base`.
+    async fn gitlab_request(&self, auth: &Auth, base: &str, path: &str) -> Result<Value, String> {
+        let resp = http()
+            .get(self.url(&format!("{base}/api/v4{path}")))
+            .timeout(API_TIMEOUT)
+            .header("accept", "application/json")
+            .header("authorization", auth.header("gitlab"))
+            .send()
+            .await
+            .map_err(|e| format!("GitLab: {e}"))?;
+        let status = resp.status().as_u16();
+        let body = read_capped(resp, MAX_RESPONSE).await.map_err(|e| format!("GitLab: {e}"))?;
+        match status {
+            200..=299 => serde_json::from_slice(&body).map_err(|_| "GitLab: the answer wasn't JSON".to_owned()),
+            401 => Err("GitLab refused the credential (HTTP 401): reconnect in Settings → Integrations".into()),
+            403 => Err("GitLab: forbidden (HTTP 403): the token can't read this (it needs read_api)".into()),
+            404 => Err("GitLab: not found".into()),
+            429 => Err("GitLab: rate limit reached".into()),
+            _ => Err(format!("GitLab: HTTP {status}: {}", String::from_utf8_lossy(&body).chars().take(200).collect::<String>())),
+        }
+    }
+
+    /// A GitLab REST GET (`path` after `/api/v4`) with the connected account.
+    pub(crate) async fn gitlab_get(&self, path: &str) -> Result<Value, String> {
+        let auth = self.auth("gitlab").await?;
+        self.gitlab_request(&auth, &self.gitlab_base_url(), path).await
     }
 
     async fn linear_source(&self, kind: &str, source: &Value) -> Result<Value, String> {
@@ -659,16 +780,17 @@ pub fn disconnect(id: &str) -> Result<(), String> {
     Integrations::user().disconnect(id)
 }
 
-/// Save a personal API key after checking it works.
-pub async fn set_key(id: &str, key: &str) -> Result<Value, String> {
-    Integrations::user().set_key(id, key).await
+/// Save a personal API key after checking it works. `base_url` is GitLab's instance (empty: gitlab.com).
+pub async fn set_key(id: &str, key: &str, base_url: Option<&str>) -> Result<Value, String> {
+    Integrations::user().set_key(id, key, base_url).await
 }
 
 /// Start signing in. Device flow returns the code to show; the browser flow
 /// returns the URL to open and listens for the callback. Either way `notify`
 /// hears how it ended (a browser sign-in replaced by a newer one says nothing).
-pub async fn connect(id: &str, notify: Notify) -> Result<Value, String> {
-    Integrations::user().connect(id, notify).await
+/// `base_url` is GitLab's instance (empty: gitlab.com).
+pub async fn connect(id: &str, base_url: Option<&str>, notify: Notify) -> Result<Value, String> {
+    Integrations::user().connect(id, base_url, notify).await
 }
 
 /// A GitHub GraphQL query with the connected account (or `GITHUB_TOKEN`).
@@ -742,7 +864,7 @@ fn wait_for_callback(server: &tiny_http::Server, svc: &Service, state: &str, can
 // ── Linear shapes ───────────────────────────────────────────────────────────
 
 /// `ENG`-style team keys and `ENG-123`-style ids only.
-fn linear_key(v: &Value, what: &str) -> Result<String, String> {
+pub(crate) fn linear_key(v: &Value, what: &str) -> Result<String, String> {
     let s = v.as_str().ok_or_else(|| format!("needs `{what}`"))?.trim();
     let ok = !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c));
     if ok { Ok(s.to_owned()) } else { Err(format!("`{s}` isn't a Linear {what}")) }
@@ -756,11 +878,11 @@ fn priority(issue: &Value) -> (Value, &'static str) {
     (issue["priorityLabel"].clone(), PRIORITY_VARIANT[p])
 }
 
-fn names(nodes: &Value, field: &str) -> Vec<Value> {
+pub(crate) fn names(nodes: &Value, field: &str) -> Vec<Value> {
     nodes["nodes"].as_array().into_iter().flatten().map(|n| n[field].clone()).collect()
 }
 
-fn done_type(t: &str) -> bool {
+pub(crate) fn done_type(t: &str) -> bool {
     t == "completed" || t == "canceled"
 }
 
@@ -770,7 +892,7 @@ fn cycle_name(c: &Value) -> Option<String> {
 
 const ISSUE_ROW: &str = "identifier title url priority priorityLabel estimate updatedAt state { name type } assignee { name }";
 
-const ISSUE_QUERY: &str = "query($id: String!) { issue(id: $id) { identifier title description url priority priorityLabel estimate dueDate createdAt updatedAt \
+pub(crate) const ISSUE_QUERY: &str = "query($id: String!) { issue(id: $id) { identifier title description url priority priorityLabel estimate dueDate createdAt updatedAt \
     state { name type } assignee { name } creator { name } team { key name } cycle { number name } project { name } \
     labels { nodes { name } } children { nodes { identifier title state { name type } } } \
     attachments { nodes { title url } } comments(first: 30) { nodes { body createdAt user { name } } } } }";
@@ -790,7 +912,7 @@ fn issue_row(i: &Value) -> Value {
     })
 }
 
-fn shape_issue(i: &Value) -> Value {
+pub(crate) fn shape_issue(i: &Value) -> Value {
     let (label, variant) = priority(i);
     let subs: Vec<Value> = i["children"]["nodes"]
         .as_array()
@@ -904,17 +1026,19 @@ fn short_date(days: i64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
     use std::io::Read;
     use std::sync::atomic::AtomicUsize;
 
     /// One request to the stand-in server.
-    struct Req {
-        path: String,
-        body: String,
-        auth: Option<String>,
+    pub(crate) struct Req {
+        pub(crate) path: String,
+        /// The query string, without the `?`.
+        pub(crate) query: String,
+        pub(crate) body: String,
+        pub(crate) auth: Option<String>,
     }
 
     impl Req {
@@ -922,7 +1046,7 @@ mod tests {
             Url::parse(&format!("http://x/?{}", self.body)).unwrap().query_pairs().into_owned().collect()
         }
 
-        fn graphql(&self) -> (String, Value) {
+        pub(crate) fn graphql(&self) -> (String, Value) {
             let v: Value = serde_json::from_str(&self.body).unwrap_or_default();
             (v["query"].as_str().unwrap_or_default().to_owned(), v["variables"].clone())
         }
@@ -930,7 +1054,7 @@ mod tests {
 
     /// A local stand-in for GitHub and Linear: `https://<host>/<path>` arrives
     /// as `/<host>/<path>`. Returns the base URL and the bodies it was sent.
-    fn mock(handler: impl Fn(&Req) -> (u16, Value) + Send + 'static) -> (String, Arc<Mutex<Vec<String>>>) {
+    pub(crate) fn mock(handler: impl Fn(&Req) -> (u16, Value) + Send + 'static) -> (String, Arc<Mutex<Vec<String>>>) {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let base = format!("http://127.0.0.1:{}", server.server_addr().to_ip().unwrap().port());
         let seen = Arc::new(Mutex::new(vec![]));
@@ -940,8 +1064,9 @@ mod tests {
                 let mut body = String::new();
                 let _ = req.as_reader().read_to_string(&mut body);
                 let auth = req.headers().iter().find(|h| h.field.equiv("authorization")).map(|h| h.value.to_string());
-                let r = Req { path: req.url().split('?').next().unwrap_or_default().to_owned(), body, auth };
-                log.lock().unwrap().push(format!("{} {}", r.path, r.body));
+                let (path, query) = req.url().split_once('?').unwrap_or((req.url(), ""));
+                let r = Req { path: path.to_owned(), query: query.to_owned(), body, auth };
+                log.lock().unwrap().push(format!("{}?{} {}", r.path, r.query, r.body));
                 let (status, reply) = handler(&r);
                 let text = match reply {
                     Value::String(s) => s,
@@ -954,7 +1079,7 @@ mod tests {
     }
 
     /// Integrations with their own token file, talking to `base`.
-    fn instance(base: &str, port: u16) -> &'static Integrations {
+    pub(crate) fn instance(base: &str, port: u16) -> &'static Integrations {
         let dir = std::env::temp_dir().join(format!("yaah-int-{}", crate::session::random_token()));
         Box::leak(Box::new(Integrations {
             store: JsonFile::new(dir.join("integrations.json"), true),
@@ -962,6 +1087,7 @@ mod tests {
             port,
             tick: Duration::from_millis(5),
             env_keys: false,
+            client_ids: vec![("gitlab", "gl-test-client".into())],
             refreshing: tokio::sync::Mutex::const_new(()),
             pending: Mutex::new(None),
         }))
@@ -1009,7 +1135,7 @@ mod tests {
         });
         let i = instance(&base, 0);
         let (notify, mut rx) = notifier();
-        let started = i.connect("github", notify).await.unwrap();
+        let started = i.connect("github", None, notify).await.unwrap();
         assert_eq!((started["flow"].as_str(), started["userCode"].as_str()), (Some("device"), Some("WDJB-MJHT")));
         assert_eq!(outcome(&mut rx).await, json!({ "service": "github", "ok": true, "error": null }));
 
@@ -1029,7 +1155,7 @@ mod tests {
             _ => (200, json!({ "error": "access_denied", "error_description": "The user has denied your application access." })),
         });
         let (notify, mut rx) = notifier();
-        instance(&base, 0).connect("github", notify).await.unwrap();
+        instance(&base, 0).connect("github", None, notify).await.unwrap();
         assert_eq!(outcome(&mut rx).await["error"], "The user has denied your application access.");
 
         let (base, _) = mock(|r| match r.path.as_str() {
@@ -1037,12 +1163,12 @@ mod tests {
             _ => (200, json!({ "error": "authorization_pending" })),
         });
         let (notify, mut rx) = notifier();
-        instance(&base, 0).connect("github", notify).await.unwrap();
+        instance(&base, 0).connect("github", None, notify).await.unwrap();
         assert_eq!(outcome(&mut rx).await["error"], "the code expired; start again");
 
         let (base, _) = mock(|_| (200, json!({ "error": "unauthorized_client", "error_description": "Device flow is disabled" })));
         let (notify, _rx) = notifier();
-        assert_eq!(instance(&base, 0).connect("github", notify).await.unwrap_err(), "GitHub: Device flow is disabled");
+        assert_eq!(instance(&base, 0).connect("github", None, notify).await.unwrap_err(), "GitHub: Device flow is disabled");
     }
 
     fn free_port() -> u16 {
@@ -1072,9 +1198,9 @@ mod tests {
         let i = instance(&base, port);
         // The user abandons a first attempt and clicks Connect again: the new one gets the port.
         let (first, mut first_rx) = notifier();
-        i.connect("linear", first).await.unwrap();
+        i.connect("linear", None, first).await.unwrap();
         let (notify, mut rx) = notifier();
-        let started = i.connect("linear", notify).await.unwrap();
+        let started = i.connect("linear", None, notify).await.unwrap();
 
         let url = Url::parse(started["authUrl"].as_str().unwrap()).unwrap();
         assert!(url.as_str().starts_with(&format!("{base}/linear.app/oauth/authorize?")), "{url}");
@@ -1095,6 +1221,111 @@ mod tests {
         assert!(t["expires_at"].as_u64().unwrap() > now() + 86_000);
         assert_eq!(i.auth("linear").await.unwrap(), Auth::Bearer("lin_oauth".into()));
         assert!(i.pending.lock().unwrap().is_none());
+    }
+
+    /// GitLab on a self-managed instance: sign-in, the token exchange, the account
+    /// check and the refresh all go to that instance, which is remembered.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gitlab_signs_in_on_its_own_instance() {
+        let challenge = Arc::new(Mutex::new(String::new()));
+        let c = challenge.clone();
+        let (base, seen) = mock(move |r| match r.path.as_str() {
+            "/gitlab.example.com/oauth/token" => {
+                let f = r.form();
+                match f["grant_type"].as_str() {
+                    "authorization_code" if URL_SAFE_NO_PAD.encode(Sha256::digest(f["code_verifier"].as_bytes())) == *c.lock().unwrap() => {
+                        assert_eq!(f["client_id"], "gl-test-client");
+                        (200, json!({ "access_token": "gl_oauth", "refresh_token": "glr1", "expires_in": 7200, "token_type": "Bearer" }))
+                    }
+                    "refresh_token" if f["refresh_token"] == "glr1" => {
+                        (200, json!({ "access_token": "gl_new", "refresh_token": "glr2", "expires_in": 7200 }))
+                    }
+                    _ => (400, json!({ "error": "invalid_grant" })),
+                }
+            }
+            "/gitlab.example.com/api/v4/user" if r.auth.as_deref() == Some("Bearer gl_oauth") => (200, json!({ "username": "ada", "id": 1 })),
+            "/git.corp.example/gitlab/api/v4/user" if r.auth.as_deref() == Some("Bearer glpat-ok") => (200, json!({ "username": "grace" })),
+            "/git.corp.example/gitlab/api/v4/projects/a%2Fb/issues/1" => (403, json!({ "message": "403 Forbidden" })),
+            _ => (401, json!({ "message": "401 Unauthorized" })),
+        });
+        let port = free_port();
+        let i = instance(&base, port);
+        let (notify, mut rx) = notifier();
+        let started = i.connect("gitlab", Some("https://gitlab.example.com/"), notify).await.unwrap();
+        let url = Url::parse(started["authUrl"].as_str().unwrap()).unwrap();
+        assert!(url.as_str().starts_with(&format!("{base}/gitlab.example.com/oauth/authorize?")), "{url}");
+        let q: HashMap<String, String> = url.query_pairs().into_owned().collect();
+        assert_eq!((q["scope"].as_str(), q["client_id"].as_str()), ("read_api read_user", "gl-test-client"));
+        *challenge.lock().unwrap() = q["code_challenge"].clone();
+        let page = http().get(format!("{}?code=c0de&state={}", q["redirect_uri"], q["state"])).send().await.unwrap();
+        assert!(page.text().await.unwrap().contains("Connected to GitLab"));
+        assert_eq!(outcome(&mut rx).await, json!({ "service": "gitlab", "ok": true, "error": null }));
+
+        let tok = i.token("gitlab").unwrap();
+        assert_eq!((tok["account"].as_str(), tok["base_url"].as_str()), (Some("ada"), Some("https://gitlab.example.com")));
+        assert_eq!(i.status()[2]["baseUrl"], "https://gitlab.example.com");
+        assert_eq!(i.status()[2]["flow"], "browser");
+        assert!(i.connected("gitlab") && !i.connected("github"));
+
+        // The refresh goes to the same instance.
+        let mut tok = tok;
+        tok["expires_at"] = json!(now() + 30);
+        i.put("gitlab", tok).unwrap();
+        assert_eq!(i.auth("gitlab").await.unwrap(), Auth::Bearer("gl_new".into()));
+        assert!(seen.lock().unwrap().iter().any(|l| l.starts_with("/gitlab.example.com/oauth/token") && l.contains("grant_type=refresh_token")));
+
+        // A personal access token, on an instance under a path.
+        assert!(
+            i.set_key("gitlab", "glpat-bad", Some("https://git.corp.example/gitlab"))
+                .await
+                .unwrap_err()
+                .contains("GitLab refused the credential (HTTP 401)")
+        );
+        assert_eq!(i.set_key("gitlab", "glpat-ok", Some("https://git.corp.example/gitlab/")).await.unwrap(), json!({ "account": "grace" }));
+        assert_eq!(i.gitlab_base_url(), "https://git.corp.example/gitlab");
+        assert_eq!(i.status()[2]["via"], "key");
+        let denied = i.gitlab_get("/projects/a%2Fb/issues/1").await.unwrap_err();
+        assert!(denied.starts_with("GitLab: forbidden (HTTP 403)"), "{denied}");
+        assert!(!serde_json::to_string(&i.status()).unwrap().contains("glpat"), "Settings never sees a token");
+    }
+
+    #[tokio::test]
+    async fn gitlab_without_an_oauth_app_takes_a_token_only() {
+        let (base, seen) = mock(|_| (500, json!({})));
+        let i: &'static Integrations = Box::leak(Box::new(Integrations {
+            store: JsonFile::new(std::env::temp_dir().join(format!("yaah-int-{}", crate::session::random_token())).join("i.json"), true),
+            base: Some(base),
+            port: 0,
+            tick: Duration::from_millis(5),
+            env_keys: false,
+            client_ids: vec![("gitlab", String::new())],
+            refreshing: tokio::sync::Mutex::const_new(()),
+            pending: Mutex::new(None),
+        }));
+        assert_eq!(i.status()[2]["flow"], "key");
+        assert_eq!(i.status()[2]["baseUrl"], GITLAB_COM);
+        let (notify, _rx) = notifier();
+        let e = i.connect("gitlab", None, notify).await.unwrap_err();
+        assert!(e.contains("YAAH_GITLAB_CLIENT_ID") && e.contains("personal access token"), "{e}");
+        assert!(seen.lock().unwrap().is_empty(), "nothing was asked of GitLab");
+        assert!(!i.connected("gitlab"));
+        assert_eq!(i.gitlab_get("/issues").await.unwrap_err(), "GitLab isn't connected: open Settings → Integrations (or set GITLAB_TOKEN)");
+    }
+
+    #[test]
+    fn gitlab_addresses() {
+        assert_eq!(gitlab_base(None).unwrap(), "https://gitlab.com");
+        assert_eq!(gitlab_base(Some("  ")).unwrap(), "https://gitlab.com");
+        assert_eq!(gitlab_base(Some("https://Git.Example.com/")).unwrap(), "https://git.example.com");
+        assert_eq!(gitlab_base(Some("https://example.com:8443/gitlab/")).unwrap(), "https://example.com:8443/gitlab");
+        for bad in ["http://git.example.com", "git.example.com", "https://x/?a=1", "https://x/#y", "ftp://x"] {
+            assert!(gitlab_base(Some(bad)).unwrap_err().contains("isn't a GitLab address"), "{bad}");
+        }
+        assert!(gitlab_base(Some("https://me:secret@git.example.com")).unwrap_err().contains("not in the address"));
+        let gl = service("gitlab").unwrap();
+        assert_eq!(endpoint(gl, Some("https://x.example/gl"), gl.token_url), "https://x.example/gl/oauth/token");
+        assert_eq!(endpoint(service("linear").unwrap(), Some("https://x"), LINEAR_API), LINEAR_API, "only GitLab moves");
+        assert_eq!(Auth::Key("glpat-x".into()).header("gitlab"), "Bearer glpat-x");
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1161,11 +1392,11 @@ mod tests {
             "Linear isn't connected: open Settings → Integrations (or set LINEAR_API_KEY)"
         );
         assert_eq!(
-            i.set_key("linear", "lin_api_bad").await.unwrap_err(),
+            i.set_key("linear", "lin_api_bad", None).await.unwrap_err(),
             "that key didn't work: Linear refused the credential (HTTP 401): reconnect in Settings → Integrations"
         );
-        assert_eq!(i.set_key("linear", "  ").await.unwrap_err(), "paste a key");
-        assert_eq!(i.set_key("linear", " lin_api_good ").await.unwrap(), json!({ "account": "Ada" }));
+        assert_eq!(i.set_key("linear", "  ", None).await.unwrap_err(), "paste a key");
+        assert_eq!(i.set_key("linear", " lin_api_good ", None).await.unwrap(), json!({ "account": "Ada" }));
         assert_eq!(i.auth("linear").await.unwrap(), Auth::Key("lin_api_good".into()));
         assert_eq!(i.status()[1]["via"], "key");
         assert_eq!(i.linear("query { boom }", json!({})).await.unwrap_err(), "Linear: Cannot query field \"boom\"");
@@ -1176,8 +1407,8 @@ mod tests {
         assert!(e.starts_with("GitHub: not found (unauthenticated: public repos only"), "{e}");
         assert!(i.github_get("/rate", "application/json", false).await.unwrap_err().starts_with("GitHub: rate limit reached"));
         assert!(i.github_get("/repos/o/r/pulls/1", "x", true).await.unwrap_err().starts_with("GitHub isn't connected"));
-        assert!(i.set_key("github", "ghp_nope").await.unwrap_err().contains("GitHub refused the credential (HTTP 401)"));
-        i.set_key("github", "ghp_ok").await.unwrap();
+        assert!(i.set_key("github", "ghp_nope", None).await.unwrap_err().contains("GitHub refused the credential (HTTP 401)"));
+        i.set_key("github", "ghp_ok", None).await.unwrap();
         assert_eq!(i.github_get("/repos/o/r/pulls/1", "application/vnd.github.diff", true).await.unwrap(), "diff --git a/x b/x");
         assert_eq!(i.github_get("/elsewhere", "x", true).await.unwrap_err(), "GitHub: HTTP 500: oops");
         assert_eq!(i.github_graphql("{ viewer { login } }", json!({})).await.unwrap_err(), "GitHub: HTTP 502 Bad Gateway");

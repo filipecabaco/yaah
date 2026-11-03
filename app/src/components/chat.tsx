@@ -12,6 +12,7 @@ import { compactPath } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { ChatContext, onDraft } from "@/components/chat-context";
 import { TranscriptEntry } from "@/components/entries";
+import { FolderMenu } from "@/components/menus";
 
 type Props = {
   session: SessionInfo;
@@ -57,10 +58,12 @@ export function Chat({ session, entries, agents, project, onOpenProject, onLogin
             no UI tools
           </Badge>
         )}
-        <span className="ml-auto truncate font-mono text-xs text-muted-foreground" title={roots.map((r) => compactPath(r)).join("\n")}>
-          {compactPath(session.cwd)}
-          {roots.length > 1 && ` +${roots.length - 1}`}
-        </span>
+        <FolderMenu path={session.cwd}>
+          <span className="ml-auto truncate font-mono text-xs text-muted-foreground" title={roots.map((r) => compactPath(r)).join("\n")}>
+            {compactPath(session.cwd)}
+            {roots.length > 1 && ` +${roots.length - 1}`}
+          </span>
+        </FolderMenu>
       </header>
 
       <ChatContext.Provider value={chat}>
@@ -76,6 +79,12 @@ function Transcript({ running, entries, onLogin }: { running: boolean; entries: 
   const pinned = useRef(true);
   // Entries after the last user message belong to the current turn.
   const turnStart = entries.findLastIndex((e) => e?.type === "user");
+  // Permission prompts carry no input; the tool call they ask about does.
+  const toolInputs = useMemo(() => {
+    const m = new Map<string, unknown>();
+    for (const e of entries) if (e?.type === "tool" && e.rawInput != null) m.set(e.toolCallId, e.rawInput);
+    return m;
+  }, [entries]);
 
   // Follow the stream only while the user is already at the bottom.
   useEffect(() => {
@@ -98,7 +107,18 @@ function Transcript({ running, entries, onLogin }: { running: boolean; entries: 
           // Rust addresses entries by index and only ever appends or replaces in place, so the index is a stable key.
           if (!entry) return null;
           const inTurn = running && i > turnStart;
-          return <TranscriptEntry key={i} entry={entry} index={i} inTurn={inTurn} live={inTurn && i === entries.length - 1} onLogin={onLogin} />;
+          const toolInput = entry.type === "permission" && entry.toolCallId ? toolInputs.get(entry.toolCallId) : undefined;
+          return (
+            <TranscriptEntry
+              key={i}
+              entry={entry}
+              index={i}
+              inTurn={inTurn}
+              live={inTurn && i === entries.length - 1}
+              toolInput={toolInput}
+              onLogin={onLogin}
+            />
+          );
         })}
         {running && entries[entries.length - 1]?.type === "user" && <p className="text-xs text-muted-foreground">Working…</p>}
       </div>
@@ -151,8 +171,8 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
         setCaret(next.length);
         if (mention) setMentions((m) => ({ ...m, [mention.label]: mention.path }));
         setTimeout(() => input.current?.focus());
-      }),
-    [text],
+      }, session.sessionId),
+    [text, session.sessionId],
   );
 
   const trigger = useMemo(() => findTrigger(text, caret), [text, caret]);

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FolderGit2, MessageSquarePlus } from "lucide-react";
+import { Mark } from "@/components/brand/mark";
 import { Chat } from "@/components/chat";
 import { focusComposer } from "@/components/chat-context";
 import { ErrorText } from "@/components/error-text";
@@ -11,35 +12,44 @@ import { AppContextMenu, ChatActionsProvider } from "@/components/menus";
 import { ProjectView } from "@/components/project-view";
 import { RepoPicker } from "@/components/repo-picker";
 import { ShortcutsDialog } from "@/components/shortcuts";
-import { NewProjectDialog, Sidebar } from "@/components/sidebar";
+import { NewProjectDialog, Sidebar, type NewProjectMode } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useShortcuts } from "@/hooks/use-shortcuts";
 import { useYaah } from "@/hooks/use-yaah";
 import { api, canChat, type AgentProfile, type SessionInfo } from "@/lib/api";
-import { onOpenSettings } from "@/lib/app-events";
+import { onOpenComponent, onOpenSettings } from "@/lib/app-events";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
 
 export default function App() {
   const y = useYaah();
   const [loginFor, setLoginFor] = useState<AgentProfile | null>(null);
   const [setup, setSetup] = useState<SettingsTarget | null>(null);
-  const [creatingProject, setCreatingProject] = useState(false);
+  // The New project dialog, open on a mode (null: closed).
+  const [creatingProject, setCreatingProject] = useState<NewProjectMode | null>(null);
   const [addingRepos, setAddingRepos] = useState(false);
   const [palette, setPalette] = useState<PalettePage | null>(null);
   const [help, setHelp] = useState(false);
   // Project whose delete confirmation the sidebar menu asked for.
   const [askDelete, setAskDelete] = useState<string | null>(null);
+  // Project whose name the sidebar menu's Rename… asked to edit.
+  const [askRename, setAskRename] = useState<string | null>(null);
+  // Why the chat of a project just started from an issue didn't open (shown on its page).
+  const [startNote, setStartNote] = useState<{ projectId: string; message: string } | null>(null);
+  // Component a chat asked the Component library to show.
+  const [showComponent, setShowComponent] = useState<string | null>(null);
   const agent = y.agents.find((a) => a.id === y.agentId);
   const project = y.activeProject;
   const chat = y.activeChat;
   const clearAskDelete = useCallback(() => setAskDelete(null), []);
+  const clearAskRename = useCallback(() => setAskRename(null), []);
+  const clearShowComponent = useCallback(() => setShowComponent(null), []);
   const agents = y.agents;
   // Stable, so finished chat entries (which get it) don't re-render with the app.
   const loginById = useCallback((id: string) => setLoginFor(agents.find((a) => a.id === id) ?? null), [agents]);
   /** Start a chat if the agent can; otherwise log it in, or add one. */
-  const withAgent = (start: () => Promise<void>) => {
+  const withAgent = (start: () => Promise<unknown>) => {
     if (!agent) return setSetup({ kind: "add" });
     if (!canChat(agent)) return setLoginFor(agent);
     start().catch(console.error);
@@ -58,6 +68,16 @@ export default function App() {
 
   // Cards in a chat (e.g. MCP notices) can open Settings on a tab.
   useEffect(() => onOpenSettings((tab) => setSetup({ kind: "settings", tab: tab as SettingsTab })), []);
+  // A rendered UI's menu can open its component in the library.
+  const select = y.setSelection;
+  useEffect(
+    () =>
+      onOpenComponent((name) => {
+        setShowComponent(name);
+        select({ kind: "components" });
+      }),
+    [select],
+  );
 
   useShortcuts({
     palette: () => {
@@ -75,7 +95,7 @@ export default function App() {
     },
     // In a project: a chat there. Anywhere else: a quick chat outside any project.
     newChat: () => withAgent(() => (project ? y.newChat(project.id) : y.newQuickChat())),
-    newProject: () => setCreatingProject(true),
+    newProject: () => setCreatingProject("name"),
     focusComposer,
     stop: () => {
       if (chat?.running) api.cancelTurn(chat.sessionId).catch((e: unknown) => console.error("could not stop the turn", e));
@@ -110,6 +130,15 @@ export default function App() {
     />
   );
 
+  // Starting: the same sliding mark index.html shows before any script ran, until the agents are in.
+  if (!y.agentsLoaded && !y.loadError) {
+    return (
+      <div className="grid h-screen place-items-center" role="status" aria-label="Starting yaah">
+        <Mark loading className="size-14 text-foreground" />
+      </div>
+    );
+  }
+
   // First run: nothing to chat with until an agent is set up.
   if (y.agentsLoaded && y.agents.length === 0) {
     return (
@@ -141,12 +170,22 @@ export default function App() {
               chatsByProject={y.chatsByProject}
               quickChats={y.quickChats}
               onNewQuickChat={() => withAgent(() => y.newQuickChat())}
+              onNewChatInFolder={() => withAgent(() => y.newChatInFolder())}
               selection={y.selection}
+              activeProjectId={project?.id ?? null}
               onSelect={y.setSelection}
-              onNewProject={() => setCreatingProject(true)}
+              onNewProject={() => setCreatingProject("name")}
               onPalette={() => setPalette({ kind: "root" })}
               onNewChat={y.newChat}
               onProjectChange={y.putProject}
+              onRenameProject={(id) => {
+                y.setSelection({ kind: "project", id });
+                setAskRename(id);
+              }}
+              onAddRepos={(id) => {
+                y.setSelection({ kind: "project", id });
+                setAddingRepos(true);
+              }}
               onDeleteProject={(id) => {
                 y.setSelection({ kind: "project", id });
                 setAskDelete(id);
@@ -154,7 +193,7 @@ export default function App() {
             />
 
             {y.selection?.kind === "components" ? (
-              <ComponentsView />
+              <ComponentsView initial={showComponent} onInitialSeen={clearShowComponent} />
             ) : chat ? (
               <Chat
                 session={chat}
@@ -172,22 +211,33 @@ export default function App() {
                 onChange={y.putProject}
                 onDelete={y.deleteProject}
                 onOpenChat={openChat}
-                onNewChat={y.newChat}
+                onNewChat={(id) => {
+                  setStartNote(null);
+                  return y.newChat(id);
+                }}
                 onLogin={setLoginFor}
                 askDelete={askDelete === project.id}
                 onAskDeleteSeen={clearAskDelete}
+                askRename={askRename === project.id}
+                onAskRenameSeen={clearAskRename}
+                notice={
+                  startNote?.projectId === project.id
+                    ? `Started from ${project.link?.id ?? "the issue"}, but its chat didn't open: ${startNote.message}`
+                    : undefined
+                }
               />
             ) : (
               <main className="flex flex-1 items-center justify-center p-8">
-                <div className="flex max-w-md flex-col items-center gap-4 text-center">
-                  <p className="text-sm text-muted-foreground">
+                <div className="flex max-w-md flex-col items-center gap-5 text-center">
+                  <Mark assemble className="size-16 text-foreground" title="yaah" />
+                  <p className="text-sm text-pretty text-muted-foreground">
                     Start a quick chat for something small, or a project when the work spans several repos.
                   </p>
                   <div className="flex flex-wrap justify-center gap-2">
                     <Button onClick={() => withAgent(() => y.newQuickChat())}>
                       <MessageSquarePlus /> Quick chat <Kbd className="ml-1">{formatKeys(SHORTCUTS.newChat.keys)}</Kbd>
                     </Button>
-                    <Button variant="outline" onClick={() => setCreatingProject(true)}>
+                    <Button variant="outline" onClick={() => setCreatingProject("name")}>
                       <FolderGit2 /> New project <Kbd className="ml-1">{formatKeys(SHORTCUTS.newProject.keys)}</Kbd>
                     </Button>
                   </div>
@@ -199,7 +249,8 @@ export default function App() {
               page={palette}
               onPage={setPalette}
               y={y}
-              onNewProject={() => setCreatingProject(true)}
+              onNewProject={() => setCreatingProject("name")}
+              onNewProjectFromItem={() => setCreatingProject("issue")}
               onAddRepos={() => setAddingRepos(true)}
               onLogin={setLoginFor}
               onAddAgent={() => setSetup({ kind: "add" })}
@@ -209,7 +260,22 @@ export default function App() {
               onHelp={() => setHelp(true)}
             />
             <ShortcutsDialog open={help} onClose={() => setHelp(false)} />
-            <NewProjectDialog open={creatingProject} onClose={() => setCreatingProject(false)} onCreate={y.createProject} />
+            <NewProjectDialog
+              open={creatingProject != null}
+              mode={creatingProject ?? "name"}
+              onClose={() => setCreatingProject(null)}
+              onCreate={y.createProject}
+              onStart={async (item) => {
+                const started = await y.startFromItem(item);
+                setStartNote(started.chatError ? { projectId: started.project.id, message: started.chatError } : null);
+                return started;
+              }}
+              onOpenProject={(id) => y.setSelection({ kind: "project", id })}
+              onIntegrations={(service) => {
+                setCreatingProject(null);
+                setSetup({ kind: "integrations", service });
+              }}
+            />
             {project && (
               <RepoPicker
                 open={addingRepos}

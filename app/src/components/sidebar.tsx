@@ -5,11 +5,13 @@ import {
   Copy,
   FolderGit2,
   FolderOpen,
+  FolderPlus,
   LayoutPanelTop,
   Loader2,
   LogIn,
   MessageSquare,
   MessageSquarePlus,
+  Pencil,
   Plus,
   Search,
   Settings2,
@@ -17,6 +19,7 @@ import {
   X,
   Settings,
 } from "lucide-react";
+import { Wordmark } from "@/components/brand/mark";
 import { ChatMenu, CopyMenuItem } from "@/components/menus";
 import { RepoPicker } from "@/components/repo-picker";
 import { Hint } from "@/components/shortcuts";
@@ -30,6 +33,7 @@ import {
   ContextMenuRadioGroup,
   ContextMenuRadioItem,
   ContextMenuSeparator,
+  ContextMenuShortcut,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
@@ -41,6 +45,8 @@ import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { WorkItemPicker, type WorkItemPickerProps } from "@/components/work-item-picker";
 import { api, canChat, PROJECT_STATUSES, type AgentProfile, type Project, type ProjectStatus, type SessionInfo } from "@/lib/api";
 import { baseName, compactPath } from "@/lib/format";
 import { ErrorText } from "@/components/error-text";
@@ -62,12 +68,19 @@ type Props = {
   /** Chats outside any project, newest first. */
   quickChats: SessionInfo[];
   onNewQuickChat: () => void;
+  onNewChatInFolder: () => void;
   selection: Selection;
+  /** The project ⌘N starts a chat in: the open one, or the open chat's. */
+  activeProjectId: string | null;
   onSelect: (s: Selection) => void;
   onNewProject: () => void;
   onPalette: () => void;
-  onNewChat: (projectId: string) => Promise<void>;
+  onNewChat: (projectId: string) => Promise<unknown>;
   onProjectChange: (p: Project) => void;
+  /** Opens the project page with its name ready to edit. */
+  onRenameProject: (id: string) => void;
+  /** Opens the project page and the repo picker for it. */
+  onAddRepos: (id: string) => void;
   /** Opens the project page with its delete confirmation showing. */
   onDeleteProject: (id: string) => void;
 };
@@ -80,7 +93,7 @@ export function Sidebar(props: Props) {
     <aside className="flex h-full w-72 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex flex-col gap-2 p-3">
         <div className="flex items-center justify-between gap-2">
-          <span className="px-1 text-sm font-semibold tracking-tight">yaah</span>
+          <Wordmark className="px-1 text-sm" />
           <Button variant="outline" size="sm" className="h-7 gap-2 px-2 text-muted-foreground" onClick={props.onPalette}>
             <Search /> Search
             <Kbd>{formatKeys(SHORTCUTS.palette.keys)}</Kbd>
@@ -118,50 +131,65 @@ export function Sidebar(props: Props) {
 
       <Separator />
 
-      <div className="flex items-center justify-between px-3 pt-3 pb-1">
-        <span className="px-1 text-xs font-medium text-muted-foreground">Chats</span>
-        <Hint label="New quick chat (no project)" shortcut="newChat">
-          <Button variant="ghost" size="icon-xs" onClick={props.onNewQuickChat} aria-label="New quick chat">
-            <Plus />
-          </Button>
-        </Hint>
-      </div>
-      <QuickChats chats={props.quickChats} selection={selection} onSelect={onSelect} onNew={props.onNewQuickChat} />
+      <NewMenu
+        quickChatShortcut={!props.activeProjectId}
+        onNewQuickChat={props.onNewQuickChat}
+        onNewChatInFolder={props.onNewChatInFolder}
+        onNewProject={onNewProject}
+      >
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="flex items-center justify-between px-3 pt-3 pb-1">
+            <span className="px-1 text-xs font-medium text-muted-foreground">Chats</span>
+            <Hint label="New quick chat (no project)" shortcut="newChat">
+              <Button variant="ghost" size="icon-xs" onClick={props.onNewQuickChat} aria-label="New quick chat">
+                <Plus />
+              </Button>
+            </Hint>
+          </div>
+          <QuickChats chats={props.quickChats} selection={selection} onSelect={onSelect} onNew={props.onNewQuickChat} />
 
-      <div className="flex items-center justify-between px-3 pt-3 pb-1">
-        <span className="px-1 text-xs font-medium text-muted-foreground">Projects</span>
-        <Hint label="New project" shortcut="newProject">
-          <Button variant="ghost" size="icon-xs" onClick={onNewProject} aria-label="New project">
-            <Plus />
-          </Button>
-        </Hint>
-      </div>
+          <NewMenu onNewProject={onNewProject}>
+            <div className="flex items-center justify-between px-3 pt-3 pb-1">
+              <span className="px-1 text-xs font-medium text-muted-foreground">Projects</span>
+              <Hint label="New project" shortcut="newProject">
+                <Button variant="ghost" size="icon-xs" onClick={onNewProject} aria-label="New project">
+                  <Plus />
+                </Button>
+              </Hint>
+            </div>
+          </NewMenu>
 
-      <ScrollArea className="min-h-0 flex-1">
-        <nav className="flex flex-col gap-0.5 px-2 pb-3">
-          {projects.length === 0 && (
-            <button
-              onClick={onNewProject}
-              className="rounded-md border border-dashed px-2 py-3 text-left text-xs text-muted-foreground hover:bg-sidebar-accent"
-            >
-              No projects yet. Create one to group the folders a piece of work spans.
-            </button>
-          )}
-          {projects.map((p) => (
-            <ProjectNode
-              key={p.id}
-              project={p}
-              chats={chatsByProject[p.id] ?? []}
-              selection={selection}
-              onSelect={onSelect}
-              account={account}
-              onNewChat={props.onNewChat}
-              onChange={props.onProjectChange}
-              onDelete={props.onDeleteProject}
-            />
-          ))}
-        </nav>
-      </ScrollArea>
+          {/* Radix lays the viewport's content out as a table, which grows to the longest name; block keeps names truncated. */}
+          <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
+            <nav className="flex flex-col gap-0.5 px-2 pb-3">
+              {projects.length === 0 && (
+                <button
+                  onClick={onNewProject}
+                  className="rounded-md border border-dashed px-2 py-3 text-left text-xs text-muted-foreground hover:bg-sidebar-accent"
+                >
+                  No projects yet. Create one to group the folders a piece of work spans.
+                </button>
+              )}
+              {projects.map((p) => (
+                <ProjectNode
+                  key={p.id}
+                  project={p}
+                  chats={chatsByProject[p.id] ?? []}
+                  selection={selection}
+                  onSelect={onSelect}
+                  account={account}
+                  active={p.id === props.activeProjectId}
+                  onNewChat={props.onNewChat}
+                  onChange={props.onProjectChange}
+                  onRename={props.onRenameProject}
+                  onAddRepos={props.onAddRepos}
+                  onDelete={props.onDeleteProject}
+                />
+              ))}
+            </nav>
+          </ScrollArea>
+        </div>
+      </NewMenu>
 
       <Separator />
       <div className="p-2">
@@ -192,8 +220,11 @@ function ProjectNode({
   selection,
   onSelect,
   account,
+  active,
   onNewChat,
   onChange,
+  onRename,
+  onAddRepos,
   onDelete,
 }: {
   project: Project;
@@ -201,8 +232,11 @@ function ProjectNode({
   selection: Selection;
   onSelect: (s: Selection) => void;
   account: AgentProfile | undefined;
-  onNewChat: (projectId: string) => Promise<void>;
+  active: boolean;
+  onNewChat: (projectId: string) => Promise<unknown>;
   onChange: (p: Project) => void;
+  onRename: (id: string) => void;
+  onAddRepos: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
   const [open, setOpen] = useState(true);
@@ -213,9 +247,12 @@ function ProjectNode({
       <ProjectMenu
         project={project}
         account={account}
+        active={active}
         onOpen={() => onSelect({ kind: "project", id: project.id })}
         onNewChat={onNewChat}
         onChange={onChange}
+        onRename={onRename}
+        onAddRepos={onAddRepos}
         onDelete={onDelete}
       >
         <div
@@ -265,20 +302,69 @@ function ProjectNode({
   );
 }
 
+/**
+ * New chats and projects, for the Chats header and the sidebar's empty space;
+ * only "New project…" when no chat handlers are given (the Projects header).
+ */
+function NewMenu({
+  quickChatShortcut,
+  onNewQuickChat,
+  onNewChatInFolder,
+  onNewProject,
+  children,
+}: {
+  /** ⌘N starts a quick chat (no project is open). */
+  quickChatShortcut?: boolean;
+  onNewQuickChat?: () => void;
+  onNewChatInFolder?: () => void;
+  onNewProject: () => void;
+  children: ReactElement;
+}) {
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent>
+        {onNewQuickChat && (
+          <ContextMenuItem onSelect={onNewQuickChat}>
+            <MessageSquarePlus /> New quick chat
+            {quickChatShortcut && <ContextMenuShortcut>{formatKeys(SHORTCUTS.newChat.keys)}</ContextMenuShortcut>}
+          </ContextMenuItem>
+        )}
+        {onNewChatInFolder && (
+          <ContextMenuItem onSelect={onNewChatInFolder}>
+            <FolderOpen /> New chat in a folder…
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem onSelect={onNewProject}>
+          <FolderPlus /> New project…
+          <ContextMenuShortcut>{formatKeys(SHORTCUTS.newProject.keys)}</ContextMenuShortcut>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
 function ProjectMenu({
   project,
   account,
+  active,
   onOpen,
   onNewChat,
   onChange,
+  onRename,
+  onAddRepos,
   onDelete,
   children,
 }: {
   project: Project;
   account: AgentProfile | undefined;
+  /** ⌘N starts a chat in this project. */
+  active: boolean;
   onOpen: () => void;
-  onNewChat: (projectId: string) => Promise<void>;
+  onNewChat: (projectId: string) => Promise<unknown>;
   onChange: (p: Project) => void;
+  onRename: (id: string) => void;
+  onAddRepos: (id: string) => void;
   onDelete: (id: string) => void;
   children: ReactElement;
 }) {
@@ -296,8 +382,15 @@ function ProjectMenu({
           }}
         >
           <MessageSquarePlus /> New chat as {account?.label ?? "…"}
+          {active && <ContextMenuShortcut>{formatKeys(SHORTCUTS.newChat.keys)}</ContextMenuShortcut>}
         </ContextMenuItem>
         <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => onRename(project.id)}>
+          <Pencil /> Rename…
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onAddRepos(project.id)}>
+          <FolderGit2 /> Add repos…
+        </ContextMenuItem>
         <ContextMenuSub>
           <ContextMenuSubTrigger>
             <CircleDot /> Status
@@ -317,6 +410,7 @@ function ProjectMenu({
             </ContextMenuRadioGroup>
           </ContextMenuSubContent>
         </ContextMenuSub>
+        <ContextMenuSeparator />
         <CopyMenuItem text={project.contextDir}>
           <Copy /> Copy brief folder path
         </CopyMenuItem>
@@ -329,21 +423,36 @@ function ProjectMenu({
   );
 }
 
+export type NewProjectMode = "name" | "issue";
+
+/** A new project: named, with repos, or started from a tracker item ("From an issue"). */
 export function NewProjectDialog({
   open: isOpen,
+  mode: openMode = "name",
   onClose,
   onCreate,
+  ...picker
 }: {
   open: boolean;
+  /** The mode it opens on. */
+  mode?: NewProjectMode;
   onClose: () => void;
   onCreate: (name: string, dirs: string[]) => Promise<void>;
-}) {
+} & Omit<WorkItemPickerProps, "onDone">) {
+  const [mode, setMode] = useState<NewProjectMode>(openMode);
   const [name, setName] = useState("");
   const [dirs, setDirs] = useState<string[]>([]);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
   const [picking, setPicking] = useState(false);
+
+  // Each time it opens: on the mode it was opened with.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (isOpen !== wasOpen) {
+    setWasOpen(isOpen);
+    if (isOpen) setMode(openMode);
+  }
 
   function reset() {
     setName("");
@@ -367,69 +476,85 @@ export function NewProjectDialog({
 
   return (
     <Dialog open={isOpen} onOpenChange={(o) => !o && (reset(), onClose())}>
-      <DialogContent className="sm:max-w-md">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void create();
-          }}
-          className="flex flex-col gap-4"
-        >
-          <DialogHeader>
-            <DialogTitle>New project</DialogTitle>
-            <DialogDescription>
-              A project groups the repos one piece of work spans. Chats run in the first repo and can work across the others.
-            </DialogDescription>
-          </DialogHeader>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>New project</DialogTitle>
+          <DialogDescription>
+            {mode === "name"
+              ? "A project groups the repos one piece of work spans. Chats run in the first repo and can work across the others."
+              : "Start from an issue or a Linear project. The project follows it, its brief carries it, and a chat opens with the prompt drafted for you to send."}
+          </DialogDescription>
+        </DialogHeader>
+        <Tabs value={mode} onValueChange={(v) => setMode(v as NewProjectMode)} className="min-w-0 gap-4">
+          <TabsList variant="line" aria-label="Start the project" className="-mt-1">
+            <TabsTrigger value="name" className="flex-none px-2">
+              <FolderPlus /> Name and repos
+            </TabsTrigger>
+            <TabsTrigger value="issue" className="flex-none px-2">
+              <CircleDot /> From an issue
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="name">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void create();
+              }}
+              className="flex flex-col gap-4"
+            >
+              <Input
+                autoFocus
+                aria-label="Project name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={dirs[0] ? `Name (defaults to “${baseName(dirs[0])}”)` : "Name"}
+              />
 
-          <Input
-            autoFocus
-            aria-label="Project name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder={dirs[0] ? `Name (defaults to “${baseName(dirs[0])}”)` : "Name"}
-          />
-
-          <div className="flex flex-col gap-1.5">
-            {dirs.map((d, i) => (
-              <div key={d} className="flex items-center gap-2 rounded-md border px-2 py-1 text-sm">
-                <span className="min-w-0 flex-1 truncate" title={d}>
-                  {baseName(d)} <span className="font-mono text-xs text-muted-foreground">{compactPath(d)}</span>
-                </span>
-                {i === 0 && <Badge variant="secondary">working folder</Badge>}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => setDirs(dirs.filter((x) => x !== d))}
-                  title="Remove"
-                  aria-label={`Remove ${baseName(d)}`}
-                >
-                  <X />
+              <div className="flex flex-col gap-1.5">
+                {dirs.map((d, i) => (
+                  <div key={d} className="flex items-center gap-2 rounded-md border px-2 py-1 text-sm">
+                    <span className="min-w-0 flex-1 truncate" title={d}>
+                      {baseName(d)} <span className="font-mono text-xs text-muted-foreground">{compactPath(d)}</span>
+                    </span>
+                    {i === 0 && <Badge variant="secondary">working folder</Badge>}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => setDirs(dirs.filter((x) => x !== d))}
+                      title="Remove"
+                      aria-label={`Remove ${baseName(d)}`}
+                    >
+                      <X />
+                    </Button>
+                  </div>
+                ))}
+                <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setPicking(true)}>
+                  <FolderGit2 /> Add repos
                 </Button>
               </div>
-            ))}
-            <Button type="button" variant="outline" size="sm" className="self-start" onClick={() => setPicking(true)}>
-              <FolderGit2 /> Add repos
-            </Button>
-          </div>
-          <RepoPicker
-            open={picking}
-            onClose={() => setPicking(false)}
-            exclude={dirs}
-            onAdd={(picked) => setDirs((prev) => [...prev, ...picked.filter((d) => !prev.includes(d))])}
-          />
+              <RepoPicker
+                open={picking}
+                onClose={() => setPicking(false)}
+                exclude={dirs}
+                onAdd={(picked) => setDirs((prev) => [...prev, ...picked.filter((d) => !prev.includes(d))])}
+              />
 
-          <ErrorText error={error} className="text-sm whitespace-pre-wrap" />
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => (reset(), onClose())}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={busy || (!name.trim() && dirs.length === 0)}>
-              Create project
-            </Button>
-          </DialogFooter>
-        </form>
+              <ErrorText error={error} className="text-sm whitespace-pre-wrap" />
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => (reset(), onClose())}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={busy || (!name.trim() && dirs.length === 0)}>
+                  Create project
+                </Button>
+              </DialogFooter>
+            </form>
+          </TabsContent>
+          <TabsContent value="issue" className="min-w-0">
+            <WorkItemPicker {...picker} onDone={() => (reset(), onClose())} />
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

@@ -1,0 +1,207 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "linear-project",
+  "description": "A Linear project, live from the user's Linear connection: name, status, lead, teams, progress and target date, its write-up, and its issues with their state and assignee. Refreshes every minute. Use when planning or reporting on a project, or on a yaah project started from one.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string",
+        "description": "The project's slug id (the hex end of its URL, e.g. \"3f9a1c2b7d4e\") or its UUID."
+      }
+    },
+    "required": [
+      "id"
+    ]
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "linear.project",
+        "id": "{{id}}"
+      },
+      "every": 60000,
+      "as": "project"
+    },
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "{{project.name}}",
+          "description": "{{project.issuesDone}} of {{project.issueCount}} issues done"
+        },
+        "children": [
+          {
+            "type": "stack",
+            "props": {
+              "direction": "row",
+              "gap": "sm",
+              "align": "center",
+              "wrap": true
+            },
+            "children": [
+              {
+                "type": "badge",
+                "props": {
+                  "text": "{{project.state}}",
+                  "variant": "default"
+                }
+              },
+              {
+                "each": "project.teams",
+                "as": "team",
+                "children": [
+                  {
+                    "type": "badge",
+                    "props": {
+                      "text": "{{team}}",
+                      "variant": "outline"
+                    }
+                  }
+                ]
+              },
+              {
+                "if": "project.lead",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "Lead: {{project.lead}}",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "if": "project.targetDate",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "· target {{project.targetDate}}",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "link",
+                "props": {
+                  "text": "Open in Linear",
+                  "href": "{{project.url}}"
+                }
+              }
+            ]
+          },
+          {
+            "type": "progress",
+            "props": {
+              "value": "{{project.progressPct}}",
+              "max": 100,
+              "label": "Progress · {{project.progressPct}}%"
+            }
+          },
+          {
+            "if": "project.description",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "About"
+                },
+                "children": [
+                  {
+                    "type": "markdown",
+                    "props": {
+                      "text": "{{project.description}}"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "if": "project.issues",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "Issues ({{project.issueCount}})",
+                  "open": true
+                },
+                "children": [
+                  {
+                    "each": "project.issues",
+                    "as": "i",
+                    "key": "id",
+                    "children": [
+                      {
+                        "type": "stack",
+                        "props": {
+                          "direction": "row",
+                          "gap": "sm",
+                          "align": "center",
+                          "wrap": true
+                        },
+                        "children": [
+                          {
+                            "type": "text",
+                            "props": {
+                              "text": "{{i.id}}",
+                              "size": "sm",
+                              "mono": true
+                            }
+                          },
+                          {
+                            "type": "text",
+                            "props": {
+                              "text": "{{i.title}}",
+                              "size": "sm"
+                            }
+                          },
+                          {
+                            "type": "text",
+                            "props": {
+                              "text": "· {{i.state}}",
+                              "tone": "muted",
+                              "size": "sm"
+                            }
+                          },
+                          {
+                            "if": "i.assignee",
+                            "children": [
+                              {
+                                "type": "text",
+                                "props": {
+                                  "text": "· {{i.assignee}}",
+                                  "tone": "muted",
+                                  "size": "sm"
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "A project",
+      "props": {
+        "id": "3f9a1c2b7d4e"
+      }
+    }
+  ]
+}

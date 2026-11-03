@@ -1,10 +1,11 @@
 // Live sources (sources.rs) and database connections. Sources replay samples
 // recorded from the real readers, with a little movement so live views visibly
-// update; Linear's are made up (no account is connected in the mock).
+// update; Linear's are made up, and the tracker items' come from work-items.ts.
 import type { ConnectionInfo } from "@/lib/api";
 import { asArray, asNumber, asObj, asString, type Obj } from "@/lib/narrow";
 import type { Mock, Replies } from "./context";
 import { sourceSamples } from "./fixtures";
+import { workItemSource } from "./work-items";
 
 export function seedSources() {
   return {
@@ -107,6 +108,8 @@ const linearSamples: Obj = {
 export function sourceReplies({ state }: Mock): Replies {
   function read(source: Obj): unknown {
     const kind = asString(source.kind) ?? "";
+    const item = workItemSource(state, kind, source);
+    if (item !== undefined) return item;
     if (kind in linearSamples) return linearSamples[kind];
     if (kind === "system") {
       state.cpu = wobble(state.cpu, 14, 6, 85);

@@ -5,6 +5,7 @@
 //! in `session/new`; the unguessable token both routes renders to the right
 //! chat and keeps other local processes out.
 
+use crate::agent_guide;
 use crate::session::{Entry, FormRef, Hub};
 use crate::ui_library::{Library, Prepared, SaveRequest};
 use serde_json::{Value, json};
@@ -21,9 +22,15 @@ pub const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_hours(1);
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 const INSTRUCTIONS: &str = "\
-yaah renders UI inline in the chat. Use it when something is easier to scan than to read: \
-status overviews, tables, comparisons, metrics, diffs, progress, or a few choices for the user \
-(a button's `prompt` comes back to you as their next message). Keep prose short when UI carries the content.
+You are running inside yaah, a desktop app that renders UI inline in this chat. Whenever you would show, \
+compare, review, present, play, chart, tabulate, ask for structured input or build something interactive, \
+answer with UI through these tools rather than prose, terminal output or files. Never run `open` and never \
+write a standalone HTML file just to show the user something: render it here. A local HTML page you built \
+goes in the `browser` primitive (its absolute path), a screenshot in `image`. If these tools are deferred or \
+loaded on demand, load them first (with ToolSearch, search for \"yaah-ui\"). Keep prose short when UI carries the content.
+
+The full how-to (patterns, forms, live data, fixing errors, saving components) is the ui_guide tool, \
+also served as the resources yaah://skills/yaah-ui and yaah://skills/yaah-components and as prompts of the same names.
 
 1. Call ui_catalog first: it lists the primitives, the binding syntax and every library component.
 2. Prefer an existing component; render it with ui_render { component, props }. Components with \
@@ -33,12 +40,15 @@ wc (word-count), git log --graph (git-graph), git status (git-status), --stat (d
 system, Docker and database views. After running one of those commands, pass its output to the \
 component as printed instead of restating it in prose. To show the user where something is \
 (a file in a tree, a line in a file, a field in JSON, rows in a table, a test), fill the view's `find`; \
-re-render with the same id and a new `find` to point somewhere else. They are read-only: compose them, don't copy them.
+re-render with the same id and a new `find` to point somewhere else. They are read-only: compose them, don't copy them. \
+Components from component libraries the user installed have qualified names, `library/name` (their `source` is the library), \
+and are used the same way; they are read-only too.
 3. If none fits and the shape will come up again, build one with ui_save_component, composing \
 primitives and existing components. Give it a precise description (what it shows, when to use it), \
-a props schema and at least one example. The library is shared by every chat, so improve an existing \
-component (ui_get_component, then save with expectedVersion) instead of making a near-duplicate.
-4. For a one-off, pass an ad-hoc `tree` to ui_render instead of saving a component.
+a props schema and at least one example. It goes into the user's own collection (unqualified names only), shared by every chat, \
+so improve an existing component there (ui_get_component, then save with expectedVersion) instead of making a near-duplicate.
+4. For a one-off, pass an ad-hoc `tree` to ui_render instead of saving a component. Give it an `id` to update it \
+in place later (progress, status panels): rendering again with the same id replaces it.
 5. To get information from the user (preferences, choices, priorities, numbers, short text), ask with \
 ui_ask and a `form` of inputs rather than in prose: it waits for their answer and returns it to you as JSON, \
 so you can carry on in the same turn. Offer options you can act on, sensible defaults, and a free-text \
@@ -57,7 +67,8 @@ Validation errors say exactly what to fix; fix and call again.";
 /// show UI in this chat or read and grow the component library. `source_read`
 /// isn't one: it reads the user's databases, Docker logs and integrations, so
 /// the user approves it like any other tool.
-const NO_PROMPT_TOOLS: &[&str] = &["ui_catalog", "ui_get_component", "ui_render", "ui_ask", "ui_get_values", "ui_set_values", "ui_save_component"];
+const NO_PROMPT_TOOLS: &[&str] =
+    &["ui_catalog", "ui_guide", "ui_get_component", "ui_render", "ui_ask", "ui_get_values", "ui_set_values", "ui_save_component"];
 
 /// Claude Code's `allowedTools` for this server: each tool by its full name,
 /// never the whole server (`mcp__yaah-ui`), so a tool added later asks first.
@@ -228,7 +239,7 @@ fn dispatch(host: &UiHost, session_id: Option<&str>, msg: &Value) -> Option<Valu
             let version = PROTOCOL_VERSIONS.iter().find(|v| **v == asked).unwrap_or(&PROTOCOL_VERSIONS[0]);
             Ok(json!({
                 "protocolVersion": version,
-                "capabilities": { "tools": {} },
+                "capabilities": { "tools": {}, "resources": {}, "prompts": {} },
                 "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") },
                 "instructions": INSTRUCTIONS,
             }))
@@ -236,11 +247,58 @@ fn dispatch(host: &UiHost, session_id: Option<&str>, msg: &Value) -> Option<Valu
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools() })),
         "tools/call" => Ok(call_tool(host, session_id, params["name"].as_str().unwrap_or_default(), &params["arguments"])),
+        // yaah's skills (agent_guide.rs) for clients that read resources or prompts.
+        "resources/list" => Ok(json!({ "resources": skill_resources() })),
+        "resources/templates/list" => Ok(json!({ "resourceTemplates": [] })),
+        "resources/read" => {
+            let uri = params["uri"].as_str().unwrap_or_default();
+            match uri.strip_prefix(SKILL_URI).and_then(agent_guide::skill) {
+                Some(skill) => Ok(json!({ "contents": [{
+                    "uri": uri, "mimeType": "text/markdown", "text": agent_guide::skill_text(skill, &agent_guide::component_names(&host.library)),
+                }] })),
+                None => Err((-32002, format!("resource not found: {uri}"))),
+            }
+        }
+        "prompts/list" => Ok(
+            json!({ "prompts": agent_guide::SKILLS.iter().map(|s| json!({ "name": s.name, "description": agent_guide::skill_description(s) })).collect::<Vec<_>>() }),
+        ),
+        "prompts/get" => {
+            let name = params["name"].as_str().unwrap_or_default();
+            match agent_guide::skill(name) {
+                Some(skill) => Ok(json!({
+                    "description": agent_guide::skill_description(skill),
+                    "messages": [{ "role": "user", "content": { "type": "text", "text": agent_guide::skill_text(skill, &agent_guide::component_names(&host.library)) } }],
+                })),
+                None => Err((-32602, format!("no prompt named {name}"))),
+            }
+        }
         _ => Err((-32601, format!("method not found: {method}"))),
     };
     Some(match result {
         Ok(r) => json!({ "jsonrpc": "2.0", "id": id, "result": r }),
         Err((code, m)) => rpc_error(&id, code, &m),
+    })
+}
+
+/// Where yaah's skills are served as MCP resources: `yaah://skills/<name>`.
+const SKILL_URI: &str = "yaah://skills/";
+
+fn skill_resources() -> Vec<Value> {
+    agent_guide::SKILLS
+        .iter()
+        .map(|s| json!({ "uri": format!("{SKILL_URI}{}", s.name), "name": s.name, "description": agent_guide::skill_description(s), "mimeType": "text/markdown" }))
+        .collect()
+}
+
+/// `ui_guide`: one of yaah's skills, or the short guide, with the components available now.
+fn guide_topic(lib: &Library, topic: &str) -> Result<String, Vec<String>> {
+    let names = agent_guide::component_names(lib);
+    if topic == "guide" {
+        return Ok(agent_guide::guide_text(&names));
+    }
+    agent_guide::skill(topic).map(|s| agent_guide::skill_text(s, &names)).ok_or_else(|| {
+        let topics = agent_guide::SKILLS.iter().map(|s| s.topic).collect::<Vec<_>>().join(", ");
+        vec![format!("no topic `{topic}`; topics are {topics}, and guide (the short version)")]
     })
 }
 
@@ -295,6 +353,7 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
             // Enough to design UI from; the live UI reads the full data itself.
             .map(|v| clip(v.to_string(), MAX_SOURCE_TEXT))
             .map_err(|e| vec![e]),
+        "ui_guide" => guide_topic(lib, args["topic"].as_str().unwrap_or("ui")),
         "ui_get_component" => match lib.get(args["name"].as_str().unwrap_or_default()) {
             Ok(Some(c)) => Ok(serde_json::to_string(&c).unwrap_or_default()),
             Ok(None) => Err(vec![format!("no component named `{}`; call ui_catalog", args["name"])]),
@@ -357,6 +416,10 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
                         let title = format!("{} v{} · {}", c.name, c.version, ex.title);
                         host.hub.push_ui(session_id, ui_entry(p, None, None, Some(title)));
                     }
+                    // The skills agents get list the components available.
+                    if let Some(guide) = host.hub.guide() {
+                        guide.sync_in_background();
+                    }
                     format!(
                         "Saved `{}` v{} to the library{}.",
                         c.name,
@@ -386,6 +449,12 @@ fn tools() -> Value {
             "annotations": { "readOnlyHint": true }
         },
         {
+            "name": "ui_guide",
+            "description": "How to build UI in yaah: when to use it, the patterns (update in place by id, forms that wait for the user, filling a form in together, pointing with find, live data), fixing validation errors, and an index of every primitive and component. Read it before your first render if you haven't used yaah's UI in this chat. topic: `ui` (default), `components` (saving reusable components: props schema, examples, versions, libraries) or `guide` (the short version).",
+            "inputSchema": { "type": "object", "properties": { "topic": { "type": "string", "enum": ["ui", "components", "guide"] } } },
+            "annotations": { "readOnlyHint": true }
+        },
+        {
             "name": "ui_get_component",
             "description": "Get one library component in full: its tree, props schema, examples and version. Read it before improving it.",
             "inputSchema": { "type": "object", "properties": { "name": { "type": "string" } }, "required": ["name"] },
@@ -397,7 +466,7 @@ fn tools() -> Value {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "component": { "type": "string", "description": "Library component name." },
+                    "component": { "type": "string", "description": "Component name (`library/name` for an installed library's)." },
                     "props": { "type": "object", "description": "Props for the component (checked against its schema)." },
                     "tree": { "type": "object", "description": "Ad-hoc node tree, for one-offs. See ui_catalog for the syntax." },
                     "title": { "type": "string", "description": "Optional caption shown above the UI." },
@@ -451,7 +520,7 @@ fn tools() -> Value {
         },
         {
             "name": "ui_save_component",
-            "description": "Create a library component, or improve one (pass expectedVersion = the version you read). Saved components are shared by every chat. By default renders its first example as a preview.",
+            "description": "Create a component in the user's own collection, or improve one there (pass expectedVersion = the version you read). Names are unqualified: installed libraries' `library/name` components are read-only. Saved components are shared by every chat. By default renders its first example as a preview.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -716,9 +785,9 @@ mod tests {
         assert_eq!(init["result"]["protocolVersion"], PROTOCOL_VERSIONS[0], "an unknown version gets the newest");
         let (_, list) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
         let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-        assert_eq!(names.len(), 8);
-        assert!(names.contains(&"ui_ask") && names.contains(&"source_read"));
-        let (_, nope) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }));
+        assert_eq!(names.len(), 9);
+        assert!(names.contains(&"ui_ask") && names.contains(&"source_read") && names.contains(&"ui_guide"));
+        let (_, nope) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 3, "method": "sampling/createMessage" }));
         assert_eq!(nope["error"]["code"], -32601);
         let (status, _) = rpc(port, &json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }));
         assert_eq!(status, 202, "a notification gets no reply");
@@ -728,6 +797,45 @@ mod tests {
         );
         assert_eq!(batch.as_array().map(Vec::len), Some(2));
         assert_eq!(call(port, "ui_nope", &json!({})), ("Fix these and call again:\n- unknown tool ui_nope".into(), true));
+    }
+
+    /// The route every agent gets: the server's instructions point at the skills,
+    /// served as a tool, as resources and as prompts.
+    #[test]
+    fn serves_yaahs_skills_to_every_agent() {
+        let (_, _, port) = serve_chat(&temp_dir("cwd"));
+        let (_, init) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } }));
+        let instructions = init["result"]["instructions"].as_str().unwrap();
+        for must in ["running inside yaah", "Never run `open`", "standalone HTML", "`browser`", "ToolSearch", "ui_guide", "yaah://skills/yaah-ui"] {
+            assert!(instructions.contains(must), "the instructions say {must}");
+        }
+        assert_eq!(init["result"]["capabilities"], json!({ "tools": {}, "resources": {}, "prompts": {} }));
+
+        let (text, err) = call(port, "ui_guide", &json!({}));
+        assert!(!err && text.starts_with("---\nname: yaah-ui\n"), "{text}");
+        assert!(text.contains("test-report"), "the index lists the components available");
+        let (text, _) = call(port, "ui_guide", &json!({ "topic": "components" }));
+        assert!(text.contains("name: yaah-components") && text.contains("expectedVersion"));
+        assert!(call(port, "ui_guide", &json!({ "topic": "guide" })).0.starts_with("# You are running inside yaah"));
+        let (text, err) = call(port, "ui_guide", &json!({ "topic": "nope" }));
+        assert!(err && text.contains("topics are ui, components"), "{text}");
+
+        let (_, list) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 2, "method": "resources/list" }));
+        let uris: Vec<&str> = list["result"]["resources"].as_array().unwrap().iter().filter_map(|r| r["uri"].as_str()).collect();
+        assert_eq!(uris, ["yaah://skills/yaah-ui", "yaah://skills/yaah-components"]);
+        let (_, read) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/read", "params": { "uri": "yaah://skills/yaah-ui" } }));
+        let content = &read["result"]["contents"][0];
+        assert_eq!((content["uri"].as_str(), content["mimeType"].as_str()), (Some("yaah://skills/yaah-ui"), Some("text/markdown")));
+        assert!(content["text"].as_str().unwrap().contains("## Primitives"));
+        let (_, missing) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 4, "method": "resources/read", "params": { "uri": "file:///etc/passwd" } }));
+        assert_eq!(missing["error"]["code"], -32002);
+
+        let (_, prompts) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 5, "method": "prompts/list" }));
+        assert_eq!(prompts["result"]["prompts"][1]["name"], "yaah-components");
+        let (_, got) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 6, "method": "prompts/get", "params": { "name": "yaah-ui" } }));
+        assert!(got["result"]["messages"][0]["content"]["text"].as_str().unwrap().contains("name: yaah-ui"));
+        let (_, missing) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 7, "method": "prompts/get", "params": { "name": "x" } }));
+        assert_eq!(missing["error"]["code"], -32602);
     }
 
     #[test]
@@ -819,6 +927,8 @@ mod tests {
         assert!(!err && text.contains("Saved `env-badge` v1") && text.contains("preview"), "{text}");
         assert_eq!(entries(&hub)[0]["title"], "env-badge v1 · prod");
         assert!(call(port, "ui_save_component", &json!({ "name": 3 })).0.contains("arguments:"));
+        let (text, err) = call(port, "ui_save_component", &json!({ "name": "acme/env-badge", "description": "x", "tree": "x" }));
+        assert!(err && text.contains("Copy it to the collection first"), "{text}");
 
         let (text, err) = call(port, "source_read", &json!({ "source": { "kind": "system" } }));
         assert!(!err && text.contains("memTotalGb"), "{text}");

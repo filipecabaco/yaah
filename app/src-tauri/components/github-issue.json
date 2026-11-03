@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "github-issue",
+  "description": "A GitHub issue, live through the user's GitHub connection (Settings → Integrations; public repos work without one): number and title, open/closed (or not planned), labels, assignee, milestone, the description and the latest comments. Refreshes every minute. Use when talking about an issue instead of pasting it, or on a project started from one.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "repo": {
+        "type": "string",
+        "description": "\"owner/name\"."
+      },
+      "number": {
+        "type": "number",
+        "description": "The issue number."
+      }
+    },
+    "required": [
+      "repo",
+      "number"
+    ]
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "github.issue",
+        "repo": "{{repo}}",
+        "number": "{{number}}"
+      },
+      "every": 60000,
+      "as": "issue"
+    },
+    "children": [
+      {
+        "type": "card",
+        "props": {
+          "title": "#{{issue.number}} {{issue.title}}",
+          "description": "{{issue.repo}} · opened by {{issue.author}}"
+        },
+        "children": [
+          {
+            "type": "stack",
+            "props": {
+              "direction": "row",
+              "gap": "sm",
+              "align": "center",
+              "wrap": true
+            },
+            "children": [
+              {
+                "type": "badge",
+                "props": {
+                  "text": "{{issue.stateLabel}}",
+                  "variant": "default"
+                }
+              },
+              {
+                "each": "issue.labels",
+                "as": "label",
+                "children": [
+                  {
+                    "type": "badge",
+                    "props": {
+                      "text": "{{label}}",
+                      "variant": "outline"
+                    }
+                  }
+                ]
+              },
+              {
+                "if": "issue.assignee",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "{{issue.assignee}}",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "if": "issue.milestone",
+                "children": [
+                  {
+                    "type": "text",
+                    "props": {
+                      "text": "· {{issue.milestone}}",
+                      "tone": "muted",
+                      "size": "sm"
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "text",
+                "props": {
+                  "text": "· {{issue.commentCount}} comments",
+                  "tone": "muted",
+                  "size": "sm"
+                }
+              },
+              {
+                "type": "link",
+                "props": {
+                  "text": "Open on GitHub",
+                  "href": "{{issue.url}}"
+                }
+              }
+            ]
+          },
+          {
+            "if": "issue.body",
+            "children": [
+              {
+                "type": "markdown",
+                "props": {
+                  "text": "{{issue.body}}"
+                }
+              }
+            ]
+          },
+          {
+            "if": "issue.comments",
+            "children": [
+              {
+                "type": "collapsible",
+                "props": {
+                  "title": "Latest comments ({{issue.comments.length}} of {{issue.commentCount}})",
+                  "open": true
+                },
+                "children": [
+                  {
+                    "each": "issue.comments",
+                    "as": "c",
+                    "children": [
+                      {
+                        "type": "text",
+                        "props": {
+                          "text": "{{c.author}} · {{c.at}}",
+                          "size": "sm",
+                          "weight": "medium"
+                        }
+                      },
+                      {
+                        "type": "markdown",
+                        "props": {
+                          "text": "{{c.body}}"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "An issue",
+      "props": {
+        "repo": "supabase/realtime",
+        "number": 1024
+      }
+    }
+  ]
+}

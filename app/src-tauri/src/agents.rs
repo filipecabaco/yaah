@@ -730,6 +730,9 @@ pub struct Report {
     pub image: bool,
     pub audio: bool,
     pub additional_dirs: bool,
+    /// Takes a client `systemPrompt` (append) on `session/new` and `session/load`.
+    #[serde(default)]
+    pub system_prompt: bool,
     /// Unix seconds.
     pub checked_at: u64,
 }
@@ -754,6 +757,7 @@ impl Report {
             image: flag("/promptCapabilities/image"),
             audio: flag("/promptCapabilities/audio"),
             additional_dirs: caps.pointer("/sessionCapabilities/additionalDirectories").is_some_and(|v| !v.is_null()),
+            system_prompt: caps.pointer("/sessionCapabilities/systemPrompt").is_some_and(|v| !v.is_null()),
             checked_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
         }
     }

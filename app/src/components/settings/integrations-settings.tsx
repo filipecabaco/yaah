@@ -1,11 +1,11 @@
 // Settings → Integrations: the services and databases yaah reads for the user,
 // which agents then use through live views (pr-view, linear-board, db-query…).
-// Connecting: OAuth with no client secret (GitHub's device
-// code, Linear's browser sign-in), or a personal API key. Rust holds every token;
+// Connecting: OAuth with no client secret (GitHub's device code, Linear's and
+// GitLab's browser sign-in), or a personal API key. GitLab can be self-managed. Rust holds every token;
 // this screen only ever sees who is connected.
 import { useEffect, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { Check, Copy, Database, ExternalLink, GitPullRequest, KeyRound, Loader2, Plus, SquareKanban, Trash2 } from "lucide-react";
+import { Check, Copy, Database, ExternalLink, GitMerge, GitPullRequest, KeyRound, Loader2, Plus, SquareKanban, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +21,11 @@ import { cn } from "@/lib/utils";
 const ICON: Record<string, ReactNode> = {
   github: <GitPullRequest className="size-3.5 text-muted-foreground" />,
   linear: <SquareKanban className="size-3.5 text-muted-foreground" />,
+  gitlab: <GitMerge className="size-3.5 text-muted-foreground" />,
 };
+
+const GITLAB_COM = "https://gitlab.com";
+const KEY_PLACEHOLDER: Record<string, string> = { github: "ghp_…", linear: "lin_api_…", gitlab: "glpat-…" };
 
 const VIA: Record<string, string> = { oauth: "OAuth", key: "API key", env: "environment variable" };
 
@@ -99,6 +103,12 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
   const [error, setError] = useState<unknown>(null);
   const [key, setKey] = useState("");
   const [copied, setCopied] = useState(false);
+  // GitLab: a self-managed instance's address; empty is gitlab.com.
+  const isGitLab = s.id === "gitlab";
+  const [instance, setInstance] = useState(s.baseUrl && s.baseUrl !== GITLAB_COM ? s.baseUrl : "");
+  const base = isGitLab ? instance.trim().replace(/\/+$/, "") : "";
+  // Where to make a key: on the instance itself for a self-managed GitLab.
+  const keyUrl = base ? s.keyUrl.replace(GITLAB_COM, base) : s.keyUrl;
 
   // The background sign-in finished (or failed): stop waiting.
   const [seen, setSeen] = useState(last);
@@ -130,7 +140,7 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
 
   const connect = () =>
     run("connect", async () => {
-      const started = await api.integrationConnect(s.id);
+      const started = await api.integrationConnect(s.id, base || undefined);
       setStart(started);
       setBusy("waiting");
       // One click: the browser opens on the approval page (GitHub's code already on the clipboard).
@@ -141,7 +151,7 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
       }
     });
 
-  const saveKey = () => run("key", () => api.integrationSetKey(s.id, key).then(() => setKey("")));
+  const saveKey = () => run("key", () => api.integrationSetKey(s.id, key, base || undefined).then(() => setKey("")));
 
   const canDisconnect = s.connected && (s.via === "oauth" || s.via === "key");
   return (
@@ -166,12 +176,34 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
         <p className="text-sm text-muted-foreground">{s.about}</p>
         {s.connected && s.via && (
           <p className="text-xs text-muted-foreground">
-            Through {VIA[s.via]}.{s.via === "env" && ` Set by ${s.keyEnv}.`}
+            Through {VIA[s.via]}
+            {isGitLab && s.baseUrl && ` on ${hostOf(s.baseUrl)}`}.{s.via === "env" && ` Set by ${s.keyEnv}.`}
           </p>
         )}
       </PanelHeader>
 
       {s.id === "github" && <GitHubAccessNote />}
+
+      {isGitLab && (
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="gitlab-instance">
+            Instance <span className="font-normal text-muted-foreground">(optional)</span>
+          </Label>
+          <Input
+            id="gitlab-instance"
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            value={instance}
+            placeholder={GITLAB_COM}
+            onChange={(e) => setInstance(e.target.value)}
+            className="sm:max-w-sm"
+          />
+          <p className="text-xs text-muted-foreground">
+            Leave it empty for gitlab.com. For a self-managed GitLab, its address, such as https://gitlab.example.com.
+          </p>
+        </div>
+      )}
 
       {start?.flow === "device" && (
         <section className="flex flex-col gap-2 rounded-lg border p-4">
@@ -203,7 +235,25 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
         </section>
       )}
 
-      {!start && (
+      {!start && s.flow === "key" && (
+        <section className="flex flex-wrap items-center gap-2">
+          <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+            There's no {s.label} app to sign in with in this build, so connect with a personal access token below.
+          </p>
+          {canDisconnect && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="ml-auto text-destructive"
+              disabled={!!busy}
+              onClick={() => void run("disconnect", () => api.integrationDisconnect(s.id))}
+            >
+              <Trash2 /> Disconnect
+            </Button>
+          )}
+        </section>
+      )}
+      {!start && s.flow !== "key" && (
         <section className="flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" onClick={() => void connect()} disabled={!!busy}>
@@ -239,7 +289,8 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
         }}
       >
         <Label htmlFor={`key-${s.id}`} className="gap-1.5">
-          <KeyRound className="size-3.5" /> Or use a personal API key
+          <KeyRound className="size-3.5" />{" "}
+          {s.flow === "key" ? (isGitLab ? "Personal access token" : "Personal API key") : "Or use a personal API key"}
         </Label>
         <div className="flex gap-2">
           <Input
@@ -247,7 +298,7 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
             type="password"
             autoComplete="off"
             value={key}
-            placeholder={s.id === "linear" ? "lin_api_…" : "ghp_…"}
+            placeholder={KEY_PLACEHOLDER[s.id] ?? ""}
             onChange={(e) => setKey(e.target.value)}
           />
           <Button type="submit" size="sm" variant="outline" disabled={!key || !!busy}>
@@ -257,9 +308,15 @@ function ServicePanel({ s, last, onChanged }: { s: IntegrationStatus; last?: Out
         </div>
         <p className="text-xs text-muted-foreground">
           Make one at{" "}
-          <button type="button" className="underline underline-offset-2" onClick={() => openExternal(s.keyUrl)}>
-            {s.keyUrl.replace(/^https:\/\//, "")}
+          <button type="button" className="underline underline-offset-2" onClick={() => openExternal(keyUrl)}>
+            {isGitLab ? `${hostOf(keyUrl)} → Access tokens` : keyUrl.replace(/^https:\/\//, "")}
           </button>
+          {isGitLab && (
+            <>
+              {" "}
+              with the <code className="font-mono text-foreground">read_api</code> scope
+            </>
+          )}
           . It's checked before saving and kept on this machine only. {s.keyEnv} works too.
         </p>
       </form>

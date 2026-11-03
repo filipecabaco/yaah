@@ -1,5 +1,5 @@
 // App-wide requests that cross the component tree without props: a card deep
-// in a chat asking the app to open Settings on a tab.
+// in a chat asking the app to open Settings on a tab, or a component in the library.
 const OPEN_SETTINGS = "yaah:open-settings";
 
 /** Ask the app to open Settings on a tab (App listens). */
@@ -11,4 +11,17 @@ export function onOpenSettings(cb: (tab: string) => void): () => void {
   const listener = (e: Event) => cb((e as CustomEvent<string>).detail);
   window.addEventListener(OPEN_SETTINGS, listener);
   return () => window.removeEventListener(OPEN_SETTINGS, listener);
+}
+
+const OPEN_COMPONENT = "yaah:open-component";
+
+/** Ask the app to show a component on the Component library page (App listens). */
+export function openComponent(name: string) {
+  window.dispatchEvent(new CustomEvent<string>(OPEN_COMPONENT, { detail: name }));
+}
+
+export function onOpenComponent(cb: (name: string) => void): () => void {
+  const listener = (e: Event) => cb((e as CustomEvent<string>).detail);
+  window.addEventListener(OPEN_COMPONENT, listener);
+  return () => window.removeEventListener(OPEN_COMPONENT, listener);
 }

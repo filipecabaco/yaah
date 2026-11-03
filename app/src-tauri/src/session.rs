@@ -9,6 +9,7 @@
 //! that asked.
 
 use crate::acp::{self, Connection, Incoming, Responder};
+use crate::agent_guide::{self, Guide};
 use crate::agents::{self, Profile, Report, Store};
 use crate::projects::Project;
 use crate::ui_mcp;
@@ -177,6 +178,8 @@ struct Agent {
     caps: Report,
     /// Claude Code reads `_meta.claudeCode` options in `session/new`.
     claude: bool,
+    /// The profile's preset: some agents get extras from yaah's UI guide (`agent_guide::plan`).
+    preset: String,
 }
 
 /// The project brief, attached to the first prompt of a chat.
@@ -192,6 +195,8 @@ struct Session {
     plan_index: Option<usize>,
     /// Taken (sent) with the first prompt.
     brief: Option<Brief>,
+    /// yaah's UI guide, for an agent that can only get it with the first prompt. Taken then.
+    guide: Option<String>,
     /// The agent generation that knows this session. `None` after a restart; a
     /// prompt to another generation reattaches first with `session/load`.
     attached: Option<u64>,
@@ -224,6 +229,7 @@ impl Session {
             tool_index,
             plan_index: None,
             brief: None,
+            guide: None,
             attached: None,
             replaying: false,
             save_to,
@@ -446,6 +452,8 @@ pub struct Hub {
     asks: Mutex<HashMap<String, PendingAsk>>,
     /// Where transcripts are saved (`~/.yaah/sessions`); `None` in tests.
     store: Option<PathBuf>,
+    /// What agents are told about yaah's UI (`agent_guide.rs`); unset, they're told nothing.
+    guide: OnceLock<Arc<Guide>>,
 }
 
 impl Hub {
@@ -475,6 +483,7 @@ impl Hub {
             ui_tokens: Mutex::default(),
             asks: Mutex::default(),
             store,
+            guide: OnceLock::new(),
         }
     }
 
@@ -487,6 +496,15 @@ impl Hub {
     /// Called once the UI MCP server is listening.
     pub fn set_ui_port(&self, port: u16) {
         let _ = self.ui_port.set(port);
+    }
+
+    /// Teach new and reattached chats' agents about yaah's UI with `guide`.
+    pub fn set_guide(&self, guide: Arc<Guide>) {
+        let _ = self.guide.set(guide);
+    }
+
+    pub fn guide(&self) -> Option<&Arc<Guide>> {
+        self.guide.get()
     }
 
     /// For a known UI MCP token: the chat it belongs to, once that chat exists.
@@ -660,7 +678,7 @@ impl Hub {
             params["additionalDirectories"] = json!(additional_dirs);
         }
         let ui_token = random_token();
-        self.add_ui_server(&agent, &ui_token, None, &mut params);
+        let guide = self.add_ui_server(&agent, &ui_token, None, &mut params);
         crate::mcp_servers::inject(&mut params, agent.caps.mcp_http, agent.caps.mcp_sse, &account);
 
         let res = agent.conn.request("session/new", params).await;
@@ -695,6 +713,7 @@ impl Hub {
         };
         let mut session = Session::new(info.clone(), vec![], self.store.as_ref().map(|d| d.join(file_name(&session_id))));
         session.brief = brief;
+        session.guide = guide;
         session.attached = Some(agent.generation);
         let taken = {
             // An agent may only start new chats: an id yaah already has is another chat
@@ -724,8 +743,10 @@ impl Hub {
     /// `session/load` params). The token is registered first because the agent
     /// connects while the request is still running. Only for agents that can
     /// reach HTTP MCP servers (`mcpCapabilities.http`); others chat without UI tools.
-    fn add_ui_server(&self, agent: &Agent, token: &str, session_id: Option<&str>, params: &mut Value) {
-        let (Some(port), true) = (self.ui_port.get(), agent.caps.mcp_http) else { return };
+    /// The agent is also told about the UI (`agent_guide.rs`); returns the guide
+    /// when it has to go with the chat's first prompt.
+    fn add_ui_server(&self, agent: &Agent, token: &str, session_id: Option<&str>, params: &mut Value) -> Option<String> {
+        let (Some(port), true) = (self.ui_port.get(), agent.caps.mcp_http) else { return None };
         self.ui_tokens.lock().unwrap().insert(token.to_owned(), session_id.map(str::to_owned));
         params["mcpServers"] = json!([{
             "type": "http",
@@ -738,6 +759,8 @@ impl Hub {
             // Only the UI tools, by name: `source_read` (databases, Docker logs) still asks.
             params["_meta"] = json!({ "claudeCode": { "options": { "allowedTools": ui_mcp::allowed_tools() } } });
         }
+        let traits = agent_guide::Traits { preset: &agent.preset, ui: true, system_prompt: agent.caps.system_prompt };
+        self.guide.get().and_then(|g| g.deliver(&traits, params))
     }
 
     /// Reconnect a chat `agent` doesn't know (restored from disk, or its agent
@@ -755,7 +778,8 @@ impl Hub {
         if !additional_dirs.is_empty() && agent.caps.additional_dirs {
             params["additionalDirectories"] = json!(additional_dirs);
         }
-        self.add_ui_server(agent, &random_token(), Some(session_id), &mut params);
+        // A reattached chat already had the first-prompt guide, if that was its route.
+        let _ = self.add_ui_server(agent, &random_token(), Some(session_id), &mut params);
         crate::mcp_servers::inject(&mut params, agent.caps.mcp_http, agent.caps.mcp_sse, account);
 
         let res = agent.conn.request("session/load", params).await;
@@ -894,6 +918,11 @@ impl Hub {
                 });
                 attachments.push("project.md".to_owned());
             }
+            if let Some(guide) = s.guide.take() {
+                // An agent with no other way to hear about yaah's UI reads it first.
+                blocks.insert(0, json!({ "type": "text", "text": guide }));
+                attachments.insert(0, agent_guide::ATTACHMENT.to_owned());
+            }
             for path in mentions.iter().filter(|p| Path::new(p).is_absolute()) {
                 let name = Path::new(path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
                 blocks.push(json!({ "type": "resource_link", "uri": format!("file://{path}"), "name": name }));
@@ -1019,8 +1048,14 @@ impl Hub {
             return Err(format!("agent negotiated unsupported ACP protocol version {:?}", caps.protocol_version));
         }
 
-        let agent =
-            Agent { conn, generation, auth_methods: init["authMethods"].as_array().cloned().unwrap_or_default(), caps, claude: account.is_claude() };
+        let agent = Agent {
+            conn,
+            generation,
+            auth_methods: init["authMethods"].as_array().cloned().unwrap_or_default(),
+            caps,
+            claude: account.is_claude(),
+            preset: account.preset.clone(),
+        };
         self.agents.lock().unwrap().insert(account.id.clone(), agent.clone());
         Ok(agent)
     }
@@ -1416,10 +1451,12 @@ mod live_tests {
     /// What the unattended harness may approve: writes inside the test folder
     /// and a few read-only or screenshot commands. Everything else is rejected.
     fn harness_allows(title: &str, root: &std::path::Path) -> bool {
-        let root = root.to_string_lossy();
+        // On macOS the temp folder is /var/… but agents see and write /private/var/…: accept both spellings.
+        let real = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let roots = [root.to_string_lossy().into_owned(), real.to_string_lossy().into_owned()];
         if let Some(path) = title.strip_prefix("Write ").or_else(|| title.strip_prefix("Edit ")) {
             // Absolute paths must be inside the test folder; relative ones are relative to it.
-            let inside = path.starts_with(root.as_ref()) || !(path.starts_with('/') || path.starts_with('~'));
+            let inside = roots.iter().any(|r| path.starts_with(r.as_str())) || !(path.starts_with('/') || path.starts_with('~'));
             return inside && !path.contains("..");
         }
         let chained = [";", "&&", "||", "|", "`", "$(", ">", "<"].iter().any(|c| title.contains(c));
@@ -1494,6 +1531,9 @@ mod live_tests {
         if ui {
             let host = Arc::new(ui_mcp::UiHost::new(hub.clone(), library.clone(), Arc::new(crate::sources::Sources::new())));
             hub.set_ui_port(ui_mcp::start(host).unwrap());
+            // As in the app, the agent is told about the UI; its skills go in the test folder, not ~/.yaah.
+            let lib = library.clone();
+            hub.set_guide(Arc::new(Guide::new(root.join("yaah-home"), move || agent_guide::component_names(&lib), || true)));
         }
         let project = Project {
             id: "live".into(),
@@ -1502,6 +1542,7 @@ mod live_tests {
             status: Status::Ongoing,
             created_at: 0,
             context_dir: ctx.to_string_lossy().into(),
+            link: None,
         };
 
         let mut events = vec![];
@@ -1752,6 +1793,7 @@ mod live_tests {
             status: Status::Ongoing,
             created_at: 0,
             context_dir: repo.to_string_lossy().into(),
+            link: None,
         };
         let quiet: Emit = Arc::new(|_: &str, _: Value| {});
         let ask = |hub: &Hub, sid: &str, text: &str| {
@@ -1841,6 +1883,8 @@ mod live_tests {
             "UI tools ran without permission prompts"
         );
     }
+
+    include!("live_ui_review.rs");
 }
 
 #[cfg(test)]

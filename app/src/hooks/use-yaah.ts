@@ -1,7 +1,8 @@
 // View state for the app. It holds no logic of its own: everything here is
 // either fetched from a Rust command or applied from a Rust event.
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, events, type AgentProfile, type Entry, type Project, type SessionInfo } from "@/lib/api";
+import { open } from "@tauri-apps/plugin-dialog";
+import { api, events, type AgentProfile, type Entry, type Project, type SessionInfo, type WorkItem } from "@/lib/api";
 import { errorMessage } from "@/lib/narrow";
 
 /** Sidebar order: archived projects sink to the bottom; otherwise newest first. */
@@ -55,6 +56,10 @@ export function useYaah() {
       events.accountsChanged(() => {
         refreshAgents().catch((e: unknown) => console.error("could not reload agents", e));
       }),
+      // Started from, refreshed from or unlinked from a tracker item.
+      events.projectsChanged(() => {
+        refreshProjects().catch((e: unknown) => console.error("could not reload projects", e));
+      }),
     ];
     return () => unlisten.forEach((p) => void p.then((f) => f()));
   }, [refreshAgents, refreshProjects]);
@@ -88,8 +93,29 @@ export function useYaah() {
       const info = await api.newSession(projectId, agentId);
       setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
       setSelection({ kind: "chat", id: info.sessionId });
+      return info.sessionId;
     },
     [agentId],
+  );
+
+  /**
+   * A project from a tracker item, or the one already following it. Opens the
+   * new chat when Rust started one (else the project); the caller drafts its prompt.
+   */
+  const startFromItem = useCallback(
+    async (item: WorkItem) => {
+      const started = await api.startProjectFromItem(item.service, item.id, agentId);
+      putProject(started.project);
+      if (started.chatId) {
+        const id = started.chatId;
+        // Its "session-info" event may not have arrived yet.
+        const info = (await api.listSessions()).find((s) => s.sessionId === id);
+        if (info) setSessions((prev) => ({ ...prev, [id]: info }));
+        setSelection({ kind: "chat", id });
+      } else setSelection({ kind: "project", id: started.project.id });
+      return started;
+    },
+    [agentId, putProject],
   );
 
   /** A chat outside any project, in `dir` or a fresh scratch folder. */
@@ -98,9 +124,16 @@ export function useYaah() {
       const info = await api.newQuickChat(agentId, dir);
       setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
       setSelection({ kind: "chat", id: info.sessionId });
+      return info.sessionId;
     },
     [agentId],
   );
+
+  /** A quick chat in a folder the user picks (e.g. one holding the data to analyse). Nothing if they cancel. */
+  const newChatInFolder = useCallback(async () => {
+    const dir = await open({ directory: true, title: "Folder for the new chat" });
+    if (typeof dir === "string") await newQuickChat(dir);
+  }, [newQuickChat]);
 
   /** File a chat under a project, or back out of one (null). */
   const moveChat = useCallback(async (id: string, projectId: string | null) => {
@@ -183,6 +216,7 @@ export function useYaah() {
     orderedProjects,
     putProject,
     createProject,
+    startFromItem,
     deleteProject,
     chatsByProject,
     quickChats,
@@ -194,6 +228,7 @@ export function useYaah() {
     activeProject: projects.find((p) => p.id === activeProjectId) ?? null,
     newChat,
     newQuickChat,
+    newChatInFolder,
     moveChat,
     promoteChat,
     renameChat,

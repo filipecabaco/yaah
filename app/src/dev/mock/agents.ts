@@ -21,6 +21,7 @@ const reports: Record<string, Omit<AgentReport, "checkedAt">> = {
     image: true,
     audio: false,
     additionalDirs: true,
+    systemPrompt: true,
   },
   gemini: {
     name: "gemini-cli",

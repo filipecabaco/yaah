@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod acp;
+pub mod agent_guide;
 pub mod agents;
 mod commands;
 mod data_commands;
@@ -17,8 +18,10 @@ pub mod settings;
 pub mod skills;
 pub mod sources;
 mod ui_files;
+mod ui_libraries;
 mod ui_library;
 mod ui_mcp;
+mod work_items;
 
 use login::Logins;
 use projects::Projects;
@@ -28,6 +31,7 @@ use tauri::{Manager, RunEvent};
 use ui_library::Library;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[allow(clippy::too_many_lines, reason = "the list of every command")]
 pub fn run() {
     path_env::adopt_login_shell();
 
@@ -44,6 +48,11 @@ pub fn run() {
                 Ok(port) => hub.set_ui_port(port),
                 Err(e) => eprintln!("[ui] MCP server not started, chats won't get UI tools: {e}"),
             }
+            // What agents are told about yaah's UI (agent_guide.rs): its skills are written now and when the library changes.
+            let guide = Arc::new(agent_guide::Guide::for_app(library.clone()));
+            guide.sync_in_background();
+            hub.set_guide(guide.clone());
+            app.manage(guide);
             app.manage(hub);
             app.manage(library);
             app.manage(sources);
@@ -75,12 +84,19 @@ pub fn run() {
             data_commands::set_appearance,
             data_commands::set_theme,
             data_commands::set_tool_card,
+            agent_guide::agent_guide,
+            agent_guide::set_teach_agents,
             data_commands::read_custom_theme,
             data_commands::reveal_data_dir,
             data_commands::integrations_status,
             data_commands::integration_connect,
             data_commands::integration_set_key,
             data_commands::integration_disconnect,
+            data_commands::work_queue,
+            data_commands::resolve_work_item,
+            data_commands::start_project_from_item,
+            data_commands::refresh_project_link,
+            data_commands::unlink_project,
             data_commands::list_connections,
             data_commands::add_connection,
             data_commands::remove_connection,
@@ -97,6 +113,14 @@ pub fn run() {
             data_commands::skills_update,
             data_commands::skills_remove,
             data_commands::preview_component,
+            data_commands::list_libraries,
+            data_commands::inspect_library,
+            data_commands::install_library,
+            data_commands::update_library,
+            data_commands::set_library_enabled,
+            data_commands::remove_library,
+            data_commands::copy_component,
+            data_commands::export_library,
             commands::remove_project_dir,
             commands::delete_project,
             commands::read_brief,

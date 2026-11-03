@@ -5,6 +5,10 @@
 //! `project.md`, the brief every chat in the project starts from.
 //!
 //! The registry lives in `~/.config/yaah/projects.json`.
+//!
+//! A project started from a tracker item (`work_items.rs`) keeps a `link` to it,
+//! and its brief carries the item between two markers at the top: refreshing
+//! rewrites only that block, so what the user wrote around it stays.
 
 use crate::accounts::home;
 use serde::{Deserialize, Serialize};
@@ -33,6 +37,43 @@ pub struct Project {
     /// Not persisted: derived from the id.
     #[serde(default, skip_deserializing)]
     pub context_dir: String,
+    /// The tracker item the project was started from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<ProjectLink>,
+}
+
+/// A tracker item a project follows (read-only).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLink {
+    /// `github`, `linear`, `linear-project` or `gitlab`.
+    pub service: String,
+    /// `owner/repo#12`, `ENG-142`, a Linear project's slug id, `group/proj#7`.
+    pub id: String,
+    pub url: String,
+    pub title: String,
+    /// Seconds since the epoch, like `created_at`.
+    pub linked_at: u64,
+    pub synced_at: u64,
+}
+
+pub const SOURCE_START: &str = "<!-- yaah:source:start -->";
+pub const SOURCE_END: &str = "<!-- yaah:source:end -->";
+
+/// `brief` with its source block replaced by `block` (or added at the top), or
+/// removed with `None`. Text outside the markers is kept as it is.
+pub fn set_source_block(brief: &str, block: Option<&str>) -> String {
+    let span = brief.find(SOURCE_START).and_then(|start| brief[start..].find(SOURCE_END).map(|end| (start, start + end + SOURCE_END.len())));
+    let (before, after) = match span {
+        Some((start, end)) => (&brief[..start], &brief[end..]),
+        None => ("", brief),
+    };
+    let after = after.trim_start_matches(['\r', '\n']);
+    let Some(block) = block else {
+        return format!("{before}{after}");
+    };
+    let rest = if after.is_empty() { String::new() } else { format!("\n{after}") };
+    format!("{before}{SOURCE_START}\n{}\n{SOURCE_END}\n{rest}", block.trim_end())
 }
 
 impl Project {
@@ -64,6 +105,8 @@ struct Registry {
 #[derive(Default)]
 pub struct Projects {
     lock: Mutex<()>,
+    /// Read-modify-write of a brief's source block, one at a time.
+    brief_lock: Mutex<()>,
 }
 
 /// Where projects live: the home folder, or (in a test, on its own thread) a temp one.
@@ -118,6 +161,7 @@ impl Projects {
             status: Status::Ongoing,
             created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             context_dir: ctx.to_string_lossy().into_owned(),
+            link: None,
         };
         self.mutate(|r| {
             r.projects.push(project.clone());
@@ -187,6 +231,24 @@ impl Projects {
         std::fs::write(p.brief_path(), text).map_err(|e| format!("write brief: {e}"))
     }
 
+    /// Write (`Some`) or remove (`None`) the brief's source block, keeping the rest.
+    pub fn set_brief_source(&self, id: &str, block: Option<&str>) -> Result<(), String> {
+        let _g = self.brief_lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let brief = self.read_brief(id)?;
+        let mut text = set_source_block(&brief, block);
+        if text.trim().is_empty() {
+            // Nothing left once the item is gone: back to the brief a new project starts with.
+            text = format!("# {}\n\n", self.get(id)?.name);
+        }
+        self.write_brief(id, &text)
+    }
+
+    /// The project that follows `service`'s item `id` (ids compare without case:
+    /// `Owner/Repo#1` is `owner/repo#1`).
+    pub fn linked(&self, service: &str, id: &str) -> Result<Option<Project>, String> {
+        Ok(self.list()?.into_iter().find(|p| p.link.as_ref().is_some_and(|l| l.service == service && l.id.eq_ignore_ascii_case(id))))
+    }
+
     fn mutate<T>(&self, f: impl FnOnce(&mut Registry) -> Result<T, String>) -> Result<T, String> {
         let _g = self.lock.lock().unwrap();
         let mut r = load()?;
@@ -242,7 +304,7 @@ fn dedupe(dirs: Vec<String>) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     thread_local! {
@@ -296,6 +358,75 @@ mod tests {
         assert!(!Path::new(&p.context_dir).exists(), "context folder removed");
         assert!(a.is_dir(), "project folders are never touched");
 
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn the_source_block_is_written_refreshed_and_removed() {
+        let block = |t: &str| format!("# ENG-142 {t}\n\n**Source:** Linear issue: https://linear.app/x/issue/ENG-142\n");
+        // Written into a new project's brief.
+        let b = set_source_block("", Some(&block("Refunds")));
+        assert_eq!(b, format!("{SOURCE_START}\n{}\n{SOURCE_END}\n", block("Refunds").trim_end()));
+        // The user writes below it (and even above it); a refresh keeps both.
+        let edited = format!("Above.\n{b}\n## Notes\n\nAsk Ana about cents.\n");
+        let refreshed = set_source_block(&edited, Some(&block("Partial refunds")));
+        assert!(refreshed.starts_with(&format!("Above.\n{SOURCE_START}\n# ENG-142 Partial refunds")), "{refreshed}");
+        assert!(
+            refreshed.ends_with("{SOURCE_END}\n\n## Notes\n\nAsk Ana about cents.\n".replace("{SOURCE_END}", SOURCE_END).as_str()),
+            "{refreshed}"
+        );
+        assert_eq!(refreshed.matches(SOURCE_START).count(), 1);
+        assert_eq!(set_source_block(&refreshed, Some(&block("Partial refunds"))), refreshed, "refreshing twice changes nothing");
+        // A brief that had no block gets one on top.
+        let added = set_source_block("# Shop\n\nMine.\n", Some("# X"));
+        assert_eq!(added, format!("{SOURCE_START}\n# X\n{SOURCE_END}\n\n# Shop\n\nMine.\n"));
+        // Unlinking drops the block and keeps the rest.
+        assert_eq!(set_source_block(&refreshed, None), "Above.\n## Notes\n\nAsk Ana about cents.\n");
+        assert_eq!(set_source_block(&b, None), "");
+        assert_eq!(set_source_block("no block here\n", None), "no block here\n");
+        // A start marker without its end isn't a block: nothing after it is eaten.
+        let broken = format!("{SOURCE_START}\nhalf\n");
+        assert_eq!(set_source_block(&broken, Some("# Y")), format!("{SOURCE_START}\n# Y\n{SOURCE_END}\n\n{broken}"));
+    }
+
+    #[test]
+    fn links_round_trip_and_old_registries_still_load() {
+        let home = std::env::temp_dir().join(format!("yaah-test-link-{}", crate::session::random_token()));
+        ROOT.with(|r| *r.borrow_mut() = Some(home.clone()));
+        std::fs::create_dir_all(home.join(".config/yaah")).unwrap();
+        std::fs::write(
+            home.join(".config/yaah/projects.json"),
+            r#"{"projects":[{"id":"old1","name":"Old","dirs":[],"status":"ongoing","createdAt":1}]}"#,
+        )
+        .unwrap();
+        let store = Projects::default();
+        assert!(store.get("old1").unwrap().link.is_none(), "a project from before links loads");
+        let link = ProjectLink {
+            service: "github".into(),
+            id: "Owner/Repo#12".into(),
+            url: "https://github.com/owner/repo/issues/12".into(),
+            title: "t".into(),
+            linked_at: 5,
+            synced_at: 5,
+        };
+        let p = store.create("Linked", &[]).unwrap();
+        store
+            .update(&p.id, |p| {
+                p.link = Some(link.clone());
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(store.get(&p.id).unwrap().link, Some(link));
+        assert_eq!(store.linked("github", "owner/repo#12").unwrap().map(|p| p.id), Some(p.id.clone()));
+        assert!(store.linked("gitlab", "owner/repo#12").unwrap().is_none(), "another service's item");
+        let raw = std::fs::read_to_string(home.join(".config/yaah/projects.json")).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(saved["projects"][1]["link"]["linkedAt"], 5, "{raw}");
+        assert!(saved["projects"][0].get("link").is_none(), "no `link: null` for unlinked projects: {raw}");
+
+        store.set_brief_source(&p.id, Some("# Linked block")).unwrap();
+        store.set_brief_source(&p.id, None).unwrap();
+        assert_eq!(store.read_brief(&p.id).unwrap(), "# Linked\n\n", "an emptied brief gets its title back");
         std::fs::remove_dir_all(&home).unwrap();
     }
 }

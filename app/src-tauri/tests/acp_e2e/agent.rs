@@ -4,7 +4,8 @@
 //!
 //! Knobs (environment): `YAAH_AGENT_PROTOCOL` (the version it answers with),
 //! `YAAH_AGENT_NO_LOAD` (no `session/load`), `YAAH_AGENT_SESSION_ID` (a fixed id
-//! for `session/new`).
+//! for `session/new`), `YAAH_AGENT_MCP_HTTP` (reaches HTTP MCP servers, so it gets
+//! yaah's UI server), `YAAH_AGENT_SYSTEM_PROMPT` (advertises the ACP `systemPrompt`).
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -134,6 +135,10 @@ impl Agent {
         match msg["method"].as_str().unwrap_or_default() {
             "initialize" => {
                 let protocol: u64 = std::env::var("YAAH_AGENT_PROTOCOL").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
+                let mut session_caps = json!({ "additionalDirectories": {} });
+                if std::env::var_os("YAAH_AGENT_SYSTEM_PROMPT").is_some() {
+                    session_caps["systemPrompt"] = json!({});
+                }
                 Self::respond(
                     id,
                     &json!({
@@ -142,8 +147,8 @@ impl Agent {
                         "agentCapabilities": {
                             "loadSession": std::env::var_os("YAAH_AGENT_NO_LOAD").is_none(),
                             "promptCapabilities": { "embeddedContext": true },
-                            "mcpCapabilities": { "http": false, "sse": false },
-                            "sessionCapabilities": { "additionalDirectories": {} }
+                            "mcpCapabilities": { "http": std::env::var_os("YAAH_AGENT_MCP_HTTP").is_some(), "sse": false },
+                            "sessionCapabilities": session_caps
                         },
                         "authMethods": [
                             { "id": "agent-login", "name": "Log in" },

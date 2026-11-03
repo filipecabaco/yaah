@@ -118,6 +118,7 @@ impl Sources {
                 github_prs(repo(&source["repo"])?, state, source["limit"].as_u64().unwrap_or(30).min(100)).await
             }
             "linear.issue" | "linear.issues" | "linear.board" | "linear.cycle" => crate::integrations::linear(kind, source).await,
+            "github.issue" | "github.issues" | "gitlab.issue" | "gitlab.issues" | "linear.project" => crate::work_items::source(kind, source).await,
             "postgres.schema" => postgres_schema(self.connection(&source["connection"])?).await,
             "postgres.query" => {
                 let sql = source["sql"].as_str().ok_or("postgres.query needs `sql`")?;
@@ -125,7 +126,7 @@ impl Sources {
                 postgres_query(&self.connection(&source["connection"])?, sql, limit).await
             }
             other => Err(format!(
-                "unknown source kind `{other}`; known: system, docker.containers, docker.stats, docker.logs, github.pr, github.pr.diff, github.prs, linear.issue, linear.issues, linear.board, linear.cycle, postgres.schema, postgres.query"
+                "unknown source kind `{other}`; known: system, docker.containers, docker.stats, docker.logs, github.pr, github.pr.diff, github.prs, github.issue, github.issues, gitlab.issue, gitlab.issues, linear.issue, linear.issues, linear.project, linear.board, linear.cycle, postgres.schema, postgres.query"
             )),
         }
     }

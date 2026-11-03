@@ -23,7 +23,6 @@ import {
   Bot,
   Trash2,
 } from "lucide-react";
-import { open } from "@tauri-apps/plugin-dialog";
 import { focusComposer } from "@/components/chat-context";
 import { ErrorText } from "@/components/error-text";
 import { connectionReady } from "@/components/settings/form-state";
@@ -57,11 +56,13 @@ type Props = {
   onPage: (page: PalettePage | null) => void;
   y: Yaah;
   onNewProject: () => void;
+  /** The New project dialog on "From an issue". */
+  onNewProjectFromItem: () => void;
   onAddRepos: () => void;
   onLogin: (agent: AgentProfile) => void;
   onAddAgent: () => void;
   onManageAgents: () => void;
-  // Settings → Integrations (GitHub, Linear, databases), optionally on one service.
+  // Settings → Integrations (GitHub, Linear, GitLab, databases), optionally on one service.
   onIntegrations: (service?: string) => void;
   // Settings, optionally on one tab.
   onSettings: (tab?: SettingsTab) => void;
@@ -76,6 +77,7 @@ export function CommandPalette({
   onPage,
   y,
   onNewProject,
+  onNewProjectFromItem,
   onAddRepos,
   onLogin,
   onAddAgent,
@@ -109,11 +111,6 @@ export function CommandPalette({
   const project = y.activeProject;
   const account = y.agents.find((a) => a.id === y.agentId);
   const projectName = (id: string | null) => (id ? (y.projects.find((p) => p.id === id)?.name ?? "") : "quick chat");
-  /** A quick chat in a folder the user picks (e.g. one holding the data to analyse). */
-  const chatInFolder = async () => {
-    const dir = await open({ directory: true, title: "Folder for the new chat" });
-    if (typeof dir === "string") await y.newQuickChat(dir);
-  };
   const projectChats = project ? (y.chatsByProject[project.id] ?? []) : [];
 
   let body: ReactNode;
@@ -262,7 +259,7 @@ export function CommandPalette({
               label="New chat in a folder…"
               onSelect={() =>
                 close(() => {
-                  chatInFolder().catch(console.error);
+                  y.newChatInFolder().catch(console.error);
                 })
               }
             />
@@ -310,6 +307,13 @@ export function CommandPalette({
             />
           )}
           <Item id="new-project" icon={<Plus />} label="New project…" shortcut="newProject" onSelect={() => close(onNewProject)} />
+          <Item
+            id="new-project-from-item"
+            icon={<CircleDot />}
+            label="New project from an issue…"
+            detail="GitHub, Linear, GitLab"
+            onSelect={() => close(onNewProjectFromItem)}
+          />
           {!account && <Item id="first-agent" icon={<Bot />} label="Add agent…" detail="needed to chat" onSelect={() => close(onAddAgent)} />}
           {account && (
             <Item
@@ -334,12 +338,19 @@ export function CommandPalette({
             id="settings"
             icon={<Settings2 />}
             label="Settings…"
-            detail="general, agents, MCP, skills, integrations"
+            detail="general, agents, MCP, skills, components, integrations"
             shortcut="settings"
             onSelect={() => close(() => onSettings())}
           />
           <Item id="mcp-servers" icon={<Plug />} label="MCP servers…" onSelect={() => close(() => onSettings("mcp"))} />
           <Item id="skills" icon={<Plug />} label="Skills…" detail="install from GitHub" onSelect={() => close(() => onSettings("skills"))} />
+          <Item
+            id="install-library"
+            icon={<LayoutPanelTop />}
+            label="Install component library…"
+            detail="from a git repo or a folder"
+            onSelect={() => close(() => onSettings("components"))}
+          />
           <Item
             id="manage-agents"
             icon={<Settings2 />}
@@ -351,11 +362,12 @@ export function CommandPalette({
             id="integrations"
             icon={<Plug />}
             label="Integrations…"
-            detail="GitHub, Linear, databases"
+            detail="GitHub, Linear, GitLab, databases"
             onSelect={() => close(() => onIntegrations())}
           />
           <Item id="connect-linear" icon={<Plug />} label="Connect Linear…" onSelect={() => close(() => onIntegrations("linear"))} />
           <Item id="connect-github" icon={<Plug />} label="Connect GitHub…" onSelect={() => close(() => onIntegrations("github"))} />
+          <Item id="connect-gitlab" icon={<Plug />} label="Connect GitLab…" onSelect={() => close(() => onIntegrations("gitlab"))} />
           <Item id="help" icon={<Keyboard />} label="Keyboard shortcuts" shortcut="help" onSelect={() => close(onHelp)} />
         </CommandGroup>
         {y.chatOrder.length > 0 && (

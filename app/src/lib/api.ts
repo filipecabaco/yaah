@@ -29,6 +29,8 @@ export type AgentReport = {
   image: boolean;
   audio: boolean;
   additionalDirs: boolean;
+  /** Takes a client system prompt (ACP `systemPrompt`); yaah's UI guide goes there. */
+  systemPrompt?: boolean;
   checkedAt: number;
 };
 
@@ -86,6 +88,44 @@ export type Project = {
   status: ProjectStatus;
   createdAt: number;
   contextDir: string;
+  /** The tracker item the project was started from (read-only). */
+  link?: ProjectLink;
+};
+
+// Projects from tracker items. Mirrors `src-tauri/src/work_items.rs`.
+export type WorkService = "github" | "linear" | "linear-project" | "gitlab";
+export type WorkItem = {
+  service: WorkService;
+  /** `owner/repo#12`, `ENG-142`, a Linear project's slug id, `group/proj#7`. */
+  id: string;
+  title: string;
+  url: string;
+  status?: string;
+  assignee?: string;
+  labels: string[];
+  relation?: "assigned" | "created" | "lead" | "member";
+  /** `owner/repo` or `group/proj`, for GitHub and GitLab. */
+  repo?: string;
+  /** The yaah project already linked to it, if any. */
+  projectId?: string;
+  updatedAt?: string;
+};
+export type WorkErrorKind = "auth" | "forbidden" | "not_found" | "rate_limited" | "other";
+/** The user's open items from every connected service; one failing never hides the others. */
+export type WorkQueue = { items: WorkItem[]; errors: { service: WorkService; kind: WorkErrorKind; message: string }[] };
+/** The tracker item a project follows. Times are Unix seconds. */
+export type ProjectLink = { service: WorkService; id: string; url: string; title: string; linkedAt: number; syncedAt: number };
+export type StartedProject = {
+  project: Project;
+  /** A project already followed this item; nothing was created. */
+  existing: boolean;
+  chatId?: string;
+  /** The composer's text for the new chat. Never sent. */
+  draft?: string;
+  /** Local clones added to the project's folders. */
+  addedRepos: string[];
+  /** Why no chat was opened (the project was still created). */
+  chatError?: string;
 };
 
 export type Repo = {
@@ -126,6 +166,23 @@ export type GeneralSettings = {
   workspaceRoots: string[];
   dataDirs: { label: string; path: string; about: string; exists: boolean }[];
   version: string;
+  /** Teach agents about yaah's UI (Settings → Chat). */
+  teachAgents: boolean;
+};
+
+/** How an agent hears about yaah's UI (`agent_guide.rs` `Route`). */
+export type GuideRoute = "mcp" | "acpSystemPrompt" | "firstPrompt" | "claudeSystemPrompt" | "claudePlugin";
+
+/** What agents are told about yaah's UI, and how it reaches each configured agent. */
+export type AgentGuide = {
+  enabled: boolean;
+  /** The short guide, with the component index filled in. */
+  guide: string;
+  skillsDir: string;
+  pluginDir: string;
+  skills: { name: string; description: string; path: string; text: string }[];
+  /** `known` is false until the agent has started once. */
+  agents: { id: string; label: string; known: boolean; routes: { id: GuideRoute; label: string }[] }[];
 };
 
 /** A service yaah reads for the user (GitHub, Linear), as Settings shows it. */
@@ -133,7 +190,8 @@ export type IntegrationStatus = {
   id: string;
   label: string;
   about: string;
-  flow: "device" | "browser";
+  /** "key": no OAuth app is configured, so a personal key is the only way. */
+  flow: "device" | "browser" | "key";
   connected: boolean;
   /** oauth, key or env (a token in the environment). */
   via: "" | "oauth" | "key" | "env";
@@ -141,6 +199,8 @@ export type IntegrationStatus = {
   needsReauth: boolean;
   keyEnv: string;
   keyUrl: string;
+  /** GitLab only: the instance it's on (`https://gitlab.com` unless self-managed). */
+  baseUrl?: string;
 };
 export type IntegrationStart =
   { flow: "device"; userCode: string; verificationUri: string; expiresIn: number } | { flow: "browser"; authUrl: string };
@@ -225,7 +285,57 @@ export type UiComponent = {
   source: string;
   /** Libraries it is built on (derived from its primitives). */
   uses: string[];
+  /** The title of the component library it comes from, for components of an installed library (`source` is its id). */
+  library?: string;
 };
+
+// Component libraries (Settings → Components): installed sets of components, beside yaah's own and the user's (see ui_library.rs).
+/** Where an installed library comes from. */
+export type LibrarySource = { kind: "git"; url: string; ref?: string } | { kind: "folder"; path: string };
+export type LibraryComponent = {
+  /** Qualified, e.g. `acme/pr-card`. */
+  name: string;
+  description: string;
+  /** Invalid components are reported and not loaded. */
+  valid: boolean;
+  error?: string;
+};
+export type LibraryInfo = {
+  /** "yaah" (bundled), "local" (the user's own), or the manifest name. */
+  id: string;
+  kind: "builtin" | "local" | "git" | "folder";
+  title: string;
+  description: string;
+  publisher?: string;
+  homepage?: string;
+  version?: string;
+  /** git and folder libraries only. */
+  source?: LibrarySource;
+  /** git only: the checked-out commit (full sha). */
+  commit?: string;
+  /** builtin and local are always enabled. */
+  enabled: boolean;
+  components: LibraryComponent[];
+  /** Source kinds its live views read (`github`, `postgres`…), sorted. */
+  reads: string[];
+  /** Other libraries its components reference. */
+  needs: string[];
+  /** Library-level problems (a missing manifest field, a skipped symlink…). */
+  errors: string[];
+  installedAt?: number;
+  updatedAt?: number;
+};
+/** A library fetched into staging and validated; nothing is installed yet. */
+export type LibraryPreview = LibraryInfo & {
+  stagingId: string;
+  /** The id of an installed library that installing this one replaces. */
+  replaces?: string;
+};
+export type LibraryUpdate = { library: LibraryInfo; from?: string; to?: string; changed: string[] };
+/** `yaah-library.json`. */
+export type LibraryManifest = { name: string; title: string; description: string; publisher?: string; homepage?: string; version: string };
+/** `missing`: local components the picked ones use but weren't picked; nothing was written. */
+export type LibraryExport = { path: string; missing: string[] };
 
 // Skills (Settings → Skills). Mirrors `src-tauri/src/skills.rs`.
 /** Where a skill yaah installed came from (its `.yaah-source.json`). */
@@ -296,6 +406,18 @@ export const api = {
   cloneRepo: (source: string, root: string) => invoke<Repo>("clone_repo", { source, root }),
   removeProjectDir: (id: string, dir: string) => invoke<Project>("remove_project_dir", { id, dir }),
   deleteProject: (id: string) => invoke<void>("delete_project", { id }),
+
+  // projects from tracker items (read-only toward every tracker)
+  workQueue: () => invoke<WorkQueue>("work_queue"),
+  /** A pasted URL or id (`owner/repo#12`, `ENG-142`, a Linear project URL…). */
+  resolveWorkItem: (input: string) => invoke<WorkItem>("resolve_work_item", { input }),
+  /** Creates the project (or returns the one already following the item) and opens a chat with the prompt drafted, never sent. */
+  startProjectFromItem: (service: WorkService, id: string, accountId?: string) =>
+    invoke<StartedProject>("start_project_from_item", { service, id, accountId: accountId || null }),
+  /** Re-fetch the item and rewrite the brief's block; never the status or name. */
+  refreshProjectLink: (projectId: string) => invoke<Project>("refresh_project_link", { projectId }),
+  /** Drop the link and the brief's block. */
+  unlinkProject: (projectId: string) => invoke<Project>("unlink_project", { projectId }),
   readBrief: (id: string) => invoke<string>("read_brief", { id }),
   writeBrief: (id: string, text: string) => invoke<void>("write_brief", { id, text }),
 
@@ -303,14 +425,18 @@ export const api = {
   readSource: (source: unknown) => invoke<unknown>("read_source", { source }),
   // integrations (Settings → Integrations): never returns a token
   integrationsStatus: () => invoke<IntegrationStatus[]>("integrations_status"),
-  integrationConnect: (service: string) => invoke<IntegrationStart>("integration_connect", { service }),
-  integrationSetKey: (service: string, key: string) => invoke<{ account: string }>("integration_set_key", { service, key }),
+  /** `baseUrl`: GitLab's instance for a self-managed one; omitted means gitlab.com. */
+  integrationConnect: (service: string, baseUrl?: string) => invoke<IntegrationStart>("integration_connect", { service, baseUrl: baseUrl || null }),
+  integrationSetKey: (service: string, key: string, baseUrl?: string) =>
+    invoke<{ account: string }>("integration_set_key", { service, key, baseUrl: baseUrl || null }),
   integrationDisconnect: (service: string) => invoke<void>("integration_disconnect", { service }),
   // Settings → General
   generalSettings: () => invoke<GeneralSettings>("general_settings"),
   setAppearance: (appearance: Appearance) => invoke<void>("set_appearance", { appearance }),
   setTheme: (light: string, dark: string) => invoke<void>("set_theme", { light, dark }),
   setToolCard: (key: string, mode: string | null) => invoke<void>("set_tool_card", { key, mode }),
+  agentGuide: () => invoke<AgentGuide>("agent_guide"),
+  setTeachAgents: (enabled: boolean) => invoke<void>("set_teach_agents", { enabled }),
   readCustomTheme: (name: string) =>
     invoke<{ name?: string; displayName?: string; type?: string; colors: Record<string, string> }>("read_custom_theme", { name }),
   revealDataDir: (path: string) => invoke<void>("reveal_data_dir", { path }),
@@ -359,6 +485,24 @@ function on<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {
   return listen<T>(event, (e) => cb(e.payload));
 }
 
+/** Component libraries: install, update, share. Rust fetches, validates and stores; errors are strings for the user. */
+export const libraryApi = {
+  /** yaah's own first, then the user's, then installed ones by title. */
+  list: () => invoke<LibraryInfo[]>("list_libraries"),
+  /** Fetch into a staging folder and validate. Installs nothing. */
+  inspect: (source: LibrarySource) => invoke<LibraryPreview>("inspect_library", { source }),
+  install: (stagingId: string) => invoke<LibraryInfo>("install_library", { stagingId }),
+  /** git: fetch and reset to its ref; folder: read it again. */
+  update: (id: string) => invoke<LibraryUpdate>("update_library", { id }),
+  setEnabled: (id: string, enabled: boolean) => invoke<LibraryInfo>("set_library_enabled", { id, enabled }),
+  remove: (id: string) => invoke<void>("remove_library", { id }),
+  /** Copy a yaah or library component (qualified name) into the user's collection. */
+  copyComponent: (name: string, newName?: string) => invoke<UiComponent>("copy_component", { name, newName: newName ?? null }),
+  /** Write `<dir>/<manifest.name>/` from local components, ready to publish as a git repo. */
+  exportLibrary: (dir: string, manifest: LibraryManifest, components: string[]) =>
+    invoke<LibraryExport>("export_library", { dir, manifest, components }),
+};
+
 export const events = {
   sessionEntry: (cb: (e: { sessionId: string; index: number; entry: Entry }) => void) => on("session-entry", cb),
   sessionInfo: (cb: (info: SessionInfo) => void) => on("session-info", cb),
@@ -366,6 +510,10 @@ export const events = {
   loginOutput: (cb: (e: { accountId: string; line: string }) => void) => on("login-output", cb),
   loginUrl: (cb: (e: { accountId: string; url: string }) => void) => on("login-url", cb),
   loginDone: (cb: (e: { accountId: string; ok: boolean; message: string | null }) => void) => on("login-done", cb),
+  /** Any library installed, updated, enabled, disabled or removed. */
+  librariesChanged: (cb: () => void) => on("libraries-changed", cb),
+  /** A project was started from, refreshed from or unlinked from a tracker item. */
+  projectsChanged: (cb: (e: { projectId: string }) => void) => on("projects-changed", cb),
 };
 
 // ── MCP servers (Settings → MCP servers). Mirrors `src-tauri/src/mcp_servers.rs`. ──

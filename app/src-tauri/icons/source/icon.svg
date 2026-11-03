@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#26262b"/>
+      <stop offset="1" stop-color="#131316"/>
+    </linearGradient>
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS icon grid: an 824px rounded square inside the 1024 canvas. -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#ground)"/>
+  <rect x="101.5" y="101.5" width="821" height="821" rx="184.5" fill="none" stroke="url(#rim)" stroke-width="3"/>
+  <!-- The mark (50×60 units) at 8.2px per unit, centred. -->
+  <g transform="translate(307 266) scale(8.2)">
+    <rect x="0" y="0" width="16" height="22" rx="5" fill="#f4f4f5"/>
+    <rect x="34" y="0" width="16" height="60" rx="5" fill="#f4f4f5"/>
+    <rect x="0" y="25" width="31" height="16" rx="5" fill="#f28a2e"/>
+    <rect x="8" y="44" width="23" height="16" rx="5" fill="#f4f4f5"/>
+  </g>
+</svg>

@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
+import { menuActions } from "@/lib/menu-actions";
 import { changed, hunkRange, type DiffFile, type Hunk } from "@/components/diff/model";
 import { plural } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
@@ -179,7 +180,12 @@ function HunkView({ file, hunk, id, onAsked }: { file: DiffFile; hunk: Hunk; id?
     draftIntoComposer({ text: `About @${label} ${range}: `, mention: { label, path: abs } });
   }
   return (
-    <div id={id} className="font-mono text-xs">
+    // Right-clicking the hunk offers the same in the enclosing menu (e.g. a tool card's).
+    <div
+      id={id}
+      className="font-mono text-xs"
+      ref={chat ? menuActions([{ label: "Ask about this", icon: <MessageSquareText />, onSelect: ask }]) : undefined}
+    >
       <div className="group flex items-center bg-blue-500/10 pr-1 text-muted-foreground">
         <span className="min-w-0 flex-1 truncate px-2 py-0.5">{hunk.header}</span>
         {chat && (

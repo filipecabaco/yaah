@@ -11,16 +11,21 @@
 //!   their names are reserved: agents use and compose them, never overwrite.
 //! - [`LocalDir`] (`local`): what agents build, in `~/.yaah/components/`.
 //!
-//! A shared, git-backed source can be added beside them later without
-//! changing the format.
+//! Beside them sit the installed component libraries (`ui_libraries.rs`):
+//! sets of components other people publish as a git repo or a folder, which
+//! can be installed, updated, turned off and removed while the app runs. Their
+//! components are addressed by a qualified name, `<library>/<name>`.
+//! Unqualified names resolve as before: yaah's own first, then local. Inside an
+//! installed library's component, unqualified names are yaah's own only.
 
 use crate::accounts::home;
+use crate::ui_libraries::{Pack, Staged, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const PRIMITIVES_JSON: &str = include_str!("../../src/ui-primitives.json");
@@ -55,13 +60,38 @@ pub struct Component {
     pub change_note: Option<String>,
     #[serde(default)]
     pub updated_at: u64,
-    /// Which source it came from (e.g. "local"). Not stored.
+    /// Which source it came from: "yaah", "local", or an installed library's id. Not stored.
     #[serde(default, skip_deserializing)]
     pub source: String,
     /// Libraries it is built on: the union of its primitives' `uses`, through
     /// nested components. Derived when read, never trusted from disk.
     #[serde(default, skip_deserializing)]
     pub uses: Vec<String>,
+    /// The title of the installed component library it comes from. Not stored.
+    #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
+    pub library: Option<String>,
+}
+
+/// What a component name in a tree refers to.
+#[derive(Clone)]
+pub(crate) enum Resolved {
+    Found(Rc<Component>),
+    /// Unknown or unusable here; the message says why (without the node's path).
+    Missing(String),
+    /// Another installed library's component, checked when that library is used.
+    Unchecked,
+}
+
+/// Looks up the components a tree uses.
+pub(crate) trait Resolve {
+    /// `in_library`: the name appears inside an installed library's component,
+    /// where unqualified names may only be yaah's own components.
+    fn resolve(&self, name: &str, in_library: bool) -> Resolved;
+}
+
+/// `acme/pr-card` → `("acme", "pr-card")`.
+pub(crate) fn qualified(name: &str) -> Option<(&str, &str)> {
+    name.split_once('/')
 }
 
 /// Where components are stored. One local folder today; shared sources later.
@@ -194,7 +224,17 @@ impl ComponentSource for LocalDir {
 }
 
 pub struct Library {
+    /// yaah's own, then local: fixed for the app's life.
     sources: Vec<Box<dyn ComponentSource>>,
+    /// Installed libraries (on or off), by title. Replaced on install, update,
+    /// enable and remove; a folder library is reloaded when its files change.
+    pub(crate) packs: RwLock<Vec<Arc<Pack>>>,
+    /// Where installed libraries are recorded and checked out. `None`: none can be installed.
+    pub(crate) store: Option<Store>,
+    /// Libraries fetched and validated by `inspect`, waiting for `install`.
+    pub(crate) staged: Mutex<HashMap<String, Staged>>,
+    /// One install, update, enable or remove at a time.
+    pub(crate) ops: Mutex<()>,
 }
 
 /// What the agent sends to create or update a component.
@@ -231,22 +271,46 @@ pub struct Prepared {
 }
 
 impl Library {
+    /// The app's library: yaah's own, the user's, and the libraries they installed.
     pub fn local() -> Self {
         // yaah's own first: its names are reserved, so they always resolve to the shipped one.
-        Self { sources: vec![Box::new(Bundled::new()), Box::new(LocalDir::new(home().join(".yaah/components")))] }
+        let lib = Self::new(vec![Box::new(Bundled::new()), Box::new(LocalDir::new(home().join(".yaah/components")))], Some(Store::user()));
+        lib.clean_staging();
+        lib.reload();
+        lib
+    }
+
+    pub(crate) fn new(sources: Vec<Box<dyn ComponentSource>>, store: Option<Store>) -> Self {
+        Self { sources, packs: RwLock::default(), store, staged: Mutex::default(), ops: Mutex::default() }
     }
 
     #[cfg(test)]
     pub fn with_sources(sources: Vec<Box<dyn ComponentSource>>) -> Self {
-        Self { sources }
+        Self::new(sources, None)
     }
 
-    /// All components, first source wins on a name clash.
+    pub(crate) fn sources(&self) -> &[Box<dyn ComponentSource>] {
+        &self.sources
+    }
+
+    /// The installed libraries as they are now.
+    pub(crate) fn packs(&self) -> Vec<Arc<Pack>> {
+        self.packs.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    /// All components, first source wins on a name clash, then every enabled
+    /// library's valid components by qualified name.
     pub fn list(&self) -> Result<Vec<Component>, String> {
+        self.refresh_folders();
         let mut by_name: BTreeMap<String, Component> = BTreeMap::new();
         for s in &self.sources {
             for c in s.list()? {
                 by_name.entry(c.name.clone()).or_insert(c);
+            }
+        }
+        for p in self.packs().iter().filter(|p| p.record.enabled) {
+            for c in p.loaded.components.values() {
+                by_name.insert(c.name.clone(), c.clone());
             }
         }
         // One memo for the whole list: each component's libraries are worked out once.
@@ -255,10 +319,15 @@ impl Library {
     }
 
     pub fn get(&self, name: &str) -> Result<Option<Component>, String> {
+        self.refresh_folders();
         Ok(self.raw_get(name)?.map(|c| self.with_uses(c, &mut HashMap::new())))
     }
 
-    fn raw_get(&self, name: &str) -> Result<Option<Component>, String> {
+    /// A component by name: qualified from an enabled library, else yaah's own, then local.
+    pub(crate) fn raw_get(&self, name: &str) -> Result<Option<Component>, String> {
+        if let Some((lib, short)) = qualified(name) {
+            return Ok(self.packs().iter().find(|p| p.id() == lib && p.record.enabled).and_then(|p| p.loaded.components.get(short).cloned()));
+        }
         for s in &self.sources {
             if let Some(c) = s.get(name)? {
                 return Ok(Some(c));
@@ -271,31 +340,34 @@ impl Library {
     /// libraries once worked out, so a component used many times is walked once.
     fn with_uses(&self, mut c: Component, memo: &mut Uses) -> Component {
         let mut uses = BTreeSet::new();
-        self.collect_uses(&c.tree, &mut vec![c.name.clone()], memo, &mut 0, &mut uses);
+        let in_library = qualified(&c.name).is_some();
+        self.collect_uses(&c.tree, &mut vec![c.name.clone()], in_library, memo, &mut 0, &mut uses);
         c.uses = uses.into_iter().collect();
         c
     }
 
     /// The libraries component `name` is built on, worked out once per `memo`.
-    fn uses_of(&self, name: &str, stack: &mut Vec<String>, memo: &mut Uses) -> Rc<BTreeSet<String>> {
-        if let Some(u) = memo.get(name) {
+    fn uses_of(&self, name: &str, stack: &mut Vec<String>, in_library: bool, memo: &mut Uses) -> Rc<BTreeSet<String>> {
+        // Inside a library an unqualified name may resolve differently (yaah's own only).
+        let key = if in_library && qualified(name).is_none() { format!("\0{name}") } else { name.to_owned() };
+        if let Some(u) = memo.get(&key) {
             return u.clone();
         }
         let mut out = BTreeSet::new();
-        if let Ok(Some(c)) = self.raw_get(name) {
+        if let Resolved::Found(c) = self.resolve(name, in_library) {
             stack.push(name.to_owned());
-            self.collect_uses(&c.tree, stack, memo, &mut 0, &mut out);
+            self.collect_uses(&c.tree, stack, in_library || qualified(name).is_some(), memo, &mut 0, &mut out);
             stack.pop();
         }
         let out = Rc::new(out);
-        memo.insert(name.to_owned(), out.clone());
+        memo.insert(key, out.clone());
         out
     }
 
     /// Libraries a tree is built on, following nested components (cycle-safe).
     /// At most [`MAX_NODES`] nodes of one tree are walked (`walked` counts them):
     /// the save checks keep trees under that, but a file on disk may not be.
-    fn collect_uses(&self, node: &Value, stack: &mut Vec<String>, memo: &mut Uses, walked: &mut usize, out: &mut BTreeSet<String>) {
+    fn collect_uses(&self, node: &Value, stack: &mut Vec<String>, in_library: bool, memo: &mut Uses, walked: &mut usize, out: &mut BTreeSet<String>) {
         *walked += 1;
         if *walked > MAX_NODES {
             return;
@@ -303,14 +375,14 @@ impl Library {
         let Some(obj) = node.as_object() else { return };
         for key in ["children", "else"] {
             for kid in obj.get(key).and_then(Value::as_array).into_iter().flatten() {
-                self.collect_uses(kid, stack, memo, walked, out);
+                self.collect_uses(kid, stack, in_library, memo, walked, out);
             }
         }
         let Some(t) = obj.get("type").and_then(Value::as_str) else { return };
         if let Some(p) = primitive(t) {
             out.extend(p.get("uses").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned));
         } else if !stack.iter().any(|s| s == t) && stack.len() < MAX_NESTING {
-            out.extend(self.uses_of(t, stack, memo).iter().cloned());
+            out.extend(self.uses_of(t, stack, in_library, memo).iter().cloned());
         }
     }
 
@@ -320,25 +392,35 @@ impl Library {
         let components: Vec<Value> = self
             .list()?
             .into_iter()
-            .map(|c| json!({ "name": c.name, "version": c.version, "source": c.source, "description": c.description, "props": c.props, "uses": c.uses }))
+            .map(|c| {
+                let mut v = json!({ "name": c.name, "version": c.version, "source": c.source, "description": c.description, "props": c.props, "uses": c.uses });
+                if let Some(title) = c.library {
+                    v["library"] = title.into();
+                }
+                v
+            })
             .collect();
         Ok(json!({ "primitives": p["primitives"], "syntax": p["syntax"], "sources": p["sources"], "components": components }))
     }
 
-    /// Validate and store a component. Errors are written for the agent to fix.
+    /// Validate and store a component in the local collection. Errors are written for the agent to fix.
     pub fn save(&self, req: SaveRequest) -> Result<Component, Vec<String>> {
+        if let Some((lib, short)) = qualified(&req.name) {
+            return Err(vec![format!(
+                "`{}` is a qualified name: components named `library/name` belong to an installed library and are read-only, and \
+                 ui_save_component only writes the user's own collection. Copy it to the collection first: read it with ui_get_component \
+                 and save it under an unqualified name such as `{short}` (pick another if that's taken), then change the copy. \
+                 It can keep using `{lib}/…` components",
+                req.name
+            )]);
+        }
+        self.refresh_folders();
         let mut errs = vec![];
         if !valid_name(&req.name) {
             errs.push("name must be kebab-case: lowercase letters, digits and -, starting with a letter, 2-48 chars".into());
         }
         if is_primitive(&req.name) {
             errs.push(format!("`{}` is a primitive; pick another name", req.name));
-        }
-        if req.description.trim().len() < 10 {
-            errs.push("description must say what the component shows and when to use it".into());
-        }
-        if !req.props.is_object() || req.props.get("type").is_some_and(|t| t != "object") {
-            errs.push("props must be a JSON Schema object: { type: \"object\", properties: {...}, required: [...] }".into());
         }
         let existing = self.raw_get(&req.name).map_err(|e| vec![e])?;
         if let Some(c) = &existing
@@ -362,15 +444,7 @@ impl Library {
         }
 
         // The tree may use other library components, but never itself.
-        let stack = vec![req.name.clone()];
-        let mut ctx = Ctx::default();
-        validate(&req.tree, "tree", self, &mut ctx, 0, &mut errs);
-        if errs.is_empty() {
-            self.check_cycles(&req.tree, &stack, &mut errs);
-        }
-        for (i, ex) in req.examples.iter().enumerate() {
-            check_props(&req.props, &ex.props, &format!("examples[{i}].props"), &mut errs);
-        }
+        check_contents(&req.name, &req.description, &req.props, &req.tree, &req.examples, self, false, &mut errs);
         if !errs.is_empty() {
             return Err(errs);
         }
@@ -386,6 +460,7 @@ impl Library {
             updated_at: now(),
             source: String::new(),
             uses: vec![],
+            library: None,
         };
         let target = self.sources.iter().find(|s| s.writable()).ok_or_else(|| vec!["no writable component source".to_owned()])?;
         target.save(&component).map_err(|e| vec![e])?;
@@ -394,12 +469,15 @@ impl Library {
 
     /// Validate a render request and expand library references.
     pub fn prepare(&self, component: Option<&str>, props: Value, tree: Option<Value>) -> Result<Prepared, Vec<String>> {
+        self.refresh_folders();
         let mut errs = vec![];
         let props = if props.is_null() { json!({}) } else { props };
         let (root, name, version) = match (component, tree) {
             (Some(name), None) => {
-                let Some(c) = self.raw_get(name).map_err(|e| vec![e])? else {
-                    return Err(vec![format!("no component named `{name}`; call ui_catalog to see what exists")]);
+                let c = match self.resolve(name, false) {
+                    Resolved::Found(c) => c,
+                    Resolved::Missing(why) if qualified(name).is_some() => return Err(vec![why]),
+                    _ => return Err(vec![format!("no component named `{name}`; call ui_catalog to see what exists")]),
                 };
                 check_props(&c.props, &props, "props", &mut errs);
                 (json!({ "type": name, "props": props }), Some(name.to_owned()), Some(c.version))
@@ -413,17 +491,73 @@ impl Library {
         if !errs.is_empty() {
             return Err(errs);
         }
-        let tree = Expansion::new(self).expand(&root, &mut vec![], &mut errs);
+        let tree = Expansion::new(self).expand(&root, &mut vec![], false, &mut errs);
         if !errs.is_empty() {
             return Err(errs);
         }
         Ok(Prepared { component: name, version, tree, props })
     }
+}
 
-    /// Refuse a tree that contains itself, nests too deep, or expands past [`MAX_EXPANDED`].
-    fn check_cycles(&self, node: &Value, stack: &[String], errs: &mut Vec<String>) {
-        let mut stack = stack.to_vec();
-        Expansion::new(self).expand(node, &mut stack, errs);
+impl Resolve for Library {
+    fn resolve(&self, name: &str, in_library: bool) -> Resolved {
+        if let Some((lib, short)) = qualified(name) {
+            let packs = self.packs();
+            let Some(p) = packs.iter().find(|p| p.id() == lib) else {
+                return Resolved::Missing(format!("unknown type `{name}`: no component library `{lib}` is installed"));
+            };
+            if !p.record.enabled {
+                return Resolved::Missing(format!("`{name}` is in the component library `{lib}`, which is turned off"));
+            }
+            return match p.loaded.components.get(short) {
+                Some(c) => Resolved::Found(Rc::new(c.clone())),
+                None => Resolved::Missing(match p.loaded.entries.iter().find(|e| e.name == name).and_then(|e| e.error.as_deref()) {
+                    Some(why) => format!("`{name}` isn't loaded, its library has a problem with it: {why}"),
+                    None => format!("unknown type `{name}`: the component library `{lib}` has no component `{short}`"),
+                }),
+            };
+        }
+        // Inside a library only yaah's own: the user's local components differ from user to user.
+        for s in self.sources.iter().filter(|s| !in_library || s.id() == "yaah") {
+            match s.get(name) {
+                Ok(Some(c)) => return Resolved::Found(Rc::new(c)),
+                Ok(None) => {}
+                Err(e) => return Resolved::Missing(e),
+            }
+        }
+        Resolved::Missing(format!("unknown type `{name}`; use a primitive from ui_catalog or an existing component"))
+    }
+}
+
+/// The checks every stored component passes, whoever wrote it: a description,
+/// a props schema, a valid tree within the node and expansion budgets, and
+/// examples that fit the schema. `name` heads the expansion stack (a component
+/// can't contain itself).
+#[allow(clippy::too_many_arguments, reason = "the parts of a component, checked together")]
+pub(crate) fn check_contents(
+    name: &str,
+    description: &str,
+    props: &Value,
+    tree: &Value,
+    examples: &[Example],
+    lib: &dyn Resolve,
+    in_library: bool,
+    errs: &mut Vec<String>,
+) {
+    let before = errs.len();
+    if description.trim().len() < 10 {
+        errs.push("description must say what the component shows and when to use it".into());
+    }
+    if !props.is_object() || props.get("type").is_some_and(|t| t != "object") {
+        errs.push("props must be a JSON Schema object: { type: \"object\", properties: {...}, required: [...] }".into());
+    }
+    validate(tree, "tree", lib, &mut Ctx::default(), 0, errs);
+    // Refuse a tree that contains itself, nests too deep, or expands past [`MAX_EXPANDED`].
+    if errs.len() == before {
+        Expansion::new(lib).expand(tree, &mut vec![name.to_owned()], in_library, errs);
+    }
+    for (i, ex) in examples.iter().enumerate() {
+        check_props(props, &ex.props, &format!("examples[{i}].props"), errs);
     }
 }
 
@@ -433,27 +567,29 @@ type Uses = HashMap<String, Rc<BTreeSet<String>>>;
 /// One expansion of a tree: a single node budget for everything it pulls in,
 /// and each component read once.
 struct Expansion<'a> {
-    lib: &'a Library,
+    lib: &'a dyn Resolve,
     nodes: usize,
-    read: HashMap<String, Option<Rc<Component>>>,
+    read: HashMap<(bool, String), Resolved>,
 }
 
 impl<'a> Expansion<'a> {
-    fn new(lib: &'a Library) -> Self {
+    fn new(lib: &'a dyn Resolve) -> Self {
         Self { lib, nodes: 0, read: HashMap::new() }
     }
 
-    fn component(&mut self, name: &str) -> Option<Rc<Component>> {
-        if let Some(c) = self.read.get(name) {
+    fn component(&mut self, name: &str, in_library: bool) -> Resolved {
+        let key = (in_library && qualified(name).is_none(), name.to_owned());
+        if let Some(c) = self.read.get(&key) {
             return c.clone();
         }
-        let c = self.lib.raw_get(name).ok().flatten().map(Rc::new);
-        self.read.insert(name.to_owned(), c.clone());
+        let c = self.lib.resolve(name, in_library);
+        self.read.insert(key, c.clone());
         c
     }
 
     /// Replace library references with `$component` nodes holding their tree.
-    fn expand(&mut self, node: &Value, stack: &mut Vec<String>, errs: &mut Vec<String>) -> Value {
+    /// `in_library`: `node` is inside an installed library's component.
+    fn expand(&mut self, node: &Value, stack: &mut Vec<String>, in_library: bool, errs: &mut Vec<String>) -> Value {
         self.nodes += 1;
         if self.nodes > MAX_EXPANDED {
             // Said once; everything after it is skipped without more work.
@@ -469,7 +605,7 @@ impl<'a> Expansion<'a> {
         let mut out = obj.clone();
         for key in ["children", "else"] {
             if let Some(Value::Array(kids)) = obj.get(key) {
-                out.insert(key.into(), Value::Array(kids.iter().map(|k| self.expand(k, stack, errs)).collect()));
+                out.insert(key.into(), Value::Array(kids.iter().map(|k| self.expand(k, stack, in_library, errs)).collect()));
             }
         }
         let Some(t) = obj.get("type").and_then(Value::as_str) else { return Value::Object(out) };
@@ -484,12 +620,17 @@ impl<'a> Expansion<'a> {
             errs.push(format!("components nest more than {MAX_NESTING} deep: {}", stack.join(" → ")));
             return Value::Null;
         }
-        let Some(c) = self.component(t) else {
-            errs.push(format!("no component named `{t}`"));
-            return Value::Null;
+        let c = match self.component(t, in_library) {
+            Resolved::Found(c) => c,
+            Resolved::Missing(why) => {
+                errs.push(if qualified(t).is_some() || in_library { why } else { format!("no component named `{t}`") });
+                return Value::Null;
+            }
+            // Another library's, while one library is checked on its own.
+            Resolved::Unchecked => return Value::Null,
         };
         stack.push(t.to_owned());
-        let inner = self.expand(&c.tree, stack, errs);
+        let inner = self.expand(&c.tree, stack, in_library || qualified(t).is_some(), errs);
         stack.pop();
         json!({
             "type": "$component",
@@ -506,23 +647,42 @@ struct Ctx {
     nodes: usize,
 }
 
-fn primitives() -> &'static Value {
+pub(crate) fn primitives() -> &'static Value {
     static P: OnceLock<Value> = OnceLock::new();
     P.get_or_init(|| serde_json::from_str(PRIMITIVES_JSON).expect("ui-primitives.json is valid JSON"))
 }
 
-fn primitive(name: &str) -> Option<&'static Map<String, Value>> {
+pub(crate) fn primitive(name: &str) -> Option<&'static Map<String, Value>> {
     primitives()["primitives"].get(name)?.as_object()
 }
 
-fn is_primitive(name: &str) -> bool {
+pub(crate) fn is_primitive(name: &str) -> bool {
     primitive(name).is_some()
 }
 
 /// Errors past this many are dropped: enough for the agent to fix, not a flood.
 const MAX_ERRORS: usize = 50;
 
-fn validate(node: &Value, path: &str, lib: &Library, ctx: &mut Ctx, depth: usize, errs: &mut Vec<String>) {
+/// Visit every object node of a tree (through `children` and `else`), at most
+/// [`MAX_NODES`] of them: what a library reads and refers to is found this way.
+pub(crate) fn walk_nodes(tree: &Value, f: &mut dyn FnMut(&Map<String, Value>)) {
+    fn go(node: &Value, f: &mut dyn FnMut(&Map<String, Value>), seen: &mut usize, depth: usize) {
+        *seen += 1;
+        if *seen > MAX_NODES || depth > MAX_DEPTH + 1 {
+            return;
+        }
+        let Some(obj) = node.as_object() else { return };
+        f(obj);
+        for key in ["children", "else"] {
+            for kid in obj.get(key).and_then(Value::as_array).into_iter().flatten() {
+                go(kid, f, seen, depth + 1);
+            }
+        }
+    }
+    go(tree, f, &mut 0, 0);
+}
+
+fn validate(node: &Value, path: &str, lib: &dyn Resolve, ctx: &mut Ctx, depth: usize, errs: &mut Vec<String>) {
     ctx.nodes += 1;
     // Stop walking a tree that is too big; say so once.
     if ctx.nodes > MAX_NODES {
@@ -602,10 +762,10 @@ fn validate(node: &Value, path: &str, lib: &Library, ctx: &mut Ctx, depth: usize
             }
             walk("children", ctx, errs);
         } else {
-            match lib.raw_get(t) {
-                Ok(Some(c)) => check_props(&c.props, &Value::Object(props.clone()), &format!("{path}.props"), errs),
-                Ok(None) => errs.push(format!("{path}: unknown type `{t}`; use a primitive from ui_catalog or an existing component")),
-                Err(e) => errs.push(e),
+            match lib.resolve(t, false) {
+                Resolved::Found(c) => check_props(&c.props, &Value::Object(props.clone()), &format!("{path}.props"), errs),
+                Resolved::Missing(why) => errs.push(format!("{path}: {why}")),
+                Resolved::Unchecked => {}
             }
             if obj.contains_key("children") {
                 errs.push(format!("{path}: library components take props, not children"));
@@ -646,7 +806,7 @@ fn check_value(spec: &Value, v: &Value, path: &str, errs: &mut Vec<String>) {
 
 /// Check props against a component's JSON Schema: required keys and the
 /// top-level type of each property.
-fn check_props(schema: &Value, props: &Value, path: &str, errs: &mut Vec<String>) {
+pub(crate) fn check_props(schema: &Value, props: &Value, path: &str, errs: &mut Vec<String>) {
     let Some(props) = props.as_object() else {
         errs.push(format!("{path}: must be an object"));
         return;
@@ -684,13 +844,13 @@ fn type_matches(want: &str, v: &Value) -> bool {
     }
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     (2..=48).contains(&name.len())
         && name.starts_with(|c: char| c.is_ascii_lowercase())
         && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
 }
 
@@ -803,6 +963,7 @@ mod tests {
             updated_at: 0,
             source: String::new(),
             uses: vec![],
+            library: None,
         }
     }
 

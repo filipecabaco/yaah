@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use yaah_lib::agent_guide::{self, Guide};
 use yaah_lib::agents::{self, Draft, Store};
 use yaah_lib::login::Logins;
 use yaah_lib::projects::{Project, Status};
@@ -37,6 +38,9 @@ fn main() {
         ("auth_errors_ask_for_a_login", auth_errors_ask_for_a_login),
         ("logins_run_the_agents_methods", logins_run_the_agents_methods),
         ("an_agent_cant_write_into_or_take_over_another_agents_chat", an_agent_cant_write_into_or_take_over_another_agents_chat),
+        ("the_ui_guide_goes_in_the_acp_system_prompt_when_advertised", the_ui_guide_goes_in_the_acp_system_prompt_when_advertised),
+        ("the_ui_guide_goes_with_the_first_prompt_otherwise", the_ui_guide_goes_with_the_first_prompt_otherwise),
+        ("claude_gets_the_ui_guide_and_plugin_beside_allowed_tools", claude_gets_the_ui_guide_and_plugin_beside_allowed_tools),
     ];
     let filters: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let chosen: Vec<_> = tests.iter().filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))).collect();
@@ -81,19 +85,28 @@ impl Fixture {
 
     /// Another profile running the scripted agent; returns its id.
     fn add_profile(&self, label: &str, env: &[(&str, &str)]) -> String {
+        self.add_profile_as(label, agents::CUSTOM, env)
+    }
+
+    /// A profile of a given preset (`claude`, say) that runs the scripted agent.
+    fn add_profile_as(&self, label: &str, preset: &str, env: &[(&str, &str)]) -> String {
         let exe = std::env::current_exe().unwrap();
-        let mut draft = Draft {
-            label: label.into(),
-            preset: agents::CUSTOM.into(),
-            command_line: agents::join_args([exe.to_string_lossy()]),
-            ..Draft::default()
-        };
+        let mut draft =
+            Draft { label: label.into(), preset: preset.into(), command_line: agents::join_args([exe.to_string_lossy()]), ..Draft::default() };
         draft.env.insert(agent::ENV.into(), "1".into());
         draft.env.insert("YAAH_AGENT_LOG".into(), self.dir.join("agent.log").to_string_lossy().into_owned());
         for (k, v) in env {
             draft.env.insert((*k).into(), (*v).into());
         }
         self.profiles.save(&draft).unwrap().0.id
+    }
+
+    /// As in the app: a UI server for agents that reach HTTP MCP servers (nothing
+    /// listens; the scripted agent never connects), and yaah's UI guide, its
+    /// skills written under the test's folder.
+    fn teach(&self) {
+        self.hub.set_ui_port(1);
+        self.hub.set_guide(Arc::new(Guide::new(self.dir.join("yaah-home"), || vec!["test-report".into(), "acme/pr-card".into()], || true)));
     }
 
     /// Flush, as the app does on exit, and open the store again in a new Hub (the
@@ -251,6 +264,7 @@ fn project_chats_send_the_brief_and_folders_once() {
         status: Status::Ongoing,
         created_at: 0,
         context_dir: ctx.to_string_lossy().into(),
+        link: None,
     };
     let info = tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Project(&project), ACCOUNT)).unwrap();
     assert_eq!((info.project_id.as_deref(), info.cwd.as_str()), (Some("p1"), repo.to_str().unwrap()));
@@ -509,4 +523,101 @@ fn an_agent_cant_write_into_or_take_over_another_agents_chat() {
     assert_eq!(last_agent_text(&f.turn(&mine, "echo still mine")), "echo: echo still mine");
     f.restart();
     assert_eq!(f.hub.transcript(&mine).unwrap().entries.len(), before + 2, "its saved transcript wasn't overwritten");
+}
+
+// ── What agents are told about yaah's UI (agent_guide.rs) ──────────────────
+
+const GUIDE_START: &str = "# You are running inside yaah";
+
+/// The generic route for an agent that advertises it: the ACP `systemPrompt`,
+/// on `session/new` and again on `session/load`; nothing in the prompts.
+fn the_ui_guide_goes_in_the_acp_system_prompt_when_advertised() {
+    let mut f = Fixture::new(&[("YAAH_AGENT_MCP_HTTP", "1"), ("YAAH_AGENT_SYSTEM_PROMPT", "1")]);
+    f.teach();
+    let sid = f.chat();
+    let new = f.requests("session/new").pop().unwrap();
+    assert_eq!(new["mcpServers"][0]["name"], "yaah-ui");
+    assert_eq!(new["systemPrompt"]["mode"], "append");
+    let guide = new["systemPrompt"]["content"][0]["text"].as_str().unwrap();
+    assert!(guide.starts_with(GUIDE_START) && guide.contains("test-report, acme/pr-card."), "{guide}");
+    assert!(new.get("_meta").is_none(), "no Claude extras for another agent");
+
+    let t = f.turn(&sid, "echo hi");
+    assert_eq!(last_agent_text(&t), "echo: echo hi");
+    assert_eq!(f.requests("session/prompt")[0]["prompt"].as_array().unwrap().len(), 1, "nothing added to the prompt");
+    assert!(matches!(&t.entries[0], Entry::User { attachments, .. } if attachments.is_empty()));
+
+    f.restart();
+    f.teach();
+    f.turn(&sid, "echo again");
+    let load = f.requests("session/load").pop().unwrap();
+    assert_eq!(load["systemPrompt"]["content"][0]["text"], json!(guide), "the same guide on session/load");
+}
+
+/// The fallback: an agent with no `systemPrompt` gets the guide once, at the top of the first prompt.
+fn the_ui_guide_goes_with_the_first_prompt_otherwise() {
+    let f = Fixture::new(&[("YAAH_AGENT_MCP_HTTP", "1")]);
+    f.teach();
+    let sid = f.chat();
+    let new = f.requests("session/new").pop().unwrap();
+    assert!(new.get("systemPrompt").is_none() && new.get("_meta").is_none());
+
+    let t = f.turn(&sid, "echo first");
+    assert_eq!(last_agent_text(&t), "echo: echo first", "the user's text is still what the agent answers");
+    f.turn(&sid, "echo second");
+    let prompts = f.requests("session/prompt");
+    let first = prompts[0]["prompt"].as_array().unwrap();
+    assert_eq!(first.len(), 2);
+    assert!(first[0]["text"].as_str().unwrap().starts_with(GUIDE_START), "the guide comes first: {first:?}");
+    assert_eq!(first[1]["text"], "echo first");
+    assert_eq!(prompts[1]["prompt"].as_array().unwrap().len(), 1, "the guide goes once");
+    let t = f.hub.transcript(&sid).unwrap();
+    assert!(
+        matches!(&t.entries[0], Entry::User { text, attachments } if text == "echo first" && attachments == &[agent_guide::ATTACHMENT]),
+        "the chat shows it was attached, not its text: {:?}",
+        t.entries[0]
+    );
+
+    // An agent without yaah's UI server isn't told about it.
+    let f = Fixture::new(&[]);
+    f.teach();
+    let sid = f.chat();
+    f.turn(&sid, "echo plain");
+    assert_eq!(f.requests("session/prompt")[0]["prompt"].as_array().unwrap().len(), 1);
+    assert!(f.requests("session/new")[0].get("systemPrompt").is_none());
+}
+
+/// The Claude adapter on top of the generic routes: the plugin wrapping the
+/// skills, and `_meta.systemPrompt` only when the ACP `systemPrompt` isn't there,
+/// all merged with the `allowedTools` yaah already sends.
+fn claude_gets_the_ui_guide_and_plugin_beside_allowed_tools() {
+    let f = Fixture::new(&[]);
+    f.teach();
+    let older = f.add_profile_as("Claude (older adapter)", agents::CLAUDE, &[("YAAH_AGENT_MCP_HTTP", "1")]);
+    let newer = f.add_profile_as("Claude", agents::CLAUDE, &[("YAAH_AGENT_MCP_HTTP", "1"), ("YAAH_AGENT_SYSTEM_PROMPT", "1")]);
+    let plugin = f.dir.join("yaah-home/agent-plugin");
+    let chat =
+        |account: &str| tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Folder(f.dir.to_string_lossy().into_owned()), account)).unwrap();
+
+    chat(&older);
+    let new = f.requests("session/new").pop().unwrap();
+    let options = &new["_meta"]["claudeCode"]["options"];
+    assert!(options["allowedTools"].as_array().unwrap().iter().any(|t| t == "mcp__yaah-ui__ui_render"), "allowedTools still there");
+    assert_eq!(options["plugins"], json!([{ "type": "local", "path": plugin }]));
+    assert!(new["_meta"]["systemPrompt"]["append"].as_str().unwrap().starts_with(GUIDE_START));
+    assert!(new.get("systemPrompt").is_none());
+    assert!(
+        plugin.join(".claude-plugin/plugin.json").is_file() && plugin.join("skills/yaah-ui/SKILL.md").is_file(),
+        "written before it's handed over"
+    );
+    assert!(f.dir.join("yaah-home/agent-skills/yaah-components/SKILL.md").is_file(), "the canonical skills too");
+
+    let sid = chat(&newer).session_id;
+    let new = f.requests("session/new").pop().unwrap();
+    assert!(new["systemPrompt"]["content"][0]["text"].as_str().unwrap().starts_with(GUIDE_START), "the spec param when advertised");
+    assert!(new["_meta"].get("systemPrompt").is_none(), "and no _meta copy");
+    assert_eq!(new["_meta"]["claudeCode"]["options"]["plugins"][0]["type"], "local");
+    assert!(new["_meta"]["claudeCode"]["options"]["allowedTools"].is_array());
+    f.turn(&sid, "echo hi");
+    assert_eq!(f.requests("session/prompt").pop().unwrap()["prompt"].as_array().unwrap().len(), 1, "no first-prompt copy");
 }

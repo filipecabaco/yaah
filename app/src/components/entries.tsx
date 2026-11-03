@@ -18,6 +18,8 @@ import {
   Loader2,
   LogIn,
   Paperclip,
+  Pencil,
+  Quote,
   Search,
   ShieldQuestion,
   SquareTerminal,
@@ -31,14 +33,15 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CopyMenu, type MenuAction } from "@/components/menus";
-import { useChat } from "@/components/chat-context";
+import { draftIntoComposer, useChat } from "@/components/chat-context";
 import { TextDiff, UiTree } from "@/components/ui-render";
 import type { FormHost } from "@/components/ui-form-host";
 import { api, type Entry, type ToolContent } from "@/lib/api";
-import { openSettings } from "@/lib/app-events";
+import { openComponent, openSettings } from "@/lib/app-events";
 import { plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
 import { cn } from "@/lib/utils";
+import { uiToolLabel } from "@/lib/ui-tool-label";
 
 type Of<T extends Entry["type"]> = Extract<Entry, { type: T }>;
 
@@ -49,11 +52,13 @@ type EntryProps = {
   inTurn: boolean;
   /** The last entry of the running turn (a thought still being written). */
   live: boolean;
+  /** For a permission: the input of the tool call it asks about, if known. */
+  toolInput?: unknown;
   onLogin: (accountId: string) => void;
 };
 
 /** One transcript entry. Re-renders only when its own entry or position in the turn changes. */
-export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inTurn, live, onLogin }: EntryProps) {
+export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inTurn, live, toolInput, onLogin }: EntryProps) {
   switch (entry.type) {
     case "user":
       return <UserMessage entry={entry} />;
@@ -66,7 +71,7 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inT
     case "plan":
       return <Plan entry={entry} />;
     case "permission":
-      return <Permission entry={entry} index={index} />;
+      return <Permission entry={entry} index={index} toolInput={toolInput} />;
     case "ui":
       return <UiEntry entry={entry} index={index} />;
     case "error":
@@ -76,10 +81,21 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inT
   }
 });
 
+/** `text` as a Markdown quote, ready for a reply below it. */
+const quoted = (text: string) =>
+  text
+    .trim()
+    .split("\n")
+    .map((l) => (l ? `> ${l}` : ">"))
+    .join("\n") + "\n\n";
+
 function UserMessage({ entry }: { entry: Of<"user"> }) {
   return (
     <div className="flex flex-col items-end gap-1">
-      <CopyMenu actions={[{ label: "Copy text", text: () => entry.text }]}>
+      <CopyMenu
+        act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }) }]}
+        actions={[{ label: "Copy text", text: () => entry.text }]}
+      >
         <div className="max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{entry.text}</div>
       </CopyMenu>
       {entry.attachments.length > 0 && (
@@ -97,7 +113,11 @@ function UserMessage({ entry }: { entry: Of<"user"> }) {
 
 function AgentMessage({ entry }: { entry: Of<"agent"> }) {
   return (
-    <CopyMenu actions={[{ label: "Copy text", text: () => entry.text }]}>
+    <CopyMenu
+      // The selected part of this message, if any; else all of it.
+      act={(t) => [{ label: "Quote in reply", icon: <Quote />, onSelect: () => draftIntoComposer({ text: quoted(t.ownSelection || entry.text) }) }]}
+      actions={[{ label: "Copy text", text: () => entry.text }]}
+    >
       <div className="text-sm">
         <Markdown>{entry.text}</Markdown>
       </div>
@@ -190,9 +210,14 @@ function ToolCall({ entry, turnActive }: { entry: Of<"tool">; turnActive: boolea
     setOpen(wanted);
   }
   const Icon = TOOL_ICONS[entry.kind ?? ""] ?? Wrench;
+  const ui = uiToolLabel(entry.title, entry.status, entry.rawInput);
   const hasBody = entry.content.length > 0 || entry.rawInput != null;
   const copyActions = [{ label: "Copy title", text: () => entry.title }];
   if (entry.rawInput != null) copyActions.push({ label: "Copy input", text: () => JSON.stringify(entry.rawInput, null, 2) });
+  const output = toolOutput(entry.content);
+  if (output) copyActions.push({ label: "Copy output", text: () => output });
+  const paths = toolPaths(entry);
+  if (paths.length) copyActions.push({ label: paths.length === 1 ? "Copy file path" : "Copy file paths", text: () => paths.join("\n") });
   const like = cardKeyLabel(key);
   const extra: MenuAction[] = RULE_ACTIONS.filter((a) => a.mode !== mode).map(({ mode, label, icon: I }) => ({
     label: label(like),
@@ -206,11 +231,15 @@ function ToolCall({ entry, turnActive }: { entry: Of<"tool">; turnActive: boolea
     <CopyMenu actions={copyActions} extra={extra}>
       <Collapsible open={open && hasBody} onOpenChange={setOpen} className="rounded-lg border bg-card">
         <CollapsibleTrigger disabled={!hasBody} className="group flex w-full items-center gap-2 px-3 py-2 text-left text-sm">
-          <Icon className="size-4 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1 truncate font-mono text-xs" title={entry.title}>
-            {toolTitle(entry.title)}
+          {ui?.busy ? (
+            <Loader2 className="size-4 shrink-0 animate-spin text-brand" aria-hidden />
+          ) : (
+            <Icon className="size-4 shrink-0 text-muted-foreground" />
+          )}
+          <span className={cn("min-w-0 flex-1 truncate text-xs", !ui && "font-mono")} title={entry.title}>
+            {ui ? ui.text : toolTitle(entry.title)}
           </span>
-          <StatusBadge status={entry.status} />
+          {ui?.busy ? <span className="sr-only">in progress</span> : <StatusBadge status={entry.status} />}
           {hasBody && <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />}
         </CollapsibleTrigger>
         <CollapsibleContent>
@@ -225,6 +254,17 @@ function ToolCall({ entry, turnActive }: { entry: Of<"tool">; turnActive: boolea
       </Collapsible>
     </CopyMenu>
   );
+}
+
+/** The text a tool returned, if any. */
+function toolOutput(content: ToolContent[]): string {
+  return content.flatMap((c) => (c.type === "content" && c.content.text ? [c.content.text] : [])).join("\n\n");
+}
+
+/** The files a tool call touched: its locations and the paths of its diffs. */
+function toolPaths(entry: Of<"tool">): string[] {
+  const paths = [...entry.locations.map((l) => l.path), ...entry.content.flatMap((c) => (c.type === "diff" ? [c.path] : []))];
+  return [...new Set(paths.filter(Boolean))];
 }
 
 function ToolContentView({ content }: { content: ToolContent }) {
@@ -271,7 +311,7 @@ const OPTION_VARIANT: Record<string, "default" | "secondary" | "outline" | "dest
   reject_always: "destructive",
 };
 
-function Permission({ entry, index }: { entry: Of<"permission">; index: number }) {
+function Permission({ entry, index, toolInput }: { entry: Of<"permission">; index: number; toolInput?: unknown }) {
   const chat = useChat();
   const [sending, setSending] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -285,41 +325,44 @@ function Permission({ entry, index }: { entry: Of<"permission">; index: number }
       .catch(setError)
       .finally(() => setSending(null));
   };
+  const request = () => (toolInput == null ? entry.title : `${entry.title}\n\n${JSON.stringify(toolInput, null, 2)}`);
   return (
-    <div
-      role="group"
-      aria-label="Permission requested"
-      className={cn("rounded-lg border px-3 py-2", pending && "border-amber-500/60 bg-amber-500/5")}
-    >
-      <div className="flex items-start gap-2 text-sm">
-        <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600" />
-        <div className="min-w-0 flex-1">
-          <div className="font-medium">Permission requested</div>
-          <div className="truncate font-mono text-xs text-muted-foreground" title={entry.title}>
-            {entry.title}
+    <CopyMenu actions={[{ label: "Copy request", text: request }]}>
+      <div
+        role="group"
+        aria-label="Permission requested"
+        className={cn("rounded-lg border px-3 py-2", pending && "border-amber-500/60 bg-amber-500/5")}
+      >
+        <div className="flex items-start gap-2 text-sm">
+          <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600" />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">Permission requested</div>
+            <div className="truncate font-mono text-xs text-muted-foreground" title={entry.title}>
+              {entry.title}
+            </div>
           </div>
         </div>
+        {pending ? (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {entry.options.map((o) => (
+              <Button
+                key={o.optionId}
+                size="sm"
+                variant={OPTION_VARIANT[o.kind] ?? "outline"}
+                disabled={!chat || sending != null}
+                onClick={() => respond(o.optionId)}
+              >
+                {sending === o.optionId && <Loader2 className="animate-spin" />}
+                {o.name}
+              </Button>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-1 text-xs text-muted-foreground">→ {entry.chosen}</div>
+        )}
+        <ErrorText error={error} className="mt-1" />
       </div>
-      {pending ? (
-        <div className="mt-2 flex flex-wrap gap-2">
-          {entry.options.map((o) => (
-            <Button
-              key={o.optionId}
-              size="sm"
-              variant={OPTION_VARIANT[o.kind] ?? "outline"}
-              disabled={!chat || sending != null}
-              onClick={() => respond(o.optionId)}
-            >
-              {sending === o.optionId && <Loader2 className="animate-spin" />}
-              {o.name}
-            </Button>
-          ))}
-        </div>
-      ) : (
-        <div className="mt-1 text-xs text-muted-foreground">→ {entry.chosen}</div>
-      )}
-      <ErrorText error={error} className="mt-1" />
-    </div>
+    </CopyMenu>
   );
 }
 
@@ -412,7 +455,16 @@ function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
     [entry.answer, entry.askId, entry.draft, entry.draftBy, sessionId, index],
   );
   return (
-    <CopyMenu actions={[{ label: "Copy props JSON", text: () => JSON.stringify(entry.props, null, 2) }]}>
+    <CopyMenu
+      act={() => {
+        const name = entry.component;
+        return name ? [{ label: "Open in Component library", icon: <LayoutPanelTop />, onSelect: () => openComponent(name) }] : [];
+      }}
+      actions={[
+        { label: "Copy UI JSON", text: () => JSON.stringify(entry.tree, null, 2) },
+        { label: "Copy props JSON", text: () => JSON.stringify(entry.props, null, 2) },
+      ]}
+    >
       <figure className="flex flex-col gap-1.5">
         <figcaption className="flex items-center gap-1.5 text-xs text-muted-foreground">
           <LayoutPanelTop className="size-3" />

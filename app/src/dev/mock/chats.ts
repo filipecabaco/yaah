@@ -2,10 +2,31 @@
 // a recorded chat chosen by keywords in the prompt (see `routes`). A replay
 // pauses on a permission card until `respond_permission`, and on a form the
 // agent asked with (ui_ask) until `answer_ui`; `cancel_turn` stops it.
-import type { Entry, SessionInfo, SlashCommand } from "@/lib/api";
+import type { Entry, Project, SessionInfo, SlashCommand } from "@/lib/api";
 import { baseName, home, need, now, type Mock, type Replies } from "./context";
 import { recordings, type Recording } from "./fixtures";
 import { addProject } from "./projects";
+
+/** A new, empty chat (session.rs `new_session`). */
+export function openChat({ state }: Mock, fields: Pick<SessionInfo, "projectId" | "accountId" | "cwd" | "additionalDirs">): SessionInfo {
+  const sessionId = `replay-${state.nextChat++}`;
+  state.transcripts[sessionId] = [];
+  return (state.sessions[sessionId] = {
+    sessionId,
+    ...fields,
+    title: "New chat",
+    running: false,
+    stopReason: null,
+    commands: slashCommands,
+    createdAt: now(),
+  });
+}
+
+/** A chat in a project, running in its first folder (session.rs `ChatTarget::Project`). */
+export function openProjectChat(m: Mock, p: Project, accountId: string): SessionInfo {
+  const [cwd = p.contextDir, ...rest] = p.dirs;
+  return openChat(m, { projectId: p.id, accountId, cwd, additionalDirs: p.dirs.length ? [...rest, p.contextDir] : [] });
+}
 
 /** The replay answering a chat's latest prompt. */
 type Turn = { cancelled: boolean; resume?: () => void; answered: Set<number> };
@@ -102,9 +123,36 @@ const notices: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
+/** The prompt, then a Markdown reply with links (one web, one not) and a code block. */
+const markdownReply: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  {
+    event: "session-entry",
+    index: 1,
+    entry: {
+      type: "agent",
+      text: [
+        "The retry logic follows the [ACP spec](https://agentclientprotocol.com/protocol/overview) and is set in [config.toml](config.toml).",
+        "",
+        "Run it with:",
+        "",
+        "```sh",
+        "cargo test --lib retry",
+        "```",
+        "",
+        "It backs off up to five times.",
+      ].join("\n"),
+      messageId: null,
+    },
+  },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
 const routes: [RegExp, Recording][] = [
   [/big diff/i, bigDiff],
+  [/\blinks?\b|markdown/i, markdownReply],
   [/notices|mcp servers?\b/i, notices],
   [/yaah (ui tools|components)|docker|bug report/i, recordings.pack],
   [/side project|weekend/i, recordings.ask],
@@ -141,19 +189,7 @@ export function chatReplies(m: Mock): Replies {
     return m.emit("session-entry", { sessionId, index, entry });
   };
 
-  const open = (fields: Pick<SessionInfo, "projectId" | "accountId" | "cwd" | "additionalDirs">): SessionInfo => {
-    const sessionId = `replay-${state.nextChat++}`;
-    state.transcripts[sessionId] = [];
-    return (state.sessions[sessionId] = {
-      sessionId,
-      ...fields,
-      title: "New chat",
-      running: false,
-      stopReason: null,
-      commands: slashCommands,
-      createdAt: now(),
-    });
-  };
+  const open = (fields: Pick<SessionInfo, "projectId" | "accountId" | "cwd" | "additionalDirs">) => openChat(m, fields);
 
   /** Replays the recording for `text`, after what the chat already shows. */
   async function replay(sessionId: string, text: string, mentions: string[]) {
@@ -204,8 +240,7 @@ export function chatReplies(m: Mock): Replies {
         state.projects.find((x) => x.id === projectId),
         `no project ${projectId}`,
       );
-      const [cwd = p.contextDir, ...rest] = p.dirs;
-      return open({ projectId, accountId, cwd, additionalDirs: p.dirs.length ? [...rest, p.contextDir] : [] });
+      return openProjectChat(m, p, accountId);
     },
     new_quick_chat: ({ accountId, dir }: { accountId: string; dir: string | null }): SessionInfo =>
       open({ projectId: null, accountId, cwd: dir ?? `${home}/.yaah/scratch/3f9c2a7e41d0`, additionalDirs: [] }),

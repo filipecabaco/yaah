@@ -1,0 +1,130 @@
+# Review: open work items from the research
+
+Updated 3 November 2026. One place to review what the recent research found and what is still to decide or build.
+Each item links to its source. Tick an item or write a decision next to it, and it becomes the next task.
+
+**Sources:**
+- Research: [`docs/research/`](docs/research/)
+- Screenshots and experiment notes: [`docs/experiments/`](docs/experiments/)
+- Plan: [`PLAN.md`](PLAN.md)
+
+**State of the code:** everything below is built but **uncommitted** on `main`, since the last commit `2695665` (security fixes). All checks pass:
+- `cargo fmt`
+- `clippy -D warnings`
+- Rust: 149 lib tests, plus the acp_e2e, docker and postgres suites
+- `cargo deny`
+- `pnpm check`: 116 tests
+- `pnpm build`
+
+What's in that uncommitted work:
+- component libraries
+- brand
+- the "Assembling UI" card
+- context menus
+- projects from tracker items
+- GitLab
+- teaching agents yaah's UI
+
+---
+
+## 1. Agents using yaah's UI
+
+Sources: [component-model-review.md](docs/research/component-model-review.md);
+experiments [before](docs/experiments/2026-11-03-component-model-live-test/) and
+[after](docs/experiments/2026-11-03-agent-guide-live-test/).
+
+**Result.** After teaching agents about yaah, Sonnet used yaah's UI in **5 of 6** prompts, up from 2 of 6. Codex used it in **3 of 3**.
+
+**How agents are taught.** yaah ships one skill set in the open Agent Skills format and delivers it the same way to every agent:
+- its MCP server: `ui_guide`, plus the skills as resources and prompts;
+- the ACP `systemPrompt`, when the agent supports it;
+- a fallback in the chat's first prompt.
+
+Claude's plugin is an optional extra on top.
+
+- [ ] **PDF is the one miss.** The agent said yaah has no PDF viewer and rendered nothing. Fixed by item 2.2 below.
+- [ ] **Unprefixed tool names.** The agent called `ui_catalog`/`ui_guide` without the `mcp__yaah-ui__` prefix and got "No such tool" twice. Should the guide spell out the full names, or is this agent-specific?
+- [ ] **Gemini not measured.** Gemini CLI 0.63 gets the first-prompt fallback but wasn't measured, because it needs a yaah agent profile. Add one and run the live test (`src-tauri/src/live_ui_review.rs`, `#[ignore]`).
+- [ ] **Codex skills.** Codex can only load skills from `<extra dir>/.agents/skills`, which would make that folder a trusted, writable root. It was not done; Codex uses the generic routes. Decide whether that's acceptable.
+- [ ] **Save-component errors** are still raw serde messages. The guide avoided them in the test, but they're unfixed ([review](docs/research/component-model-review.md), item 2).
+
+## 2. Component model: what to build next
+
+Source: [component-model-review.md → "What to do"](docs/research/component-model-review.md#what-to-do-merged-ranking) (ranked, with effort and security impact).
+
+- [ ] **2.1 Serve media from the preview server.** pdf, mp4, webm, mp3, vtt, glb, with HTTP Range support. Without it, local video and PDFs fail without an error. (S–M)
+- [ ] **2.2 A `pdf` primitive** (pdf.js: page, find, highlight). (M)
+- [ ] **2.3 A `video`/`audio` primitive** (captions, chapters, `at`), plus `media-src` in the CSP. (M)
+- [ ] **2.4 A `slides` primitive and a controlled `tabs`**, so the agent can say "go to slide 3". Codex already improvised slides from buttons. (M)
+- [ ] **2.5 Progressive-disclosure catalog.** `ui_catalog` is about 9k tokens and grows with every installed library. (M)
+- [ ] **2.6 Library `requires` / `fallback`**, and a clear "unknown primitive" error. (S)
+- [ ] **2.7 Catalog honesty tests:** every primitive has a renderer, and every `uses` resolves to a dependency. (S)
+- [ ] **2.8 Standard formats for new visual primitives:** Vega-Lite, GeoJSON, Excalidraw, glTF. (M each)
+- [ ] **2.9 Data-only updates by `id`** (`ui_update`), and streaming if ACP exposes partial tool input. (M)
+
+## 3. Standards: MCP Apps and A2UI
+
+Source: [component-model-review.md → Prior art](docs/research/component-model-review.md#prior-art-condensed).
+
+**Today:** yaah's `ui_render` is its own JSON tree format (the A2UI / ChatKit family). It doesn't comply with MCP Apps or A2UI.
+
+- [ ] **Decide:** add a sandboxed `app` node that speaks the **MCP Apps** view protocol. That gives kanban drags, whiteboards, games and 3D a two-way channel, and lets library widgets run in Claude, ChatGPT and VS Code too. Effort L. Prerequisite: a separate origin per chat or library (all previews share one origin today).
+- [ ] **Decide:** may git component libraries ship widgets (`code: true`, sandboxed only)? Never as code inside the app.
+- [ ] **Investigate:** can yaah show third-party MCP Apps? Claude Code, not yaah, is the MCP client for the agent's other servers. Check whether ACP passes their `_meta.ui` through.
+- [ ] **Later, optional:** import A2UI, so A2UI-speaking agents can render in yaah.
+
+## 4. Integrations
+
+Source: [integrations-shortlist.md](docs/research/integrations-shortlist.md).
+
+- [ ] **Pick what comes next.** Recommended: **Sentry issues** (device flow, S–M) and **GitHub Actions runs and logs** (existing token, S).
+- [ ] **Decide:** a generic MCP OAuth client (DCR + PKCE). It would unlock Notion, Atlassian (Jira, Confluence) and Datadog through their hosted MCP servers, since their REST APIs have no public client.
+- [ ] **Jira:** API token now, or wait for Rovo MCP?
+- [ ] **PagerDuty / Vercel / Slack:** each has an auth caveat; see the table.
+
+## 5. Projects from tracker items
+
+Sources: [codrift-issue-import.md](docs/research/codrift-issue-import.md), [work-items-contract.md](docs/research/work-items-contract.md),
+[screenshots](docs/experiments/2026-11-03-projects-from-issues/).
+
+**Built:** GitHub issues, Linear issues and projects, GitLab issues; pasting a URL or id works; local clones are matched; a chat opens with the prompt drafted; a live item on the project page; refresh and unlink. No branches (your choice).
+
+- [ ] **First real run against Linear.** Four GraphQL assumptions are untested (`ProjectFilter.status.type`, `members.some.isMe`, `project(id:)` taking a slugId, `Project.content`). The newest comments may be missing on issues with more than 30.
+- [ ] **A revoked GitLab token still shows "Connected"** in Settings, while the picker says the token was refused. Show the refusal in Settings too?
+- [ ] **`owner/repo#12` is ambiguous** between GitHub and GitLab. It means GitHub unless only GitLab is connected. OK?
+- [ ] **Relation filter:** "Assigned" includes Linear projects you lead; projects where you're only a member appear only under "All". OK?
+- [ ] **GitLab OAuth needs an app.** Register one (redirect `http://127.0.0.1:43117/oauth/callback/gitlab`, not confidential, scopes `read_api read_user`) and set `YAAH_GITLAB_CLIENT_ID`. Tokens work today without it.
+
+## 6. Component libraries
+
+Source: [component-libraries-contract.md](docs/research/component-libraries-contract.md); README "Component libraries".
+
+- [ ] **Never tried in the running app.** Tested only by Rust tests and the UI mock. Try "Share as library…", then install the folder from Settings → Components.
+- [ ] **No public library or curated index exists yet.** Do we want one, or is git enough?
+
+## 7. Security
+
+Source: [security-review.md](docs/research/security-review.md). All 9 findings are fixed in `2695665`.
+
+- [ ] **OAuth client ids** for GitHub and Linear are codrift's registered apps. Register yaah's own before shipping.
+- [ ] **CSP is untested in a release build** (`pnpm tauri build`); dev builds don't apply a CSP.
+- [ ] **`localhost` dev servers in `browser`** are probably blocked in release (`frame-src` only allows `127.0.0.1`).
+- [ ] **Previewed pages share one origin**, so their storage is shared. Fix this before any third-party widget (item 3).
+- [ ] **Other informational items:** the broad GitHub `repo` scope, MCP secrets over IPC, UI tokens that never expire, unpinned npx dependencies, image-URL leaks from previews.
+- [ ] **Your `shop` Postgres connection** signs in as a superuser and is now refused. Create the `yaah_ro` role (README → Live sources).
+
+## 8. Brand and interface: needs a look in the real app
+
+Screenshots of earlier UI checks: [earlier-ui-checks](docs/experiments/earlier-ui-checks/).
+
+- [ ] **Brand:** the four-tile mark (sidebar, home, app icon from `src-tauri/icons/source/icon.svg`) and the start-up sliding-logo loader (`index.html`). The loader is meant for the website later. Approve the mark and colour?
+- [ ] **The "Assembling UI" card:** a spinner while an agent builds UI or stores a component, then the UI's title. Check it in a live chat (only unit-tested so far).
+- [ ] **"Quote in reply"** reads the selection at right-click. Check it in WebKit, which selects the word under the pointer.
+- [ ] **The Component library page** is cramped below about 700 px wide (two fixed-width side columns).
+- [ ] **Streamed messages** slow down as a reply gets long (cost grows with the square of its length).
+
+## 9. Housekeeping
+
+- [ ] **Commit the work above** (needs your OK; the earlier permission covered the security review only).
+- [ ] **`src-tauri/src/live_ui_review.rs`** (the live UI test, `#[ignore]`) is now in the repo. Keep it?
+- [ ] **`PRODUCT.md`** (the design-context file) is in `app/`. Keep it?

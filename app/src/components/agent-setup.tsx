@@ -12,6 +12,7 @@ const AgentsSettings = lazy(() => import("@/components/settings/agents-settings"
 const ChatSettings = lazy(() => import("@/components/settings/chat-settings").then((m) => ({ default: m.ChatSettings })));
 const McpSettings = lazy(() => import("@/components/settings/mcp-settings").then((m) => ({ default: m.McpSettings })));
 const SkillsSettings = lazy(() => import("@/components/settings/skills-settings").then((m) => ({ default: m.SkillsSettings })));
+const LibrariesSettings = lazy(() => import("@/components/settings/libraries-settings").then((m) => ({ default: m.LibrariesSettings })));
 const IntegrationsSettings = lazy(() => import("@/components/settings/integrations-settings").then((m) => ({ default: m.IntegrationsSettings })));
 const KeyboardSettings = lazy(() => import("@/components/settings/keyboard-settings").then((m) => ({ default: m.KeyboardSettings })));
 
@@ -22,6 +23,11 @@ const TABS = [
   { id: "chat", label: "Chat", about: "How chats show what the agent is doing." },
   { id: "mcp", label: "MCP servers", about: "Tools you give every agent: yaah hands these servers to each chat's agent through ACP." },
   { id: "skills", label: "Skills", about: "Instructions and scripts agents load when a task calls for them. Install from GitHub in a click." },
+  {
+    id: "components",
+    label: "Components",
+    about: "Component libraries agents build UI from: yaah's own, yours, and ones you install from a git repo or a folder.",
+  },
   {
     id: "integrations",
     label: "Integrations",
@@ -39,7 +45,7 @@ const tabOf = (t: SettingsTarget | null): SettingsTab =>
 
 type AgentProps = Omit<AgentsProps, "target">;
 
-/** Settings: general, agents (ACP), chat, MCP servers, skills, integrations and keyboard. */
+/** Settings: general, agents (ACP), chat, MCP servers, skills, component libraries, integrations and keyboard. */
 export function AgentSetupDialog({ target, onClose, ...agentProps }: AgentProps & { target: SettingsTarget | null; onClose: () => void }) {
   const [tab, setTab] = useState<SettingsTab>(() => tabOf(target));
   // Each new target (⌘K → MCP servers…, Log in → Edit agent) opens on its own tab.
@@ -71,6 +77,8 @@ export function AgentSetupDialog({ target, onClose, ...agentProps }: AgentProps 
         return <McpSettings />;
       case "skills":
         return <SkillsSettings />;
+      case "components":
+        return <LibrariesSettings />;
       case "integrations":
         return <IntegrationsSettings initial={target?.kind === "integrations" ? target.service : undefined} />;
       case "keyboard":
@@ -91,9 +99,9 @@ export function AgentSetupDialog({ target, onClose, ...agentProps }: AgentProps 
               <DialogTitle>Settings</DialogTitle>
               <DialogDescription>{TABS.find((t) => t.id === tab)?.about}</DialogDescription>
             </div>
-            <TabsList variant="line" aria-label="Settings" className="h-auto w-full flex-wrap justify-start">
+            <TabsList variant="line" aria-label="Settings" className="w-full flex-wrap justify-start group-data-horizontal/tabs:h-auto">
               {TABS.map((t) => (
-                <TabsTrigger key={t.id} value={t.id} className="flex-none px-3">
+                <TabsTrigger key={t.id} value={t.id} className="h-8 flex-none px-3">
                   {t.label}
                 </TabsTrigger>
               ))}

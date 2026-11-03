@@ -8,13 +8,14 @@ import { agentReplies } from "./mock/agents";
 import { chatReplies, stopTurn } from "./mock/chats";
 import type { Mock, Replies } from "./mock/context";
 import { integrationReplies } from "./mock/integrations";
-import { libraryReplies } from "./mock/library";
+import { libraryReplies, pickFolder } from "./mock/library";
 import { mcpReplies } from "./mock/mcp";
 import { projectReplies } from "./mock/projects";
 import { settingsReplies } from "./mock/settings";
 import { skillReplies } from "./mock/skills";
 import { sourceReplies } from "./mock/sources";
 import { createState } from "./mock/state";
+import { workItemReplies } from "./mock/work-items";
 
 export type BrowserMockOptions = {
   /** Multiplies every artificial wait (default 1). 0: no waiting, only a macrotask between events. */
@@ -49,16 +50,18 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
   const replies: Replies = {
     ...projectReplies(m),
     ...chatReplies(m),
-    ...libraryReplies(),
+    ...libraryReplies(m),
     ...sourceReplies(m),
     ...agentReplies(m),
     ...integrationReplies(m),
     ...settingsReplies(m),
     ...skillReplies(m),
     ...mcpReplies(m),
-    // Plugins: a file picker the user cancels, and links that open nowhere.
-    "plugin:dialog|open": () => null,
+    ...workItemReplies(m),
+    // Plugins: a folder picker (a sample folder on the library screens, cancelled elsewhere), and links and folders that open nowhere.
+    "plugin:dialog|open": (args: unknown) => pickFolder(args),
     "plugin:opener|open_url": () => null,
+    "plugin:opener|reveal_item_in_dir": () => null,
   };
 
   mockWindows("main");

@@ -41,6 +41,27 @@ describe("Settings → General", () => {
 });
 
 describe("Settings → Chat", () => {
+  it("shows what agents are told about yaah's UI, and turns it off", async () => {
+    const { user } = renderApp();
+    const dialog = await openSettings(user, "Chat");
+    const teach = await within(dialog).findByRole("switch", { name: "Teach agents about yaah's UI" });
+    await waitFor(() => expect(teach).toBeChecked());
+
+    await user.click(within(dialog).getByRole("button", { name: /show what agents are told/i }));
+    const routes = await within(dialog).findByRole("list", { name: "How each agent is told" });
+    expect(within(routes).getByText(/ACP systemPrompt/)).toBeInTheDocument();
+    expect(within(routes).getByText(/Claude Code plugin/)).toBeInTheDocument();
+    expect(within(routes).getAllByText("Known after its first chat.").length).toBeGreaterThan(0);
+    await user.click(within(dialog).getByRole("button", { name: /^The guide/ }));
+    expect(await within(dialog).findByText(/# You are running inside yaah/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Components available now: .*test-report/)).toBeInTheDocument();
+
+    await user.click(teach);
+    await waitFor(async () => expect((await api.generalSettings()).teachAgents).toBe(false));
+    await waitFor(() => expect(within(routes).queryByText(/ACP systemPrompt/)).not.toBeInTheDocument());
+    expect(within(routes).getAllByText(/yaah-ui MCP server/).length).toBeGreaterThan(0);
+  });
+
   it("adds a tool-card rule that cards follow at once, and resets it", async () => {
     const { user } = renderApp();
     let live: ReturnType<typeof useCardRules> = {};
