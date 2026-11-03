@@ -40,6 +40,39 @@ pub struct Project {
     /// The tracker item the project was started from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<ProjectLink>,
+    /// The agent (profile id) new chats in the project start with; none: the
+    /// one picked in the sidebar. Registries from before this field load as none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+}
+
+/// What a new project may start with besides its name and folders.
+#[derive(Debug, Clone, Default)]
+pub struct NewProject {
+    /// The agent new chats start with (see `Project::agent_id`).
+    pub agent_id: Option<String>,
+    /// Markdown, written into the brief under `## Statement of work`.
+    pub statement_of_work: String,
+}
+
+pub const STATEMENT_HEADING: &str = "## Statement of work";
+
+/// A new project's brief: its title and, when given, the statement of work.
+pub fn initial_brief(name: &str, statement_of_work: &str) -> String {
+    match statement_of_work.trim() {
+        "" => format!("# {name}\n\n"),
+        sow => format!("# {name}\n\n{STATEMENT_HEADING}\n\n{sow}\n"),
+    }
+}
+
+/// An agent id as the user chose it: empty means none; anything else must be
+/// an agent `exists` knows.
+pub fn agent_choice(agent_id: Option<&str>, exists: impl Fn(&str) -> bool) -> Result<Option<String>, String> {
+    match agent_id.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(id) if exists(id) => Ok(Some(id.to_owned())),
+        Some(id) => Err(format!("unknown agent `{id}`: pick one from Settings → Agents")),
+    }
 }
 
 /// A tracker item a project follows (read-only).
@@ -141,6 +174,11 @@ impl Projects {
     }
 
     pub fn create(&self, name: &str, dirs: &[String]) -> Result<Project, String> {
+        self.create_with(name, dirs, NewProject::default())
+    }
+
+    /// A project with an agent and a statement of work (written into the brief).
+    pub fn create_with(&self, name: &str, dirs: &[String], new: NewProject) -> Result<Project, String> {
         let dirs = dedupe(dirs.iter().map(|d| validate_dir(d)).collect::<Result<_, _>>()?);
         let name = match name.trim() {
             "" => dirs.first().and_then(|d| Path::new(d).file_name()).map_or_else(|| "Untitled project".into(), |n| n.to_string_lossy().into_owned()),
@@ -151,7 +189,7 @@ impl Projects {
         std::fs::create_dir_all(&ctx).map_err(|e| format!("create {}: {e}", ctx.display()))?;
         let brief = ctx.join("project.md");
         if !brief.exists() {
-            std::fs::write(&brief, format!("# {name}\n\n")).map_err(|e| format!("write {}: {e}", brief.display()))?;
+            std::fs::write(&brief, initial_brief(&name, &new.statement_of_work)).map_err(|e| format!("write {}: {e}", brief.display()))?;
         }
 
         let project = Project {
@@ -162,6 +200,7 @@ impl Projects {
             created_at: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
             context_dir: ctx.to_string_lossy().into_owned(),
             link: None,
+            agent_id: new.agent_id.filter(|a| !a.trim().is_empty()),
         };
         self.mutate(|r| {
             r.projects.push(project.clone());
@@ -178,6 +217,14 @@ impl Projects {
             let p = r.projects.iter_mut().find(|p| p.id == id).ok_or_else(|| format!("unknown project {id}"))?;
             f(p)?;
             Ok(p.clone())
+        })
+    }
+
+    /// The agent new chats in the project start with (`None`: the sidebar's).
+    pub fn set_agent(&self, id: &str, agent_id: Option<String>) -> Result<Project, String> {
+        self.update(id, |p| {
+            p.agent_id = agent_id.filter(|a| !a.trim().is_empty());
+            Ok(())
         })
     }
 
@@ -358,6 +405,65 @@ pub(crate) mod tests {
         assert!(!Path::new(&p.context_dir).exists(), "context folder removed");
         assert!(a.is_dir(), "project folders are never touched");
 
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn a_statement_of_work_goes_into_the_brief_under_its_heading() {
+        assert_eq!(initial_brief("Shop", ""), "# Shop\n\n", "none: the title alone, as before");
+        assert_eq!(initial_brief("Shop", "  \n\t"), "# Shop\n\n", "blank counts as none");
+        assert_eq!(
+            initial_brief("Shop", "\n**Goal:** refunds in cents.\n\n- In: API\n- Out: UI\n\n"),
+            "# Shop\n\n## Statement of work\n\n**Goal:** refunds in cents.\n\n- In: API\n- Out: UI\n"
+        );
+        // A tracker item's block goes on top of it and leaves it be.
+        let brief = set_source_block(&initial_brief("Shop", "Done when it ships."), Some("# ENG-1 X"));
+        assert!(brief.ends_with("# Shop\n\n## Statement of work\n\nDone when it ships.\n"), "{brief}");
+    }
+
+    #[test]
+    fn an_agent_choice_is_none_or_a_known_agent() {
+        let known = |id: &str| id == "work";
+        assert_eq!(agent_choice(None, known), Ok(None));
+        assert_eq!(agent_choice(Some(" "), known), Ok(None));
+        assert_eq!(agent_choice(Some("work"), known), Ok(Some("work".into())));
+        assert!(agent_choice(Some("gone"), known).unwrap_err().contains("unknown agent `gone`"));
+    }
+
+    #[test]
+    fn a_project_keeps_its_agent_and_starts_its_brief_with_the_statement_of_work() {
+        let home = std::env::temp_dir().join(format!("yaah-test-agent-{}", crate::session::random_token()));
+        ROOT.with(|r| *r.borrow_mut() = Some(home.clone()));
+        std::fs::create_dir_all(home.join(".config/yaah")).unwrap();
+        // A registry from before agents: it loads, with no agent.
+        std::fs::write(
+            home.join(".config/yaah/projects.json"),
+            r#"{"projects":[{"id":"old1","name":"Old","dirs":[],"status":"ongoing","createdAt":1}]}"#,
+        )
+        .unwrap();
+        let store = Projects::default();
+        assert_eq!(store.get("old1").unwrap().agent_id, None);
+
+        let new = NewProject { agent_id: Some("work".into()), statement_of_work: "Ship refunds.\n".into() };
+        let p = store.create_with("Refunds", &[], new).unwrap();
+        assert_eq!(p.agent_id.as_deref(), Some("work"));
+        assert_eq!(store.get(&p.id).unwrap().agent_id.as_deref(), Some("work"), "persisted");
+        assert_eq!(store.read_brief(&p.id).unwrap(), "# Refunds\n\n## Statement of work\n\nShip refunds.\n");
+
+        // Changed from the project page, then cleared (back to the sidebar's agent).
+        assert_eq!(store.set_agent(&p.id, Some("personal".into())).unwrap().agent_id.as_deref(), Some("personal"));
+        assert_eq!(store.set_agent(&p.id, Some(String::new())).unwrap().agent_id, None, "empty is none");
+        assert!(store.set_agent("nope", None).is_err());
+        let p2 = store.create_with("Blank agent", &[], NewProject { agent_id: Some(String::new()), ..NewProject::default() }).unwrap();
+        assert_eq!(p2.agent_id, None);
+        assert_eq!(store.read_brief(&p2.id).unwrap(), "# Blank agent\n\n");
+
+        let raw = std::fs::read_to_string(home.join(".config/yaah/projects.json")).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert!(saved["projects"].as_array().unwrap().iter().all(|p| p.get("agentId").is_none()), "no `agentId: null`: {raw}");
+        store.set_agent(&p.id, Some("work".into())).unwrap();
+        let raw = std::fs::read_to_string(home.join(".config/yaah/projects.json")).unwrap();
+        assert!(raw.contains(r#""agentId": "work""#) || raw.contains(r#""agentId":"work""#), "{raw}");
         std::fs::remove_dir_all(&home).unwrap();
     }
 

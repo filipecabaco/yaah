@@ -165,7 +165,12 @@ describe("the sidebar", () => {
     const chats = await screen.findByText("Chats", { selector: "span" });
 
     const menu = await rightClick(chats);
-    expect(items(menu)).toEqual([`New quick chat${keys("newChat")}`, "New chat in a folder…", `New project…${keys("newProject")}`]);
+    expect(items(menu)).toEqual([
+      `New quick chat${keys("newChat")}`,
+      "Quick chat with",
+      "New chat in a folder…",
+      `New project…${keys("newProject")}`,
+    ]);
     await user.keyboard("{Escape}");
 
     const projects = await rightClick(screen.getByText("Projects", { selector: "span" }));

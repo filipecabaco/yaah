@@ -398,14 +398,15 @@ export function workItemReplies(m: Mock): Replies {
       if (existing) return { project: existing, existing: true, addedRepos: [] };
 
       const addedRepos = t.repo ? state.repos.filter((r) => r.remote === t.repo).map((r) => r.path) : [];
-      const p = addProject(m, projectName(t), addedRepos);
+      // The project keeps the agent its first chat starts with (work_items.rs `start`).
+      const account = accountId || state.defaultAgent || state.profiles[0]?.id;
+      const p = addProject(m, projectName(t), addedRepos, { agentId: account });
       const at = now();
       p.status = statusFor(t.status);
       p.link = { service, id: t.id, url: t.url, title: t.title, linkedAt: at, syncedAt: at };
       state.briefs[p.id] = briefBlock(t);
       void changed(p.id);
 
-      const account = accountId || state.defaultAgent || state.profiles[0]?.id;
       if (!account)
         return {
           project: p,

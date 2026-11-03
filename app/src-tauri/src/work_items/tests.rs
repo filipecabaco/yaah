@@ -198,6 +198,7 @@ fn merges_dedupes_and_tags_the_queue() {
             linked_at: 0,
             synced_at: 0,
         }),
+        agent_id: None,
     };
     tag(&mut items, &[linked]);
     let tagged: Vec<(&str, Option<&str>)> = items.iter().map(|i| (i.service.as_str(), i.project_id.as_deref())).collect();
@@ -599,12 +600,14 @@ async fn starts_a_project_from_a_github_issue_and_reuses_it() {
         Ok::<_, String>("chat-1".to_owned())
     };
 
-    let started = start(i, &projects, "github", "Acme/Shop#12", roots.clone(), chat).await.unwrap();
+    let started = start(i, &projects, "github", "Acme/Shop#12", roots.clone(), Some("work".into()), chat).await.unwrap();
     assert!(!started.existing);
     let proj = &started.project;
     assert_eq!((proj.name.as_str(), proj.status), ("#12 Partial refunds", Status::Planning));
     let link = proj.link.clone().unwrap();
     assert_eq!((link.service.as_str(), link.id.as_str(), link.url.as_str()), ("github", "acme/shop#12", "https://github.com/acme/shop/issues/12"));
+    assert_eq!(proj.agent_id.as_deref(), Some("work"), "the project keeps the agent its chat started with");
+    assert_eq!(projects.get(&proj.id).unwrap().agent_id.as_deref(), Some("work"));
     assert_eq!(link.linked_at, link.synced_at);
     assert_eq!(
         started.added_repos,
@@ -622,7 +625,7 @@ async fn starts_a_project_from_a_github_issue_and_reuses_it() {
     // Asking again (any spelling) gives back the same project and opens nothing.
     for again in ["acme/shop#12", "ACME/SHOP#12"] {
         let refuse = |_| async { Err::<String, _>("no chat for an existing project".to_owned()) };
-        let s2 = start(i, &projects, "github", again, roots.clone(), refuse).await.unwrap();
+        let s2 = start(i, &projects, "github", again, roots.clone(), None, refuse).await.unwrap();
         assert!(s2.existing && s2.chat_id.is_none() && s2.draft.is_none() && s2.chat_error.is_none(), "no chat was asked for");
         assert_eq!(s2.project.id, proj.id);
     }
@@ -664,8 +667,9 @@ async fn starts_projects_from_gitlab_and_linear_items() {
     let projects = Projects::default();
     let ok = |_: Project| async { Ok::<_, String>("c".to_owned()) };
 
-    let gl = start(i, &projects, "gitlab", "team/sub/api#7", roots.clone(), ok).await.unwrap();
+    let gl = start(i, &projects, "gitlab", "team/sub/api#7", roots.clone(), None, ok).await.unwrap();
     assert_eq!((gl.project.name.as_str(), gl.project.status), ("#7 Rotate keys", Status::Done), "a closed issue");
+    assert_eq!(gl.project.agent_id, None, "no agent picked: the sidebar's");
     assert_eq!(gl.added_repos, [path(&home, "api")], "the clone from this instance, not gitlab.com's");
     assert_eq!(gl.draft.as_deref(), Some("Work on team/sub/api#7: Rotate keys"));
     let brief = projects.read_brief(&gl.project.id).unwrap();
@@ -675,7 +679,7 @@ async fn starts_projects_from_gitlab_and_linear_items() {
         "{brief}"
     );
 
-    let lin = start(i, &projects, "linear", "eng-142", roots.clone(), ok).await.unwrap();
+    let lin = start(i, &projects, "linear", "eng-142", roots.clone(), None, ok).await.unwrap();
     assert_eq!((lin.project.name.as_str(), lin.project.status), ("ENG-142 Partial refunds", Status::Archived), "a canceled issue");
     assert!(lin.added_repos.is_empty() && lin.project.dirs.is_empty());
     assert_eq!(lin.draft.as_deref(), Some("Work on ENG-142: Partial refunds"));
@@ -683,7 +687,7 @@ async fn starts_projects_from_gitlab_and_linear_items() {
 
     // A chat that can't start doesn't undo the project.
     let failing = |_: Project| async { Err::<String, _>("no agent is set up".to_owned()) };
-    let lp = start(i, &projects, "linear-project", "3f9a1c2b7d4e", roots.clone(), failing).await.unwrap();
+    let lp = start(i, &projects, "linear-project", "3f9a1c2b7d4e", roots.clone(), None, failing).await.unwrap();
     assert_eq!((lp.project.name.as_str(), lp.project.status), ("Refunds v2", Status::Ongoing));
     assert_eq!((lp.chat_id, lp.chat_error.as_deref()), (None, Some("no agent is set up")));
     assert_eq!(lp.draft.as_deref(), Some("Plan the work for Refunds v2"));
@@ -691,10 +695,10 @@ async fn starts_projects_from_gitlab_and_linear_items() {
 
     // Nothing is created for an item that can't be read, or input that isn't an id.
     let before = projects.list().unwrap().len();
-    assert!(start(i, &projects, "linear", "ENG-404", roots.clone(), ok).await.unwrap_err().contains("not found"));
-    assert!(start(i, &projects, "github", "acme/shop#9", roots.clone(), ok).await.unwrap_err().contains("pull request"));
-    assert!(start(i, &projects, "jira", "X-1", roots.clone(), ok).await.unwrap_err().contains("unknown service"));
-    assert!(start(i, &projects, "github", "../../etc#1", roots, ok).await.unwrap_err().contains("`owner/repo#12`"));
+    assert!(start(i, &projects, "linear", "ENG-404", roots.clone(), None, ok).await.unwrap_err().contains("not found"));
+    assert!(start(i, &projects, "github", "acme/shop#9", roots.clone(), None, ok).await.unwrap_err().contains("pull request"));
+    assert!(start(i, &projects, "jira", "X-1", roots.clone(), None, ok).await.unwrap_err().contains("unknown service"));
+    assert!(start(i, &projects, "github", "../../etc#1", roots, None, ok).await.unwrap_err().contains("`owner/repo#12`"));
     assert_eq!(projects.list().unwrap().len(), before);
     std::fs::remove_dir_all(home).ok();
 }
