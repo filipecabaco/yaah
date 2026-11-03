@@ -123,6 +123,9 @@ export type AgentPreset = {
 /** Chats can start unless the agent is known to need a login. */
 export const canChat = (agent: AgentProfile | undefined | null): agent is AgentProfile => !!agent && agent.loggedIn !== false;
 
+/** What a new project may start with besides its name and folders. */
+export type NewProjectOptions = { agentId?: string; statementOfWork?: string };
+
 export type ProjectStatus = "planning" | "ongoing" | "done" | "archived";
 export const PROJECT_STATUSES: ProjectStatus[] = ["planning", "ongoing", "done", "archived"];
 
@@ -135,6 +138,8 @@ export type Project = {
   contextDir: string;
   /** The tracker item the project was started from (read-only). */
   link?: ProjectLink;
+  /** The agent new chats in the project start with; none: the one picked in the sidebar. */
+  agentId?: string;
 };
 
 // Projects from tracker items. Mirrors `src-tauri/src/work_items.rs`.
@@ -195,6 +200,10 @@ export type SessionInfo = {
   stopReason: string | null;
   /** Slash commands the agent offers in this chat. */
   commands: SlashCommand[];
+  /** The agent's own session id, when it differs from `sessionId` (after a switch). */
+  agentSessionId?: string;
+  /** Set by `switch_agent`: the agent the next message hands the chat over from. */
+  handoffFrom?: string;
 };
 
 export type SlashCommand = { name: string; description: string; input?: { hint?: string } | null };
@@ -324,7 +333,9 @@ export type Entry =
       props: Record<string, unknown>;
     }
   | { type: "error"; message: string; loginAccount: string | null }
-  | { type: "notices"; items: Notice[] };
+  | { type: "notices"; items: Notice[] }
+  /** The chat moved to another agent (`switch_agent`); `label` is the new agent's, `from` the one before. */
+  | { type: "switch"; accountId: string; label: string; from: string | null };
 
 /** A page of a transcript (`get_entries`). */
 export type EntryPage = { entries: Entry[]; from: number; total: number };
@@ -482,7 +493,11 @@ export const api = {
 
   // projects
   listProjects: () => invoke<Project[]>("list_projects"),
-  createProject: (name: string, dirs: string[]) => invoke<Project>("create_project", { name, dirs }),
+  /** `statementOfWork` (Markdown) goes into the brief under `## Statement of work`. */
+  createProject: (name: string, dirs: string[], options: NewProjectOptions = {}) =>
+    invoke<Project>("create_project", { name, dirs, agentId: options.agentId || null, statementOfWork: options.statementOfWork?.trim() || null }),
+  /** The agent new chats in the project start with; null: the sidebar's. */
+  setProjectAgent: (id: string, agentId: string | null) => invoke<Project>("set_project_agent", { id, agentId }),
   renameProject: (id: string, name: string) => invoke<Project>("rename_project", { id, name }),
   setProjectStatus: (id: string, status: ProjectStatus) => invoke<Project>("set_project_status", { id, status }),
   addProjectDirs: (id: string, dirs: string[]) => invoke<Project>("add_project_dirs", { id, dirs }),
@@ -509,7 +524,10 @@ export const api = {
   writeBrief: (id: string, text: string) => invoke<void>("write_brief", { id, text }),
 
   // sources (data the app reads itself) and database connections
-  readSource: (source: unknown) => invoke<unknown>("read_source", { source }),
+  /** `session`: the chat the UI is in; git sources read its folder (Rust looks it up, the page never names a path). */
+  readSource: (source: unknown, session?: string) => invoke<unknown>("read_source", { source, session: session ?? null }),
+  /** Open a file from a chat (relative to its folder) in the system's app for it; files that would run are refused. */
+  openInEditor: (session: string, path: string) => invoke<void>("open_in_editor", { session, path }),
   // integrations (Settings → Integrations): never returns a token
   integrationsStatus: () => invoke<IntegrationStatus[]>("integrations_status"),
   /** `baseUrl`: GitLab's instance for a self-managed one; omitted means gitlab.com. */
@@ -566,6 +584,8 @@ export const api = {
   /** Change fields of an unsent form (the agent edits the same draft). */
   editUi: (sessionId: string, index: number, values: Record<string, unknown>) => invoke<unknown>("edit_ui", { sessionId, index, values }),
   sendPrompt: (sessionId: string, text: string, mentions: string[] = []) => invoke<void>("send_prompt", { sessionId, text, mentions }),
+  /** The chat's next message goes to `accountId`'s agent, in a fresh session, with the conversation so far. Refused mid-turn. */
+  switchAgent: (sessionId: string, accountId: string) => invoke<SessionInfo>("switch_agent", { sessionId, accountId }),
   renameSession: (sessionId: string, title: string) => invoke<SessionInfo>("rename_session", { sessionId, title }),
   deleteSession: (sessionId: string) => invoke<void>("delete_session", { sessionId }),
   searchFiles: (sessionId: string, query: string, limit = 30) => invoke<FileMatch[]>("search_files", { sessionId, query, limit }),

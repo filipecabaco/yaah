@@ -32,8 +32,13 @@ export function seedProjects() {
   };
 }
 
-/** A new project, as projects.rs makes one (with a `# name` brief). */
-export function addProject({ state }: Mock, name: string, dirs: string[]): Project {
+/** A new project, as projects.rs makes one: a `# name` brief, with the statement of work under its heading when given. */
+export function addProject(
+  { state }: Mock,
+  name: string,
+  dirs: string[],
+  options: { agentId?: string | null; statementOfWork?: string | null } = {},
+): Project {
   const id = `p${state.nextProject++}`;
   const p: Project = {
     id,
@@ -42,9 +47,11 @@ export function addProject({ state }: Mock, name: string, dirs: string[]): Proje
     status: "ongoing",
     createdAt: now(),
     contextDir: `${home}/.yaah/projects/${id}`,
+    ...(options.agentId?.trim() ? { agentId: options.agentId.trim() } : {}),
   };
   state.projects.push(p);
-  state.briefs[id] = `# ${p.name}\n\n`;
+  const sow = options.statementOfWork?.trim();
+  state.briefs[id] = sow ? `# ${p.name}\n\n## Statement of work\n\n${sow}\n` : `# ${p.name}\n\n`;
   return p;
 }
 
@@ -79,7 +86,18 @@ export function projectReplies(m: Mock): Replies {
   };
   return {
     list_projects: (): Project[] => state.projects,
-    create_project: ({ name, dirs }: { name: string; dirs: string[] }): Project => addProject(m, name, dirs),
+    create_project: (args: { name: string; dirs: string[]; agentId?: string | null; statementOfWork?: string | null }): Project => {
+      if (args.agentId && !state.profiles.some((a) => a.id === args.agentId))
+        throw new Error(`unknown agent \`${args.agentId}\`: pick one from Settings → Agents`);
+      return addProject(m, args.name, args.dirs, args);
+    },
+    set_project_agent: ({ id, agentId }: { id: string; agentId: string | null }) => {
+      if (agentId && !state.profiles.some((a) => a.id === agentId)) throw new Error(`unknown agent \`${agentId}\`: pick one from Settings → Agents`);
+      return update(id, (p) => {
+        if (agentId) p.agentId = agentId;
+        else delete p.agentId;
+      });
+    },
     rename_project: ({ id, name }: { id: string; name: string }) => update(id, (p) => (p.name = name)),
     set_project_status: ({ id, status }: { id: string; status: ProjectStatus }) => update(id, (p) => (p.status = status)),
     add_project_dirs: ({ id, dirs }: { id: string; dirs: string[] }) => update(id, (p) => (p.dirs = [...new Set([...p.dirs, ...dirs])])),

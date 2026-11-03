@@ -34,6 +34,7 @@ const UiMap = preloadable(() => import("@/components/ui-blocks/map").then((m) =>
 const UiDataTable = preloadable(() => import("@/components/ui-blocks/data-table").then((m) => m.default));
 const UiDiagram = preloadable(() => import("@/components/ui-blocks/diagram").then((m) => m.default));
 const UiSql = preloadable(() => import("@/components/ui-blocks/sql").then((m) => m.default));
+const UiDiffReview = preloadable(() => import("@/components/ui-blocks/diff-review").then((m) => m.default));
 // Command output views share one chunk, loaded the first time an agent shows one.
 const cliViews = () => import("@/components/ui-blocks/cli/views");
 const TestsView = preloadable(() => cliViews().then((m) => m.TestsView));
@@ -48,7 +49,7 @@ const DiffStatView = preloadable(() => cliViews().then((m) => m.DiffStatView));
 const diffBlocks = () => import("@/components/ui-blocks/diff-blocks");
 const TextDiffBlock = preloadable(() => diffBlocks().then((m) => m.TextDiffBlock));
 const PatchBlock = preloadable(() => diffBlocks().then((m) => m.PatchBlock));
-const BLOCKS = [UiChart, UiMap, UiDataTable, UiDiagram, UiSql, TestsView, TextDiffBlock];
+const BLOCKS = [UiChart, UiMap, UiDataTable, UiDiagram, UiSql, TestsView, TextDiffBlock, UiDiffReview];
 
 let preloading = false;
 /** After the first agent UI: fetch every block's code while the app is idle. */
@@ -465,6 +466,19 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
       return <BrowserFrame src={show(p.src)} title={optText(p.title)} height={positive(p.height) ?? 420} />;
     case "patch":
       return <PatchView text={show(p.text)} title={optText(p.title)} />;
+    case "diffreview":
+      return (
+        <Lazy height={240}>
+          <UiDiffReview
+            text={show(p.text)}
+            files={p.files}
+            title={optText(p.title)}
+            range={optText(p.range)}
+            truncated={p.truncated === true}
+            name={optText(p.name)}
+          />
+        </Lazy>
+      );
     default:
       return <span className="text-xs text-destructive">[unknown UI type “{type}”]</span>;
   }
@@ -679,7 +693,8 @@ export function TextDiff(props: { path: string; oldText: string; newText: string
   );
 }
 
-function PatchView(props: { text: string; title?: string }) {
+/** `git diff` text in yaah's diff view (the `patch` block, and diffs a command printed). */
+export function PatchView(props: { text: string; title?: string }) {
   return (
     <Lazy height={80}>
       <PatchBlock {...props} />
@@ -785,6 +800,8 @@ function LiveSource({
   scope: Scope;
 }) {
   const key = JSON.stringify(source ?? null);
+  // Git sources read the folder of the chat this UI is in.
+  const session = useChat()?.sessionId;
   const interval = every == null ? 0 : Math.max(1000, asNumber(every) ?? 0);
   const keep = Math.min(600, Math.max(0, asNumber(history) ?? 0));
   const [state, setState] = useState<Reading>({ data: undefined, at: null, error: null, samples: [], reading: true });
@@ -816,7 +833,7 @@ function LiveSource({
       if (document.hidden && seen.current) return interval && !paused ? next(interval) : undefined;
       setState((s) => ({ ...s, reading: true }));
       try {
-        const data = await api.readSource(JSON.parse(key));
+        const data = await api.readSource(JSON.parse(key), session);
         if (stop) return;
         const at = new Date();
         seen.current = true;
@@ -832,7 +849,7 @@ function LiveSource({
       stop = true;
       clearTimeout(timer);
     };
-  }, [key, interval, keep, paused, nonce, onScreen]);
+  }, [key, session, interval, keep, paused, nonce, onScreen]);
 
   const name = typeof as === "string" && as ? as : "data";
   return (

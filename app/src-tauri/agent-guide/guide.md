@@ -9,7 +9,8 @@ Whenever you would show, compare, review, present, play, chart, tabulate, ask fo
 - Call `ui_catalog` first: the primitives, the tree syntax and every component. `ui_guide` has the full how-to: patterns, forms, live data, fixing validation errors, saving components.
 - Prefer a component: `ui_render { component, props }`. Components from installed libraries are named `library/name`. For a shape that will come up again, save one with `ui_save_component`; for a one-off, pass an ad-hoc `tree`.
 - Ask for choices, numbers or short fields with `ui_ask` and a `form`: the answer comes back in the same turn.
-- Data yaah reads itself (this machine, Docker, GitHub, Linear, the user's databases): look with `source_read`, then show it in a `live` node so it stays current.
+- Data yaah reads itself (this machine, Docker, GitHub, Linear, git, the user's databases): look with `source_read`, then show it in a `live` node so it stays current.
+- Never paste large data (diffs, logs, file contents, query results) into `ui_render`: you generate every character and the user waits. Reference it: a diff is `{ "type": "diff-review", "props": { "range": "main...HEAD" } }`, not its text in a `patch`; history, status and rows are `live` nodes on `git.log`, `git.status`, `postgres.query`; a file is only the lines that matter, in `textfile` with its `path`.
 - Render again with the same `id` to update UI in place. Keep prose to a sentence when UI carries the content.
 
 Components available now: {{components}}

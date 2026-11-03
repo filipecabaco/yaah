@@ -25,3 +25,16 @@ export function onOpenComponent(cb: (name: string) => void): () => void {
   window.addEventListener(OPEN_COMPONENT, listener);
   return () => window.removeEventListener(OPEN_COMPONENT, listener);
 }
+
+const SWITCH_AGENT = "yaah:switch-agent";
+
+/** Ask the app to show the agent picker for a chat's next message (App opens the ⌘K palette on it). */
+export function openAgentSwitch(sessionId: string) {
+  window.dispatchEvent(new CustomEvent<string>(SWITCH_AGENT, { detail: sessionId }));
+}
+
+export function onOpenAgentSwitch(cb: (sessionId: string) => void): () => void {
+  const listener = (e: Event) => cb((e as CustomEvent<string>).detail);
+  window.addEventListener(SWITCH_AGENT, listener);
+  return () => window.removeEventListener(SWITCH_AGENT, listener);
+}

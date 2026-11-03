@@ -195,8 +195,16 @@ pub fn list_projects(projects: State<'_, Projects>) -> Result<Vec<Project>, Stri
 }
 
 #[tauri::command]
-pub fn create_project(projects: State<'_, Projects>, name: String, dirs: Vec<String>) -> Result<Project, String> {
-    projects.create(&name, &dirs)
+pub fn create_project(
+    projects: State<'_, Projects>,
+    name: String,
+    dirs: Vec<String>,
+    agent_id: Option<String>,
+    statement_of_work: Option<String>,
+) -> Result<Project, String> {
+    let agent_id = crate::projects::agent_choice(agent_id.as_deref(), |a| Store::user().find(a).is_some())?;
+    let new = crate::projects::NewProject { agent_id, statement_of_work: statement_of_work.unwrap_or_default() };
+    projects.create_with(&name, &dirs, new)
 }
 
 #[tauri::command]
@@ -372,6 +380,12 @@ pub fn edit_ui(hub: State<'_, Arc<Hub>>, session_id: String, index: usize, value
 #[tauri::command]
 pub async fn send_prompt(hub: State<'_, Arc<Hub>>, session_id: String, text: String, mentions: Option<Vec<String>>) -> Result<(), String> {
     hub.prompt(&session_id, text, mentions.unwrap_or_default()).await
+}
+
+/// Move a chat to another agent: its next prompt goes there, with the conversation handed off.
+#[tauri::command]
+pub fn switch_agent(hub: State<'_, Arc<Hub>>, session_id: String, account_id: String) -> Result<SessionInfo, String> {
+    hub.switch_agent(&session_id, &account_id)
 }
 
 #[tauri::command]

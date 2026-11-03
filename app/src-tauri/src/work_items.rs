@@ -950,14 +950,16 @@ pub(crate) async fn resolve(i: &Integrations, projects: &[Project], input: &str)
 static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Start a project from an item, or return the one that already follows it.
-/// `roots` are where to look for local clones; `chat` opens a chat in the new
-/// project and returns its id.
+/// `roots` are where to look for local clones; `agent_id` is the agent the new
+/// project keeps for its chats; `chat` opens a chat in the new project and
+/// returns its id.
 pub(crate) async fn start<C, F>(
     i: &Integrations,
     projects: &Projects,
     service: &str,
     id: &str,
     roots: Vec<String>,
+    agent_id: Option<String>,
     chat: C,
 ) -> Result<Started, String>
 where
@@ -997,6 +999,7 @@ where
     let mut project = projects.update(&project.id, |p| {
         p.status = status;
         p.link = Some(link);
+        p.agent_id = agent_id;
         Ok(())
     })?;
     // Linked: another start for this item now finds it. The rest needn't wait in line.

@@ -55,9 +55,13 @@ also served as the resources yaah://skills/yaah-ui and yaah://skills/yaah-compon
 2. Prefer an existing component; render it with ui_render { component, props }. Components with \
 source \"yaah\" ship with the app and are the supported way to show common things: test results \
 (test-report), tree/ls output (file-tree), JSON and jq output (json-view), a file you cat (file-view), \
-wc (word-count), git log --graph (git-graph), git status (git-status), --stat (diff-stat), and live \
+wc (word-count), git log --graph (git-graph), git status (git-status), --stat (diff-stat), a change to review \
+(diff-review: reads git diff in this chat's folder itself, so never paste a diff for it), and live \
 system, Docker and database views. After running one of those commands, pass its output to the \
-component as printed instead of restating it in prose. To show the user where something is \
+component as printed instead of restating it in prose. Never paste large data (diffs, logs, file contents, \
+query results) into ui_render: you generate every character and the user waits. Reference it instead: a diff is \
+the diff-review component with a `range` (e.g. main...HEAD), history, status and rows are `live` nodes on git.log, \
+git.status and postgres.query, a file is only the lines that matter in `textfile` with its `path`. To show the user where something is \
 (a file in a tree, a line in a file, a field in JSON, rows in a table, a test), fill the view's `find`; \
 re-render with the same id and a new `find` to point somewhere else. They are read-only: compose them, don't copy them. \
 Components from component libraries the user installed have qualified names, `library/name` (their `source` is the library), \
@@ -76,7 +80,7 @@ To fill something in together (a bug report, a config, a plan), render the form 
 what you know with ui_set_values (the user sees it marked as yours and can change it), and read what they \
 have typed so far with ui_get_values; the last change to a field wins.
 6. For data the app can read itself (this machine's CPU/memory/disks, Docker containers, stats and logs, \
-GitHub pull requests and Linear issues, boards and cycles, the user's databases), don't paste it into props: use a yaah component for it, or wrap your UI in a \
+git diffs, logs and status in this chat's folder, GitHub pull requests and Linear issues, boards and cycles, the user's databases), don't paste it into props: use a yaah component for it, or wrap your UI in a \
 `live` node with that `source` (and `every` for refreshing). The app fetches it and keeps it current \
 after your turn ends; you never see credentials. Look at the data first with source_read.
 
@@ -559,6 +563,14 @@ fn clip(text: String, max: usize) -> String {
     format!("{}… (truncated; {} bytes in full)", &text[..text.floor_char_boundary(max)], text.len())
 }
 
+/// `source_read`, in the chat's folder. This runs on the request's own thread
+/// (not an async worker), so blocking on it is fine.
+fn read_source(host: &UiHost, session_id: &str, source: &Value) -> Result<String, String> {
+    let cwd = host.hub.session_roots(session_id).into_iter().next();
+    // Enough to design UI from; the live UI reads the full data itself.
+    tauri::async_runtime::block_on(host.sources.read_in(source, cwd.as_deref())).map(|v| clip(v.to_string(), MAX_SOURCE_TEXT))
+}
+
 fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) -> Value {
     // Only reachable before session/new returns, which no agent should render during.
     let session_id = session_id.unwrap_or_default();
@@ -574,11 +586,8 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
                 format!("{library},\"connections\":{connections}}}")
             })
             .map_err(|e| vec![e]),
-        // This runs on the request's own thread (not an async worker), so blocking on it is fine.
-        "source_read" => tauri::async_runtime::block_on(host.sources.read(&args["source"]))
-            // Enough to design UI from; the live UI reads the full data itself.
-            .map(|v| clip(v.to_string(), MAX_SOURCE_TEXT))
-            .map_err(|e| vec![e]),
+        // Git sources read the chat's own folder, from the session: never a path the agent passes.
+        "source_read" => read_source(host, session_id, &args["source"]).map_err(|e| vec![e]),
         "ui_guide" => guide_topic(lib, args["topic"].as_str().unwrap_or("ui")),
         "ui_get_component" => match lib.get(args["name"].as_str().unwrap_or_default()) {
             Ok(Some(c)) => Ok(serde_json::to_string(&c).unwrap_or_default()),
@@ -704,7 +713,7 @@ fn tools() -> Value {
         },
         {
             "name": "source_read",
-            "description": "Read a data source the app can fetch itself: this machine (`system`), Docker (`docker.containers`, `docker.stats`, `docker.logs`) or a database the user connected (`postgres.schema`, `postgres.query`, read-only). Use it to see the data before designing UI, then show it with a `live` node bound to the same source so it stays fresh without you. ui_catalog lists the sources and the connection names.",
+            "description": "Read a data source the app can fetch itself: this machine (`system`), Docker (`docker.containers`, `docker.stats`, `docker.logs`), git in this chat's folder (`git.diff`, `git.log`, `git.status`, `git.show`; the folder is the chat's, never a path you pass) or a database the user connected (`postgres.schema`, `postgres.query`, read-only). Use it to see the data before designing UI, then show it with a `live` node bound to the same source so it stays fresh without you. ui_catalog lists the sources and the connection names.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -982,6 +991,8 @@ mod tests {
                 running: false,
                 stop_reason: None,
                 commands: vec![],
+                agent_session_id: None,
+                handoff_from: None,
             };
             std::fs::write(dir.join(format!("sessions/{id}.json")), json!({ "info": info, "entries": [] }).to_string()).unwrap();
         }

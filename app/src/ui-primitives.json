@@ -736,6 +736,39 @@
         }
       }
     },
+    "diffreview": {
+      "description": "A multi-file diff to review and act on, one file at a time: a file list (status, +/−, a viewed tick; tabs across the top when narrow), j/k files, n/p hunks, v viewed, Enter opens the file. Each file and hunk has Ask about this and Ask to change or revert this (both draft into the composer, never applied), Copy path, Copy hunk and Open in editor. Tabs 4 wide, no wrapping (a wrap toggle wraps with a hanging indent). Prefer the `diff-review` component, which reads git.diff live.",
+      "uses": [
+        "yaah diff viewer"
+      ],
+      "children": false,
+      "props": {
+        "text": {
+          "type": "string",
+          "required": true,
+          "description": "A unified diff: `git diff` output, or git.diff's `text`."
+        },
+        "files": {
+          "type": "array",
+          "description": "git.diff's `files` ({ path, oldPath?, status, additions, deletions, binary }), for binary and renamed files the text can't show; else read from the text."
+        },
+        "title": {
+          "type": "string"
+        },
+        "range": {
+          "type": "string",
+          "description": "What the diff is of (e.g. main...HEAD): viewed ticks are kept per range."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "The text was cut (git.diff's `truncated`); says so above the files."
+        },
+        "name": {
+          "type": "string",
+          "description": "Where the viewed ticks are kept in the UI's draft, so they survive re-renders and the agent can read them with ui_get_values. The diff-review component uses \"viewed\"."
+        }
+      }
+    },
     "tests": {
       "description": "Test results in green and red: counts, a pass/fail bar, failures first with their messages, passing tests folded away. Give the test command's raw output as `text` (cargo test, pytest -v, go test -v, jest, vitest, node --test, TAP, mix test, rspec); it is parsed here, so pass it as printed. Or give structured `results`.",
       "children": false,
@@ -917,7 +950,7 @@
     "libraries": "Components from an installed component library are referenced by qualified name, library/name: { type: \"acme/pr-card\", props: { … } }. They are read-only; save your own variant under an unqualified name."
   },
   "sources": {
-    "about": "Data the app reads itself. Use with a `live` node (and source_read to look first). GitHub, GitLab and Linear sources use the connections the user made in Settings → Integrations (read-only; you never see a token). Database sources take a `connection` name from ui_catalog `connections`; credentials never reach you.",
+    "about": "Data the app reads itself. Use with a `live` node (and source_read to look first). GitHub, GitLab and Linear sources use the connections the user made in Settings → Integrations (read-only; you never see a token). Git sources read the folder of the chat the UI is in (yaah supplies it; never pass a path), read-only, with refs and paths checked and output capped. Database sources take a `connection` name from ui_catalog `connections`; credentials never reach you.",
     "kinds": {
       "system": {
         "params": {},
@@ -1039,6 +1072,34 @@
           "team": "team key (required)"
         },
         "returns": "{ team, number, name, starts, ends, daysLeft, progressPct, scope, completed, scopeAdded, issues, issuesDone, history: [{ day, scope, completed }] } — the active cycle"
+      },
+      "git.diff": {
+        "params": {
+          "range": "optional, e.g. \"main...HEAD\" or \"HEAD~3\" (default: the working tree, staged and not, against HEAD)",
+          "staged": "true for the staged changes only (index against HEAD)",
+          "paths": "optional [paths] relative to the chat's folder",
+          "context": "lines of context, default 3"
+        },
+        "returns": "{ range, staged, text (unified diff, for `patch`/`diffreview`), files: [{ path, oldPath?, status: added|modified|deleted|renamed, additions, deletions, binary }], additions, deletions, truncated (text cut at 4 MB; files stay whole) }"
+      },
+      "git.log": {
+        "params": {
+          "range": "optional, e.g. \"main..HEAD\"",
+          "limit": "default 50, max 500",
+          "paths": "optional [paths]"
+        },
+        "returns": "[{ sha, short, author, email, date (ISO 8601), subject, body }] — newest first; [] before the first commit"
+      },
+      "git.status": {
+        "params": {},
+        "returns": "{ branch (null when detached), detached, oid, upstream, ahead, behind, clean, files: [{ path, oldPath?, index, worktree }] } — index/worktree: modified|added|deleted|renamed|copied|typechange|unmerged|untracked, or null when unchanged there"
+      },
+      "git.show": {
+        "params": {
+          "rev": "a commit, tag or branch (required)",
+          "path": "optional: the file at that revision instead of the commit"
+        },
+        "returns": "{ rev, path?, text (the commit with its patch, or the file), binary, truncated }"
       }
     }
   }

@@ -64,7 +64,7 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 
 **Point with `find`.** `table`, `tests`, `filetree`, `json` and `textfile` take `find`: it fills their search box to show where something is (a file in a tree, a line in a file, a JSON key, some rows, a test). Re-render with the same `id` and a new `find` to point elsewhere.
 
-**Live data.** For data yaah reads itself (`system`, `docker.*`, `github.*`, `linear.*`, `postgres.*`; see `sources` in `ui_catalog`), look first with `source_read`, then wrap the UI in a `live` node with that `source` and `every` (ms) for refreshing. Children bind the latest result as `{{data}}`, and `history: N` keeps samples as `{{history}}` for charts over time. It keeps updating after your turn ends; you never see credentials.
+**Live data.** For data yaah reads itself (`system`, `docker.*`, `git.*`, `github.*`, `linear.*`, `postgres.*`; see `sources` in `ui_catalog`), look first with `source_read`, then wrap the UI in a `live` node with that `source` and `every` (ms) for refreshing. Children bind the latest result as `{{data}}`, and `history: N` keeps samples as `{{history}}` for charts over time. It keeps updating after your turn ends; you never see credentials.
 
 ```json
 { "type": "live", "props": { "source": { "kind": "system" }, "every": 2000, "history": 60 }, "children": [
@@ -73,7 +73,35 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 ] }
 ```
 
-**Command output.** Pass output as printed to the primitive or component made for it (`tests`, `filetree`, `json`, `textfile`, `wordcount`, `gitgraph`, `gitstatus`, `diffstat`, `patch` for `git diff`). Don't restate it in prose.
+**Command output.** Pass short output as printed to the primitive or component made for it (`tests`, `filetree`, `json`, `textfile`, `wordcount`, `gitgraph`, `gitstatus`, `diffstat`). Don't restate it in prose. Anything long is referenced instead (next section).
+
+## Reference data, don't paste it
+
+Every character of a `ui_render` call is something you generate, slowly, while the user watches the card say it is building. Never paste large data (diffs, logs, file contents, query results) into the JSON: name it, and yaah reads it itself, in the chat's folder, read-only, and keeps it fresh.
+
+Showing what changed on this branch. Slow, and stale as soon as the next edit lands:
+
+```json
+{ "type": "patch", "props": { "title": "This branch", "text": "diff --git a/src/billing/invoice.ts b/src/billing/invoice.ts\nindex 3b18e51..a4c09f2 100644\n--- a/src/billing/invoice.ts\n+++ b/src/billing/invoice.ts\n@@ -12,9 +12,12 @@\n-  const tax = subtotal * 0.2;\n+  const rate = taxRate(plan.country);\n… 2,000 more lines …" } }
+```
+
+Instant, with a file list, viewed ticks and "ask about this" on every hunk:
+
+```json
+{ "type": "diff-review", "props": { "range": "main...HEAD", "title": "Tax rates: this branch against main" } }
+```
+
+| To show | Don't paste | Reference |
+| --- | --- | --- |
+| A diff | its text in `patch` or `diff` | `diff-review` (`range`, `staged`, `paths`), or `live` on `git.diff` |
+| History | `git log` output | `live` on `git.log` (`range`, `limit`, `paths`) |
+| Working tree | `git status` output | `live` on `git.status`, or `git-status` |
+| A commit, or a committed file | `git show` output | `live` on `git.show` (`rev`, `path`), its `{{data.text}}` into `textfile` |
+| A file you're working on | the whole file | only the lines that matter: `textfile` with its `path`, `start` and `highlight` |
+| Query results | rows in a `table` | `live` on `postgres.query` (`connection`, `sql`), `{{data.rows}}` into a `table`, or `db-query` |
+| Logs | the log text | `live` on `docker.logs` (`container`, `tail`), or `container-logs` |
+
+`source_read` with the same source shows you the data first when you need to look before you design the UI; you don't have to repeat what it returned.
 
 ## When a call is refused
 

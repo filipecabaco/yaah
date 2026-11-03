@@ -105,6 +105,22 @@ const linearSamples: Obj = {
   },
 };
 
+/** The recorded `git.diff` (a feature branch against main), narrowed to `paths` like the real one. */
+function gitDiff(source: Obj): unknown {
+  const sample = asObj(sourceSamples["git.diff"]);
+  const paths = asArray(source.paths).filter((p): p is string => typeof p === "string");
+  const range = asString(source.range) ?? (source.staged ? "staged" : "HEAD");
+  if (!paths.length) return { ...sample, range, staged: !!source.staged };
+  const under = (path: unknown) => typeof path === "string" && paths.some((p) => path === p || path.startsWith(`${p.replace(/\/$/, "")}/`));
+  const files = asArray(sample.files).filter((f) => under(asObj(f).path));
+  const text = (asString(sample.text) ?? "")
+    .split(/(?=^diff --git )/m)
+    .filter((chunk) => under(/^diff --git a\/\S+ b\/(\S+)/.exec(chunk)?.[1]))
+    .join("");
+  const sum = (k: string) => files.reduce((n: number, f) => n + (asNumber(asObj(f)[k]) ?? 0), 0);
+  return { ...sample, range, staged: !!source.staged, files, text, additions: sum("additions"), deletions: sum("deletions") };
+}
+
 export function sourceReplies({ state }: Mock): Replies {
   function read(source: Obj): unknown {
     const kind = asString(source.kind) ?? "";
@@ -137,12 +153,15 @@ export function sourceReplies({ state }: Mock): Replies {
       if (hit === undefined) throw new Error("browser mock: no recorded result for this query");
       return hit;
     }
+    if (kind === "git.diff") return gitDiff(source);
     if (kind in sourceSamples) return sourceSamples[kind];
     throw new Error(`unknown source kind \`${kind}\``);
   }
 
   return {
     read_source: ({ source }: { source: unknown }) => read(asObj(source)),
+    // "Open in editor" from a diff: nothing to open in the browser.
+    open_in_editor: () => null,
     list_connections: (): ConnectionInfo[] => state.connections,
     add_connection: ({ name, url }: { name: string; url: string }): ConnectionInfo => {
       let u: URL;

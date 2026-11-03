@@ -195,8 +195,176 @@ const assembling: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
+/** A tool call as Claude's adapter sends it: shell output comes as a ```console fence. */
+const call = (id: string, title: string, kind: string, status: "in_progress" | "completed", rawInput: unknown, text?: string): Entry => ({
+  type: "tool",
+  toolCallId: id,
+  title,
+  kind,
+  status,
+  content: text == null ? [] : [{ type: "content", content: { type: "text", text } }],
+  locations: [],
+  rawInput,
+});
+const consoleFence = (out: string) => "```console\n" + out.trimEnd() + "\n```";
+const reviewDiff = `diff --git a/src/billing/invoice.ts b/src/billing/invoice.ts
+index 3b18e51..a4c09f2 100644
+--- a/src/billing/invoice.ts
++++ b/src/billing/invoice.ts
+@@ -12,9 +12,12 @@ export function total(lines: Line[], plan: Plan): Money {
+ \tconst subtotal = lines.reduce((sum, l) => sum + l.qty * l.price, 0);
+-\tconst tax = subtotal * 0.2;
+-\treturn round(subtotal + tax);
++\tconst rate = taxRate(plan.country);
++\tconst tax = subtotal * rate;
++\t// Discounts apply before tax, never after.
++\tconst discounted = applyDiscount(subtotal, plan.discount);
++\treturn round(discounted + discounted * rate);
+ }
+
+ export function due(invoice: Invoice): Date {`;
+const gitLog = `a4c09f2 (HEAD -> feat/tax-rates) Apply discounts before tax
+9e1d2b7 Read the tax rate from the plan's country
+51c0a3e (origin/main, main) Release 0.2.0
+4ca8510 Let the Component library be closed`;
+const cargoOut = `   Compiling billing v0.4.1 (/Users/dev/workspace/billing)
+    Finished \`test\` profile [unoptimized + debuginfo] target(s) in 6.12s
+     Running unittests src/lib.rs (target/debug/deps/billing-5c2e1f0a9b3d7e64)
+
+running 3 tests
+test invoice::tests::discount_applies_before_tax ... ok
+test invoice::tests::tax_rate_follows_the_country ... ok
+test invoice::tests::rounds_to_cents ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s`;
+const citiesTree = {
+  type: "card",
+  props: { title: "Where the invoices go" },
+  children: [
+    {
+      type: "tabs",
+      children: [
+        {
+          type: "tab",
+          props: { label: "Map" },
+          children: [
+            {
+              type: "map",
+              props: {
+                markers: [
+                  { lat: 51.5072, lng: -0.1276, label: "London · 412" },
+                  { lat: 52.52, lng: 13.405, label: "Berlin · 198" },
+                  { lat: 38.7223, lng: -9.1393, label: "Lisbon · 87" },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          type: "tab",
+          props: { label: "Table" },
+          children: [
+            {
+              type: "table",
+              props: {
+                columns: [
+                  { key: "city", label: "City" },
+                  { key: "invoices", label: "Invoices" },
+                  { key: "rate", label: "Tax rate" },
+                ],
+                rows: [
+                  { city: "London", invoices: 412, rate: "20%" },
+                  { city: "Berlin", invoices: 198, rate: "19%" },
+                  { city: "Lisbon", invoices: 87, rate: "23%" },
+                ],
+              },
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+const renderInput = { title: "Where the invoices go", tree: citiesTree };
+/** The tool cards a coding turn makes: tools loaded, commands run (a diff, a log, cargo), pages fetched, UI built. */
+const commandOutput: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  {
+    event: "session-entry",
+    index: 1,
+    entry: call("ts", "ToolSearch", "other", "completed", { query: "select:mcp__yaah-ui__ui_catalog,mcp__yaah-ui__ui_render" }, "Loaded 2 tools."),
+  },
+  { event: "session-entry", index: 2, entry: call("cat", "mcp__yaah-ui__ui_catalog", "other", "completed", {}, "(catalog)") },
+  {
+    event: "session-entry",
+    index: 3,
+    entry: call("diff", "git diff main...HEAD", "execute", "completed", { command: "git diff main...HEAD" }, consoleFence(reviewDiff)),
+  },
+  {
+    event: "session-entry",
+    index: 4,
+    entry: call(
+      "log",
+      "git log --oneline --decorate -4",
+      "execute",
+      "completed",
+      { command: "git log --oneline --decorate -4" },
+      consoleFence(gitLog),
+    ),
+  },
+  {
+    event: "session-entry",
+    index: 5,
+    entry: call("cargo", "cargo test invoice", "execute", "completed", { command: "cargo test invoice" }, consoleFence(cargoOut)),
+  },
+  {
+    event: "session-entry",
+    index: 6,
+    entry: call(
+      "fetch1",
+      "mcp__fetch__fetch",
+      "other",
+      "completed",
+      { url: "https://www.gov.uk/guidance/rates-of-vat-on-different-goods-and-services" },
+      "VAT rates…",
+    ),
+  },
+  {
+    event: "session-entry",
+    index: 7,
+    entry: call(
+      "fetch2",
+      "Fetch https://taxation-customs.ec.europa.eu/vat-rates",
+      "fetch",
+      "completed",
+      { url: "https://taxation-customs.ec.europa.eu/vat-rates" },
+      "EU VAT rates…",
+    ),
+  },
+  { event: "session-entry", index: 8, entry: call("ui", "mcp__yaah-ui__ui_render", "other", "in_progress", {}) },
+  { event: "session-entry", index: 8, entry: call("ui", "mcp__yaah-ui__ui_render", "other", "in_progress", renderInput) },
+  {
+    event: "session-entry",
+    index: 9,
+    entry: { type: "ui", askId: null, answer: null, title: "Where the invoices go", component: null, version: null, tree: citiesTree, props: {} },
+  },
+  { event: "session-entry", index: 8, entry: call("ui", "mcp__yaah-ui__ui_render", "other", "completed", renderInput, "Rendered.") },
+  {
+    event: "session-entry",
+    index: 10,
+    entry: {
+      type: "agent",
+      text: "Discounts now apply before tax, and the rate comes from the plan's country. The three invoice tests pass; London has the most invoices at 20%.",
+      messageId: null,
+    },
+  },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
 const routes: [RegExp, Recording][] = [
+  [/command output|tool cards/i, commandOutput],
   [/big diff/i, bigDiff],
   [/assembl|deploys/i, assembling],
   [/\blinks?\b|markdown/i, markdownReply],
@@ -286,6 +454,9 @@ export function chatReplies(m: Mock): Replies {
     state.turns[sessionId] = turn;
     const pause = () => new Promise<void>((resume) => (turn.resume = resume));
 
+    // After switch_agent the first prompt carries the conversation to the new agent (shown as an attachment).
+    const handoff = s.handoffFrom;
+    delete s.handoffFrom;
     const recording = recordingFor(text);
     const offset = state.transcripts[sessionId]?.length ?? 0;
     const firstUser = recording.find((e) => e.event === "session-entry" && e.entry.type === "user");
@@ -306,7 +477,9 @@ export function chatReplies(m: Mock): Replies {
       const index = offset + step.index;
       // The user's own prompt replaces the recorded one (later recorded prompts stay).
       const entry: Entry =
-        step === firstUser && step.entry.type === "user" ? { ...step.entry, text, attachments: mentions.map(baseName) } : step.entry;
+        step === firstUser && step.entry.type === "user"
+          ? { ...step.entry, text, attachments: [...(handoff ? [`hand-off from ${handoff}`] : []), ...mentions.map(baseName)] }
+          : step.entry;
       const isUpdate = entry.type === "ui" && rendered.has(index);
       if (entry.type === "ui") rendered.add(index);
       // The click supplies the permission choice and the form answer; skip the recorded ones.
@@ -368,6 +541,20 @@ export function chatReplies(m: Mock): Replies {
       // The turn runs on after the command returns, as in Rust.
       replay(sessionId, text, mentions).catch((e: unknown) => console.error("[browser-mock] replay failed", e));
       return null;
+    },
+    // session.rs `switch_agent`: the next prompt goes to another agent (a fresh session there, with a hand-off).
+    switch_agent: async ({ sessionId, accountId }: { sessionId: string; accountId: string }): Promise<SessionInfo> => {
+      const s = session(sessionId);
+      if (s.running) throw new Error("Wait for the turn to end (or stop it) before switching agents.");
+      const label = (id: string) => state.profiles.find((p) => p.id === id)?.label;
+      const to = need(label(accountId), `unknown agent ${accountId}; add it again in Manage agents`);
+      if (accountId === s.accountId) throw new Error(`This chat already uses ${to}.`);
+      const from = label(s.accountId) ?? null;
+      Object.assign(s, { accountId, handoffFrom: from ?? s.accountId });
+      const list = (state.transcripts[sessionId] ??= []);
+      await show(sessionId, list.length, { type: "switch", accountId, label: to, from });
+      await showInfo(s);
+      return s;
     },
     respond_permission: async ({ sessionId, index, optionId }: { sessionId: string; index: number; optionId: string | null }) => {
       const request = shown(sessionId, index);

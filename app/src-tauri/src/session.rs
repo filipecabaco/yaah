@@ -121,6 +121,16 @@ pub enum Entry {
     Notices {
         items: Vec<Notice>,
     },
+    /// The user moved the chat to another agent (`Hub::switch_agent`): the next
+    /// prompt goes to it in a fresh ACP session, with the conversation handed off.
+    Switch {
+        /// The agent profile the chat uses from here on.
+        account_id: String,
+        /// Its label, as it was when switching ("Codex (work)").
+        label: String,
+        /// The label of the agent it took over from, when known.
+        from: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -162,6 +172,22 @@ pub struct SessionInfo {
     /// `[{ name, description, input?: { hint } }]`.
     #[serde(default)]
     pub commands: Vec<Value>,
+    /// The chat's ACP session id at its current agent, when it isn't `session_id`:
+    /// after a switch the agent picks a new one, while the chat keeps its id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
+    /// Set by a switch to another agent: the label of the agent it takes over from.
+    /// While set, the next prompt starts a fresh ACP session and hands the
+    /// conversation off; cleared once that prompt goes out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff_from: Option<String>,
+}
+
+impl SessionInfo {
+    /// The id the chat's agent knows it by (ACP `sessionId`).
+    pub fn agent_session(&self) -> &str {
+        self.agent_session_id.as_deref().unwrap_or(&self.session_id)
+    }
 }
 
 /// A chat as the UI gets it, and as it is saved on disk.
@@ -249,6 +275,9 @@ struct Session {
     /// Permission requests still waiting, by entry index, with the process that
     /// asked (its generation, and where answers go): the answer goes there and nowhere else.
     waiting: HashMap<usize, (u64, Responder)>,
+    /// The chat's token on the UI MCP server, once one was handed out (runtime
+    /// only). A hand-off to another agent reuses it, so its UI calls reach this chat.
+    ui_token: Option<String>,
     /// This chat's own cell, for the threads that flush appends and save.
     me: Weak<Mutex<Session>>,
     stream: Stream,
@@ -305,6 +334,7 @@ impl Session {
             save_to,
             remembered: HashMap::new(),
             waiting: HashMap::new(),
+            ui_token: None,
             me: Weak::new(),
             stream: Stream::default(),
             saving: Saving::default(),
@@ -560,6 +590,10 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 struct Shared {
     app: Emit,
     sessions: Mutex<HashMap<String, Cell>>,
+    /// ACP session id → chat id, for chats whose agent knows them by another id
+    /// (after a switch to another agent). Taken only on its own, never with a chat's lock held
+    /// first and `sessions` after it.
+    aliases: Mutex<HashMap<String, String>>,
     /// Profiles whose agent answered "authentication required" since their last login.
     needs_login: Mutex<HashSet<String>>,
     profiles: &'static Store,
@@ -593,9 +627,11 @@ impl Shared {
             let io = io.clone();
             move |chat| write_session(&io, chat)
         });
+        let aliases = sessions.values().filter_map(|s| Some((s.info.agent_session_id.clone()?, s.info.session_id.clone()))).collect();
         Self {
             app,
             sessions: Mutex::new(sessions.into_iter().map(|(id, s)| (id, cell(s))).collect()),
+            aliases: Mutex::new(aliases),
             needs_login: Mutex::default(),
             profiles,
             flusher,
@@ -606,8 +642,19 @@ impl Shared {
         }
     }
 
+    /// A chat by its id, or by the ACP session id its current agent knows it by.
     fn chat(&self, session_id: &str) -> Option<Cell> {
-        self.sessions.lock().unwrap().get(session_id).cloned()
+        if let Some(chat) = self.sessions.lock().unwrap().get(session_id) {
+            return Some(chat.clone());
+        }
+        let id = self.aliases.lock().unwrap().get(session_id).cloned()?;
+        self.sessions.lock().unwrap().get(&id).cloned()
+    }
+
+    /// Whether `acp_id` would name a chat other than `chat_id` (as its id or its agent's).
+    fn taken_by_another(&self, acp_id: &str, chat_id: &str) -> bool {
+        (acp_id != chat_id && self.sessions.lock().unwrap().contains_key(acp_id))
+            || self.aliases.lock().unwrap().get(acp_id).is_some_and(|c| c != chat_id)
     }
 
     fn chats(&self) -> Vec<Cell> {
@@ -1079,17 +1126,20 @@ impl Hub {
             running: false,
             stop_reason: None,
             commands: vec![],
+            agent_session_id: None,
+            handoff_from: None,
         };
         let mut session = Session::new(info.clone(), vec![], self.store.as_ref().map(|d| d.join(file_name(&session_id))));
         session.brief = brief;
         session.guide = guide;
         session.attached = Some(agent.generation);
+        session.ui_token = Some(ui_token.clone());
         let chat = cell(session);
         let taken = {
             // An agent may only start new chats: an id yaah already has is another chat
             // (perhaps another agent's), which this one would take over and overwrite.
             let mut sessions = self.shared.sessions.lock().unwrap();
-            let taken = sessions.contains_key(&session_id);
+            let taken = sessions.contains_key(&session_id) || self.shared.aliases.lock().unwrap().contains_key(&session_id);
             if !taken {
                 sessions.insert(session_id.clone(), chat.clone());
             }
@@ -1141,11 +1191,11 @@ impl Hub {
         if !agent.caps.load_session {
             return Err("This agent can't reopen earlier chats. Start a new chat to continue.".into());
         }
-        let (cwd, additional_dirs) = self.shared.with(session_id, |s| {
+        let (agent_session, cwd, additional_dirs) = self.shared.with(session_id, |s| {
             s.replaying = true;
-            (s.info.cwd.clone(), s.info.additional_dirs.clone())
+            (s.info.agent_session().to_owned(), s.info.cwd.clone(), s.info.additional_dirs.clone())
         })?;
-        let mut params = json!({ "sessionId": session_id, "cwd": cwd, "mcpServers": [] });
+        let mut params = json!({ "sessionId": agent_session, "cwd": cwd, "mcpServers": [] });
         if !additional_dirs.is_empty() && agent.caps.additional_dirs {
             params["additionalDirectories"] = json!(additional_dirs);
         }
@@ -1159,6 +1209,90 @@ impl Hub {
             s.attached = res.is_ok().then_some(agent.generation);
         });
         res.map(|_| ()).map_err(|e| self.shared.rpc_error(&account.id, &e, "Couldn't reopen this chat"))
+    }
+
+    /// Move a chat to another agent profile. The chat keeps its id and its
+    /// transcript; its next prompt goes to the new agent in a fresh ACP session,
+    /// with the conversation so far handed off ([`handoff_text`]).
+    ///
+    /// Switching back to an agent the chat used before also hands off: its old
+    /// session is never reopened, since it missed what was said after the switch.
+    /// Switching again before prompting keeps the agent the hand-off is from
+    /// (the one in between never said anything).
+    pub fn switch_agent(&self, session_id: &str, account_id: &str) -> Result<SessionInfo, String> {
+        let to = self.shared.profile(account_id)?;
+        self.shared.with(session_id, |s| {
+            if s.info.running {
+                return Err("Wait for the turn to end (or stop it) before switching agents.".to_owned());
+            }
+            if s.info.account_id == to.id {
+                return Err(format!("This chat already uses {}.", to.label));
+            }
+            let from = self.shared.profiles.find(&s.info.account_id).map(|p| p.label);
+            if s.info.handoff_from.is_none() {
+                s.info.handoff_from = Some(from.clone().unwrap_or_else(|| s.info.account_id.clone()));
+            }
+            s.info.account_id.clone_from(&to.id);
+            s.info.commands.clear();
+            s.attached = None;
+            s.brief = None;
+            s.guide = None;
+            self.shared.push(s, Entry::Switch { account_id: to.id.clone(), label: to.label.clone(), from });
+            self.shared.emit_info(s);
+            self.shared.save(s);
+            Ok(s.info.clone())
+        })?
+    }
+
+    /// Start the chat afresh with `agent` after a switch: `session/new` with the
+    /// chat's folders, MCP servers (yaah's UI server at the chat's own token) and
+    /// yaah's guide, and the project brief again. The new session id is recorded
+    /// so this agent's updates reach the chat and later prompts (and reloads) use it.
+    async fn hand_off(&self, session_id: &str, agent: &Agent, account: &Profile) -> Result<(), String> {
+        let (cwd, additional_dirs, project_id, token) =
+            self.shared.with(session_id, |s| (s.info.cwd.clone(), s.info.additional_dirs.clone(), s.info.project_id.clone(), s.ui_token.clone()))?;
+        if !additional_dirs.is_empty() && !agent.caps.additional_dirs {
+            return Err(format!(
+                "{} can't work across several folders (no additionalDirectories support), and this chat uses {}. Switch to another agent.",
+                account.label,
+                additional_dirs.len() + 1
+            ));
+        }
+        let mut params = json!({ "cwd": cwd, "mcpServers": [] });
+        if !additional_dirs.is_empty() {
+            params["additionalDirectories"] = json!(additional_dirs);
+        }
+        let token = token.unwrap_or_else(random_token);
+        let guide = self.add_ui_server(agent, &token, Some(session_id), &mut params);
+        crate::mcp_servers::inject(&mut params, agent.caps.mcp_http, agent.caps.mcp_sse, account);
+
+        let res = agent.conn.request("session/new", params).await;
+        let acp_id = res.map_err(|e| self.shared.rpc_error(&account.id, &e, "session/new failed")).and_then(|r| {
+            r.get("sessionId")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| "session/new returned no sessionId".to_owned())
+        })?;
+        if self.shared.taken_by_another(&acp_id, session_id) {
+            return Err(format!("the agent started a session with the id of another chat yaah has ({acp_id}); refused"));
+        }
+        {
+            let mut aliases = self.shared.aliases.lock().unwrap();
+            aliases.retain(|_, chat| chat != session_id);
+            if acp_id != session_id {
+                aliases.insert(acp_id.clone(), session_id.to_owned());
+            }
+        }
+        let brief = project_id.and_then(|id| project_brief(&id, &additional_dirs));
+        self.shared.with(session_id, |s| {
+            s.info.agent_session_id = (acp_id != session_id).then_some(acp_id);
+            s.attached = Some(agent.generation);
+            s.ui_token = Some(token);
+            s.guide = guide;
+            s.brief = brief;
+            self.shared.save(s);
+        })
     }
 
     /// The agent profile with this id.
@@ -1252,6 +1386,7 @@ impl Hub {
             s.save_to.take()
         };
         self.ui_tokens.lock().unwrap().retain(|_, sid| sid.as_deref() != Some(session_id));
+        self.shared.aliases.lock().unwrap().retain(|_, chat| chat != session_id);
         // Tokens an agent process still holds stop working too, and the chat's previews close.
         if let Some(host) = self.ui_host.get().and_then(Weak::upgrade) {
             host.revoke(session_id);
@@ -1301,11 +1436,15 @@ impl Hub {
     /// Starts the chat's agent if it isn't running, and reattaches the chat to it.
     pub async fn prompt(&self, session_id: &str, text: String, mentions: Vec<String>) -> Result<(), String> {
         const BUSY: &str = "a turn is already running in this session";
-        let (account_id, attached) =
-            self.shared.with(session_id, |s| (!s.info.running).then(|| (s.info.account_id.clone(), s.attached)))?.ok_or(BUSY)?;
+        let (account_id, attached, handoff) = self
+            .shared
+            .with(session_id, |s| (!s.info.running).then(|| (s.info.account_id.clone(), s.attached, s.info.handoff_from.is_some())))?
+            .ok_or(BUSY)?;
         let account = self.shared.profile(&account_id)?;
         let agent = self.agent(&account).await?;
-        if attached != Some(agent.generation) {
+        if handoff {
+            self.hand_off(session_id, &agent, &account).await?;
+        } else if attached != Some(agent.generation) {
             self.attach(session_id, &agent, &account).await?;
         }
 
@@ -1336,6 +1475,11 @@ impl Hub {
                 blocks.insert(0, json!({ "type": "text", "text": guide }));
                 attachments.insert(0, agent_guide::ATTACHMENT.to_owned());
             }
+            // The first prompt to an agent the chat was switched to: what was said so far.
+            if let Some(from) = s.info.handoff_from.take() {
+                blocks.push(json!({ "type": "text", "text": handoff_text(&from, &s.entries) }));
+                attachments.push(format!("hand-off from {from}"));
+            }
             for path in mentions.iter().filter(|p| Path::new(p).is_absolute()) {
                 let name = Path::new(path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
                 blocks.push(json!({ "type": "resource_link", "uri": format!("file://{path}"), "name": name }));
@@ -1345,13 +1489,14 @@ impl Hub {
             self.shared.push(s, Entry::User { text, attachments });
             self.shared.emit_info(s);
             self.shared.save(s);
-            Ok(blocks)
+            Ok((blocks, s.info.agent_session().to_owned()))
         })??;
 
+        let (blocks, agent_session) = blocks;
         let shared = self.shared.clone();
         let sid = session_id.to_owned();
         tauri::async_runtime::spawn(async move {
-            let res = agent.conn.request("session/prompt", json!({ "sessionId": sid, "prompt": blocks })).await;
+            let res = agent.conn.request("session/prompt", json!({ "sessionId": agent_session, "prompt": blocks })).await;
             let (stop, error) = match res {
                 Ok(v) => (v.get("stopReason").and_then(Value::as_str).map(str::to_owned), None),
                 // claude-agent-acp accepts session/new without a login and only fails here.
@@ -1369,14 +1514,14 @@ impl Hub {
     /// Stop the running turn: waiting permission requests are answered
     /// `cancelled`, the agent is told, and a waiting `ui_ask` is released.
     pub fn cancel(&self, session_id: &str) -> Result<(), String> {
-        let account_id = self.shared.with(session_id, |s| {
+        let (account_id, agent_session) = self.shared.with(session_id, |s| {
             for i in s.cancel_waiting("cancelled", |_| true) {
                 self.shared.emit_entry(s, i);
             }
-            s.info.account_id.clone()
+            (s.info.account_id.clone(), s.info.agent_session().to_owned())
         })?;
         if let Some(agent) = self.live_agent(&account_id) {
-            agent.conn.notify("session/cancel", json!({ "sessionId": session_id }));
+            agent.conn.notify("session/cancel", json!({ "sessionId": agent_session }));
         }
         self.cancel_asks(session_id);
         Ok(())
@@ -1734,7 +1879,8 @@ impl FormRef<'_> {
     }
 }
 
-const INPUTS: &[&str] = &["textfield", "choice", "select", "slider", "rank", "toggle"];
+/// Nodes whose value lives in the UI entry's draft. `diffreview` keeps its viewed ticks there (by range), so they survive re-renders.
+const INPUTS: &[&str] = &["textfield", "choice", "select", "slider", "rank", "toggle", "diffreview"];
 
 /// The input fields in a UI tree, with their literal defaults, in order.
 pub fn form_fields(tree: &Value) -> Vec<(String, Value)> {
@@ -1786,6 +1932,70 @@ fn file_name(id: &str) -> String {
     use sha2::{Digest, Sha256};
     let plain = (1..=128).contains(&id.len()) && !id.starts_with('.') && id.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c));
     if plain { format!("{id}.json") } else { format!("{:x}.json", Sha256::digest(id)) }
+}
+
+/// A project's brief, found through the chat's folders (the project's context
+/// folder, `~/.yaah/projects/<id>`, is one of them), when it says something.
+fn project_brief(project_id: &str, dirs: &[String]) -> Option<Brief> {
+    let dir = dirs
+        .iter()
+        .map(Path::new)
+        .find(|d| d.file_name().is_some_and(|n| n == project_id) && d.parent().is_some_and(|p| p.ends_with(".yaah/projects")))?;
+    let path = dir.join("project.md");
+    let text = std::fs::read_to_string(&path).ok().filter(|t| has_content(t))?;
+    Some(Brief { path: path.to_string_lossy().into_owned(), text })
+}
+
+/// At most this many characters of conversation go to an agent taking over a chat.
+pub const HANDOFF_MAX_CHARS: usize = 40_000;
+
+/// What an agent taking over a chat is told: the conversation so far, oldest
+/// first. Messages in full; tool calls, UI and switches as one line each;
+/// thoughts, plans, permissions and notices left out. Past [`HANDOFF_MAX_CHARS`]
+/// the newest entries are kept and the omission is noted.
+pub fn handoff_text(from: &str, entries: &[Arc<Entry>]) -> String {
+    use std::fmt::Write;
+    let lines: Vec<String> = entries
+        .iter()
+        .filter_map(|e| match &**e {
+            Entry::User { text, .. } => Some(format!("User: {}", text.trim())),
+            Entry::Agent { text, .. } if !text.trim().is_empty() => Some(format!("Agent: {}", text.trim())),
+            Entry::Tool { title, status, .. } => {
+                Some(format!("[tool] {} ({})", truncate(title.lines().next().unwrap_or_default(), 200), status.as_deref().unwrap_or("unknown")))
+            }
+            Entry::Ui { title, component, .. } => Some(format!("[UI] {}", title.as_deref().or(component.as_deref()).unwrap_or("UI"))),
+            Entry::Switch { label, .. } => Some(format!("[switched to {label}]")),
+            Entry::Error { message, .. } => Some(format!("[error] {}", truncate(message.lines().next().unwrap_or_default(), 200))),
+            _ => None,
+        })
+        .collect();
+    let mut kept: Vec<String> = vec![];
+    let mut size = 0;
+    for line in lines.iter().rev() {
+        let n = line.chars().count() + 2;
+        if size + n > HANDOFF_MAX_CHARS {
+            // The newest entry alone is too long: keep its end.
+            if kept.is_empty() {
+                let tail: String = line.chars().skip(n - HANDOFF_MAX_CHARS).collect();
+                kept.push(format!("…{tail}"));
+            }
+            break;
+        }
+        size += n;
+        kept.push(line.clone());
+    }
+    kept.reverse();
+    let mut out = format!("You're taking over this chat from {from}. The conversation so far:\n\n");
+    let left_out = lines.len() - kept.len();
+    if left_out > 0 {
+        let what = if left_out == 1 { "entry" } else { "entries" };
+        let _ = write!(out, "({left_out} earlier {what} left out)\n\n");
+    }
+    if kept.is_empty() {
+        out.push_str("(nothing yet)");
+    }
+    out.push_str(&kept.join("\n\n"));
+    out
 }
 
 /// A brief is worth sending once it says more than its `# Title` line.
@@ -1857,6 +2067,8 @@ fn test_info(id: &str) -> SessionInfo {
         running: true,
         stop_reason: None,
         commands: vec![],
+        agent_session_id: None,
+        handoff_from: None,
     }
 }
 
@@ -2009,6 +2221,7 @@ mod live_tests {
             created_at: 0,
             context_dir: ctx.to_string_lossy().into(),
             link: None,
+            agent_id: None,
         };
 
         let mut events = vec![];
@@ -2261,6 +2474,7 @@ mod live_tests {
             created_at: 0,
             context_dir: repo.to_string_lossy().into(),
             link: None,
+            agent_id: None,
         };
         let quiet: Emit = Arc::new(|_: &str, _: Value| {});
         let ask = |hub: &Hub, sid: &str, text: &str| {
@@ -3086,5 +3300,165 @@ mod lazy_tests {
         hub.flush();
         assert_eq!(std::fs::read_to_string(dir.join("broken.json")).unwrap(), broken);
         std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+    use crate::agents::{CUSTOM, Draft};
+
+    fn tool(title: &str, status: &str) -> Entry {
+        Entry::Tool {
+            tool_call_id: title.into(),
+            title: title.into(),
+            kind: None,
+            status: Some(status.into()),
+            content: json!([]),
+            locations: json!([]),
+            raw_input: Value::Null,
+        }
+    }
+
+    fn shared(entries: Vec<Entry>) -> Vec<Arc<Entry>> {
+        entries.into_iter().map(Arc::new).collect()
+    }
+
+    #[test]
+    fn the_handoff_keeps_messages_and_one_liners_in_order() {
+        let entries = shared(vec![
+            Entry::User { text: "  Fix the build  ".into(), attachments: vec!["project.md".into()] },
+            Entry::Thought { text: "secret musing".into(), message_id: None },
+            Entry::Agent { text: "Looking.".into(), message_id: None },
+            tool("cargo build", "failed"),
+            Entry::Plan { entries: json!([{ "content": "a plan step" }]) },
+            Entry::Permission { request_id: json!(1), tool_call_id: None, title: "Run rm".into(), options: json!([]), chosen: Some("Allow".into()) },
+            Entry::Ui {
+                ui_id: None,
+                title: Some("Build errors".into()),
+                component: None,
+                version: None,
+                tree: json!({}),
+                props: json!({}),
+                ask_id: None,
+                answer: None,
+                draft: None,
+                draft_by: None,
+            },
+            Entry::Ui {
+                ui_id: None,
+                title: None,
+                component: Some("pr-view".into()),
+                version: Some(1),
+                tree: json!({}),
+                props: json!({}),
+                ask_id: None,
+                answer: None,
+                draft: None,
+                draft_by: None,
+            },
+            Entry::Notices { items: vec![] },
+            Entry::Switch { account_id: "codex".into(), label: "Codex (work)".into(), from: Some("Claude".into()) },
+        ]);
+        let text = handoff_text("Claude", &entries);
+        assert_eq!(
+            text,
+            "You're taking over this chat from Claude. The conversation so far:\n\n\
+             User: Fix the build\n\n\
+             Agent: Looking.\n\n\
+             [tool] cargo build (failed)\n\n\
+             [UI] Build errors\n\n\
+             [UI] pr-view\n\n\
+             [switched to Codex (work)]"
+        );
+        assert!(!text.contains("secret musing") && !text.contains("a plan step") && !text.contains("Run rm"));
+        assert!(handoff_text("Claude", &[]).ends_with("(nothing yet)"));
+    }
+
+    #[test]
+    fn a_long_handoff_keeps_the_newest_and_says_what_was_left_out() {
+        let entries = shared((0..100).map(|i| Entry::User { text: format!("{i:03} {}", "x".repeat(996)), attachments: vec![] }).collect());
+        let text = handoff_text("Claude", &entries);
+        assert!(text.chars().count() <= HANDOFF_MAX_CHARS + 200, "{}", text.len());
+        assert!(text.contains("User: 099 ") && !text.contains("User: 000 "), "the newest stay");
+        let kept = text.matches("User: ").count();
+        assert!(kept > 30 && kept < 100);
+        assert!(text.contains(&format!("({} earlier entries left out)", 100 - kept)));
+        let first = text.find("User: ").unwrap();
+        assert!(text[first..].starts_with(&format!("User: {:03}", 100 - kept)), "oldest kept first");
+
+        // One message longer than the whole budget keeps its end.
+        let huge = shared(vec![
+            Entry::User { text: "old".into(), attachments: vec![] },
+            Entry::Agent { text: format!("start{}end", "y".repeat(50_000)), message_id: None },
+        ]);
+        let text = handoff_text("Claude", &huge);
+        assert!(text.ends_with("end") && !text.contains("start") && text.contains("(1 earlier entry left out)"));
+        assert!(text.chars().count() <= HANDOFF_MAX_CHARS + 200);
+    }
+
+    #[test]
+    fn infos_round_trip_with_and_without_a_switch() {
+        let mut info = test_info("chat-1");
+        let plain = serde_json::to_value(&info).unwrap();
+        assert!(plain.get("agentSessionId").is_none() && plain.get("handoffFrom").is_none(), "nothing extra for a chat never switched");
+        info.agent_session_id = Some("acp-2".into());
+        info.handoff_from = Some("Claude".into());
+        let v = serde_json::to_value(&info).unwrap();
+        assert_eq!((v["agentSessionId"].as_str(), v["handoffFrom"].as_str()), (Some("acp-2"), Some("Claude")));
+        let back: SessionInfo = serde_json::from_value(v).unwrap();
+        assert_eq!(back.agent_session(), "acp-2");
+        // A chat saved before switching existed.
+        let old: SessionInfo = serde_json::from_value(plain).unwrap();
+        assert_eq!((old.agent_session(), old.handoff_from.as_deref()), ("chat-1", None));
+        let entry = serde_json::to_value(Entry::Switch { account_id: "b".into(), label: "B".into(), from: None }).unwrap();
+        assert_eq!(entry, json!({ "type": "switch", "accountId": "b", "label": "B", "from": null }));
+    }
+
+    #[test]
+    fn switching_is_refused_mid_turn_and_to_the_same_agent() {
+        let dir = std::env::temp_dir().join(format!("yaah-switch-{}", random_token()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("agents.json"), r#"{ "profiles": [] }"#).unwrap();
+        let profiles: &'static Store = Box::leak(Box::new(Store::at(dir.join("agents.json"))));
+        let add = |label: &str| {
+            let draft = Draft { label: label.into(), preset: CUSTOM.into(), command_line: "true".into(), ..Draft::default() };
+            profiles.save(&draft).unwrap().0.id
+        };
+        let (alpha, beta, gamma) = (add("Alpha"), add("Beta"), add("Gamma"));
+        let events: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+        let sink = events.clone();
+        let hub = Hub::open(Arc::new(move |n: &str, v: Value| sink.lock().unwrap().push((n.to_owned(), v))), None, profiles);
+        let mut info = test_info("sw");
+        info.account_id.clone_from(&alpha);
+        info.commands = vec![json!({ "name": "review" })];
+        let mut s = Session::new(info, vec![Entry::User { text: "hi".into(), attachments: vec![] }], None);
+        s.attached = Some(7);
+        hub.shared.insert(s);
+
+        assert!(hub.switch_agent("sw", &beta).unwrap_err().contains("Wait for the turn"), "refused while a turn runs");
+        hub.shared.with("sw", |s| s.info.running = false).unwrap();
+        assert_eq!(hub.switch_agent("sw", &alpha).unwrap_err(), "This chat already uses Alpha.");
+        assert!(hub.switch_agent("sw", "nobody").is_err());
+        assert!(hub.switch_agent("nope", &beta).is_err());
+
+        let info = hub.switch_agent("sw", &beta).unwrap();
+        assert_eq!((info.account_id.as_str(), info.handoff_from.as_deref()), (beta.as_str(), Some("Alpha")));
+        assert!(info.commands.is_empty(), "the new agent sends its own commands");
+        hub.shared.with("sw", |s| assert_eq!(s.attached, None)).unwrap();
+        let t = hub.transcript("sw").unwrap();
+        assert!(
+            matches!(&t.entries[1], Entry::Switch { account_id, label, from: Some(f) } if *account_id == beta && label == "Beta" && f == "Alpha")
+        );
+        let ev = events.lock().unwrap();
+        assert!(ev.iter().any(|(n, v)| n == "session-entry" && v["entry"]["type"] == "switch"));
+        assert!(ev.iter().any(|(n, v)| n == "session-info" && v["accountId"] == beta.as_str()));
+        drop(ev);
+
+        // Again before any prompt: the hand-off is still from the agent that spoke.
+        let info = hub.switch_agent("sw", &gamma).unwrap();
+        assert_eq!(info.handoff_from.as_deref(), Some("Alpha"));
+        assert!(matches!(&hub.transcript("sw").unwrap().entries[2], Entry::Switch { from: Some(f), .. } if f == "Beta"));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

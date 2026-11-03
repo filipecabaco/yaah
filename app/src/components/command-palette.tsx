@@ -44,6 +44,9 @@ export type PalettePage =
   | { kind: "delete"; chat: SessionInfo }
   | { kind: "status"; project: Project }
   | { kind: "agent" }
+  /** The agent a chat's next message goes to (`switch_agent`). */
+  | { kind: "chatAgent"; sessionId: string }
+  | { kind: "quickChatWith" }
   | { kind: "move"; chat: SessionInfo }
   | { kind: "promote"; chat: SessionInfo }
   | { kind: "connections" }
@@ -291,8 +294,16 @@ function PaletteBody({
         <Item id="keep" icon={<Database />} label="Keep it" onSelect={() => onPage({ kind: "connections" })} />
       </CommandGroup>
     );
+  } else if (page.kind === "chatAgent") {
+    const c = y.chatOrder.find((x) => x.sessionId === page.sessionId);
+    placeholder = "Switch this chat's agent…";
+    body = c ? (
+      <ChatAgentPage chat={c} agents={y.agents} onDone={() => close(focusComposer)} onLogin={(a) => close(() => onLogin(a))} />
+    ) : (
+      <CommandEmpty>That chat is gone.</CommandEmpty>
+    );
   } else if (page.kind === "agent") {
-    placeholder = "Switch agent…";
+    placeholder = "Agent for new chats…";
     body = (
       <CommandGroup heading="New chats use">
         {y.agents.map((a) => (
@@ -311,14 +322,34 @@ function PaletteBody({
         <Item id="add-agent" icon={<Plus />} label="Add agent…" onSelect={() => close(onAddAgent)} />
       </CommandGroup>
     );
+  } else if (page.kind === "quickChatWith") {
+    placeholder = "New quick chat with…";
+    body = (
+      <CommandGroup heading="New quick chat with">
+        {y.agents.map((a) => (
+          <Item
+            key={a.id}
+            id={`quick-${a.id}`}
+            icon={<Bot />}
+            label={a.label}
+            detail={a.loggedIn === false ? "not logged in" : (a.email ?? a.presetLabel)}
+            shortcut={a.id === y.agentId && !project ? "newChat" : undefined}
+            onSelect={() => (canChat(a) ? run(() => y.newQuickChat(undefined, a.id)) : close(() => onLogin(a)))}
+          />
+        ))}
+      </CommandGroup>
+    );
   } else {
     const ready = canChat(account);
+    // A project's chats start with its own agent.
+    const projectAgent = project ? y.agents.find((a) => a.id === y.agentFor(project.id)) : undefined;
     const actions: (Entry | false | null | undefined)[] = [
       project &&
-        ready && {
+        canChat(projectAgent) && {
           id: "new-chat",
           icon: <MessageSquarePlus />,
           label: `New chat in ${project.name}`,
+          detail: projectAgent.label,
           shortcut: "newChat",
           onSelect: () => run(() => y.newChat(project.id)),
         },
@@ -329,6 +360,13 @@ function PaletteBody({
         detail: "no project",
         shortcut: project ? undefined : "newChat",
         onSelect: () => run(() => y.newQuickChat()),
+      },
+      y.agents.length > 1 && {
+        id: "quick-chat-with",
+        icon: <Bot />,
+        label: "New quick chat with…",
+        detail: "pick the agent",
+        onSelect: () => onPage({ kind: "quickChatWith" }),
       },
       ready && {
         id: "folder-chat",
@@ -393,7 +431,15 @@ function PaletteBody({
         detail: account.loggedIn === false ? "needed" : undefined,
         onSelect: () => close(() => onLogin(account)),
       },
-      { id: "switch-agent", icon: <Bot />, label: "Switch agent…", detail: account?.label, onSelect: () => onPage({ kind: "agent" }) },
+      chat &&
+        y.agents.length > 1 && {
+          id: "switch-chat-agent",
+          icon: <Bot />,
+          label: "Switch agent…",
+          detail: `this chat: ${y.agents.find((a) => a.id === chat.accountId)?.label ?? chat.accountId}`,
+          onSelect: () => onPage({ kind: "chatAgent", sessionId: chat.sessionId }),
+        },
+      { id: "default-agent", icon: <Bot />, label: "Agent for new chats…", detail: account?.label, onSelect: () => onPage({ kind: "agent" }) },
       {
         id: "connections",
         icon: <Database />,
@@ -709,5 +755,53 @@ function AddConnection({ onDone }: { onDone: () => void }) {
         <Kbd>Esc</Kbd> cancel
       </p>
     </div>
+  );
+}
+
+/**
+ * Who answers a chat's next message. The chat stays as it is; the agent picked gets a
+ * fresh session with the conversation so far (session.rs `switch_agent`). Refused mid-turn.
+ */
+function ChatAgentPage({
+  chat,
+  agents,
+  onDone,
+  onLogin,
+}: {
+  chat: SessionInfo;
+  agents: AgentProfile[];
+  onDone: () => void;
+  onLogin: (agent: AgentProfile) => void;
+}) {
+  const [error, setError] = useState<unknown>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const pick = (a: AgentProfile) => {
+    if (a.id === chat.accountId) return onDone();
+    if (!canChat(a)) return onLogin(a);
+    setBusy(a.id);
+    setError(null);
+    api
+      .switchAgent(chat.sessionId, a.id)
+      .then(onDone, setError)
+      .finally(() => setBusy(null));
+  };
+  return (
+    <>
+      <CommandGroup heading={chat.running ? "The next message goes to… (once this turn ends)" : "The next message goes to"}>
+        {agents.map((a) => (
+          <Item
+            key={a.id}
+            id={`chat-agent-${a.id}`}
+            icon={busy === a.id ? <Loader2 className="animate-spin" /> : <Bot />}
+            label={a.label}
+            detail={a.id === chat.accountId ? "this chat's agent" : a.loggedIn === false ? "not logged in" : (a.email ?? a.presetLabel)}
+            checked={a.id === chat.accountId}
+            onSelect={() => pick(a)}
+          />
+        ))}
+      </CommandGroup>
+      <p className="px-3 pt-1 pb-2 text-xs text-muted-foreground">The chat continues; the new agent gets the conversation so far.</p>
+      <ErrorText error={error} className="px-3 pb-2" />
+    </>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderGit2, Loader2, MessageSquarePlus, Trash2, X } from "lucide-react";
+import { ChevronDown, FolderGit2, Loader2, MessageSquarePlus, Trash2, X } from "lucide-react";
+import { AgentMenu, AgentSelect } from "@/components/agent-choice";
 import { ChatMenu } from "@/components/menus";
 import { RepoPicker } from "@/components/repo-picker";
 import { Hint } from "@/components/shortcuts";
@@ -16,11 +17,14 @@ import { ProjectLinkPill, ProjectLinkSection } from "@/components/project-link";
 type Props = {
   project: Project;
   chats: SessionInfo[];
+  agents: AgentProfile[];
+  /** The agent its new chats start with: its own, else the sidebar's. */
   account: AgentProfile | undefined;
   onChange: (p: Project) => void;
   onDelete: (id: string) => Promise<void>;
   onOpenChat: (id: string) => void;
-  onNewChat: (projectId: string) => Promise<unknown>;
+  /** A chat in the project, with `agentId` when the user picked one for it. */
+  onNewChat: (projectId: string, agentId?: string) => Promise<unknown>;
   onLogin: (agent: AgentProfile) => void;
   /** Set by the sidebar's Delete… item: show the delete confirmation. */
   askDelete?: boolean;
@@ -35,6 +39,7 @@ type Props = {
 export function ProjectView({
   project,
   chats,
+  agents,
   account,
   onChange,
   onDelete,
@@ -124,11 +129,11 @@ export function ProjectView({
     run(flushBrief);
   }
 
-  async function newChat() {
+  async function newChat(agentId?: string) {
     setStarting(true);
     setError(null);
     try {
-      await onNewChat(project.id);
+      await onNewChat(project.id, agentId);
     } catch (e) {
       setError(e);
     } finally {
@@ -149,6 +154,15 @@ export function ProjectView({
             className="h-9 border-transparent px-1 text-lg font-semibold shadow-none hover:border-input focus-visible:border-input"
             aria-label="Project name"
           />
+          {agents.length > 0 && (
+            <AgentSelect
+              agents={agents}
+              value={account?.id ?? ""}
+              onChange={(id) => run(async () => onChange(await api.setProjectAgent(project.id, id)))}
+              label="Agent for new chats in this project"
+              className="w-44 shrink-0"
+            />
+          )}
           <Select value={project.status} onValueChange={(s) => run(async () => onChange(await api.setProjectStatus(project.id, s as ProjectStatus)))}>
             <SelectTrigger className="w-32 shrink-0" aria-label="Project status">
               <SelectValue />
@@ -185,12 +199,38 @@ export function ProjectView({
         <section className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-medium">Chats</h2>
-            <Hint label="New chat" shortcut="newChat">
-              <Button size="sm" onClick={() => void newChat()} disabled={starting || !canChat(account)}>
-                {starting ? <Loader2 className="animate-spin" /> : <MessageSquarePlus />}
-                {starting ? "Starting agent…" : `New chat as ${account?.label ?? "…"}`}
-              </Button>
-            </Hint>
+            <div className="flex">
+              <Hint label="New chat" shortcut="newChat">
+                <Button
+                  size="sm"
+                  className={agents.length > 1 ? "rounded-r-none" : undefined}
+                  onClick={() => void newChat()}
+                  disabled={starting || !canChat(account)}
+                >
+                  {starting ? <Loader2 className="animate-spin" /> : <MessageSquarePlus />}
+                  {starting ? "Starting agent…" : `New chat as ${account?.label ?? "…"}`}
+                </Button>
+              </Hint>
+              {/* One chat with another agent; the project keeps its own. */}
+              {agents.length > 1 && (
+                <AgentMenu
+                  agents={agents}
+                  heading="New chat with…"
+                  current={account?.id}
+                  currentHint="project's"
+                  align="end"
+                  onPick={(id) => {
+                    const a = agents.find((x) => x.id === id);
+                    if (a && !canChat(a)) onLogin(a);
+                    else void newChat(id);
+                  }}
+                >
+                  <Button size="sm" className="rounded-l-none border-l-primary-foreground/20 px-1.5" disabled={starting} aria-label="New chat with…">
+                    <ChevronDown />
+                  </Button>
+                </AgentMenu>
+              )}
+            </div>
           </div>
           {account?.loggedIn === false && (
             <p className="text-sm text-muted-foreground">
@@ -198,7 +238,7 @@ export function ProjectView({
               <Button variant="link" className="h-auto p-0" onClick={() => onLogin(account)}>
                 Log in
               </Button>{" "}
-              or pick another agent in the sidebar.
+              or pick another agent for the project above.
             </p>
           )}
           {chats.length === 0 ? (

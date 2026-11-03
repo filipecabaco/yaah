@@ -42,6 +42,9 @@ fn main() {
         ("the_ui_guide_goes_in_the_acp_system_prompt_when_advertised", the_ui_guide_goes_in_the_acp_system_prompt_when_advertised),
         ("the_ui_guide_goes_with_the_first_prompt_otherwise", the_ui_guide_goes_with_the_first_prompt_otherwise),
         ("claude_gets_the_ui_guide_and_plugin_beside_allowed_tools", claude_gets_the_ui_guide_and_plugin_beside_allowed_tools),
+        ("switching_agents_hands_the_chat_to_a_fresh_session", switching_agents_hands_the_chat_to_a_fresh_session),
+        ("a_switched_chat_reloads_on_its_new_agent_after_a_restart", a_switched_chat_reloads_on_its_new_agent_after_a_restart),
+        ("switching_agents_is_refused_mid_turn", switching_agents_is_refused_mid_turn),
     ];
     let filters: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let chosen: Vec<_> = tests.iter().filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))).collect();
@@ -343,6 +346,7 @@ fn project_chats_send_the_brief_and_folders_once() {
         created_at: 0,
         context_dir: ctx.to_string_lossy().into(),
         link: None,
+        agent_id: None,
     };
     let info = tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Project(&project), ACCOUNT)).unwrap();
     assert_eq!((info.project_id.as_deref(), info.cwd.as_str()), (Some("p1"), repo.to_str().unwrap()));
@@ -698,4 +702,122 @@ fn claude_gets_the_ui_guide_and_plugin_beside_allowed_tools() {
     assert!(new["_meta"]["claudeCode"]["options"]["allowedTools"].is_array());
     f.turn(&sid, "echo hi");
     assert_eq!(f.requests("session/prompt").pop().unwrap()["prompt"].as_array().unwrap().len(), 1, "no first-prompt copy");
+}
+
+// ── Switching agents ────────────────────────────────────────────────────────
+
+/// The pid of the process that answered a method, in the order sent.
+fn pids(f: &Fixture, method: &str) -> Vec<u64> {
+    f.received().into_iter().filter(|(_, m)| m["method"] == method).map(|(pid, _)| pid).collect()
+}
+
+/// The `session/prompt` requests, with the pid of the process that got each.
+fn prompts(f: &Fixture) -> Vec<(u64, Value)> {
+    f.received().into_iter().filter(|(_, m)| m["method"] == "session/prompt").map(|(pid, m)| (pid, m["params"].clone())).collect()
+}
+
+fn switching_agents_hands_the_chat_to_a_fresh_session() {
+    let f = Fixture::new(&[]);
+    let second = f.add_profile("Second", &[("YAAH_AGENT_NAME", "second")]);
+    let sid = f.chat();
+    f.turn(&sid, "hello there");
+    let first_pid = pids(&f, "session/new")[0];
+
+    let info = f.hub.switch_agent(&sid, &second).unwrap();
+    assert_eq!((info.account_id.as_str(), info.handoff_from.as_deref(), info.session_id.as_str()), (second.as_str(), Some("Scripted"), sid.as_str()));
+    let shown = f.event("the switch entry", |n, v| n == "session-entry" && v["sessionId"] == sid.as_str() && v["entry"]["type"] == "switch");
+    assert_eq!(shown["entry"], json!({ "type": "switch", "accountId": second, "label": "Second", "from": "Scripted" }));
+    f.event("the new agent in the info", |n, v| n == "session-info" && v["sessionId"] == sid.as_str() && v["accountId"] == second.as_str());
+
+    // The next prompt starts a session on the second agent's process, in the same folder, and hands off.
+    let t = f.turn(&sid, "what next");
+    assert_eq!(last_agent_text(&t), "second echo: what next", "the reply lands in the same chat");
+    let news = f.requests("session/new");
+    let new_pids = pids(&f, "session/new");
+    assert_eq!(news.len(), 2);
+    assert_ne!(new_pids[1], first_pid, "a process of its own");
+    assert_eq!(news[1]["cwd"], news[0]["cwd"]);
+    let agent_session = t.info.agent_session_id.clone().expect("the new agent's session id is recorded");
+    assert_ne!(agent_session, sid);
+    assert!(t.info.handoff_from.is_none(), "handed off once");
+    let (pid, prompt) = prompts(&f).pop().unwrap();
+    assert_eq!((pid, prompt["sessionId"].as_str()), (new_pids[1], Some(agent_session.as_str())));
+    let blocks = prompt["prompt"].as_array().unwrap();
+    let handoff = blocks[0]["text"].as_str().unwrap();
+    assert!(handoff.starts_with("You're taking over this chat from Scripted. The conversation so far:"), "{handoff}");
+    for said in ["User: hello there", "Agent: echo: hello there", "[switched to Second]"] {
+        assert!(handoff.contains(said), "{said} in {handoff}");
+    }
+    assert_eq!(blocks.last().unwrap()["text"], "what next", "the user's own text comes last");
+    let user = t.entries.iter().rev().find_map(|e| if let Entry::User { attachments, .. } = e { Some(attachments.clone()) } else { None });
+    assert_eq!(user, Some(vec!["hand-off from Scripted".to_owned()]));
+
+    // Later prompts go to the same session, without a hand-off; the first agent hears nothing more.
+    let t = f.turn(&sid, "and then");
+    assert_eq!(last_agent_text(&t), "second echo: and then");
+    let (pid, prompt) = prompts(&f).pop().unwrap();
+    assert_eq!((pid, prompt["sessionId"].as_str()), (new_pids[1], Some(agent_session.as_str())));
+    assert_eq!(prompt["prompt"], json!([{ "type": "text", "text": "and then" }]));
+    assert_eq!(prompts(&f).iter().filter(|(p, _)| *p == first_pid).count(), 1);
+
+    // Cancel reaches the new agent's session too.
+    f.hub.cancel(&sid).unwrap();
+    let started = Instant::now();
+    let cancel = loop {
+        if let Some(c) = f.requests("session/cancel").pop() {
+            break c;
+        }
+        assert!(started.elapsed() < PATIENCE, "session/cancel never arrived");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_eq!(cancel["sessionId"], agent_session.as_str());
+
+    // Switching back hands off again, to a fresh session on the first agent.
+    f.hub.switch_agent(&sid, ACCOUNT).unwrap();
+    let t = f.turn(&sid, "back again");
+    assert_eq!(last_agent_text(&t), "echo: back again");
+    let (_, prompt) = prompts(&f).pop().unwrap();
+    let handoff = prompt["prompt"][0]["text"].as_str().unwrap();
+    assert!(handoff.starts_with("You're taking over this chat from Second.") && handoff.contains("Agent: second echo: and then"), "{handoff}");
+    assert_eq!(f.requests("session/new").len(), 3, "never reloads the first agent's old session");
+    assert_eq!(f.requests("session/load"), Vec::<Value>::new(), "never reloads");
+}
+
+fn a_switched_chat_reloads_on_its_new_agent_after_a_restart() {
+    let mut f = Fixture::new(&[]);
+    let second = f.add_profile("Second", &[("YAAH_AGENT_NAME", "second")]);
+    let sid = f.chat();
+    f.turn(&sid, "hello");
+    f.hub.switch_agent(&sid, &second).unwrap();
+    let t = f.turn(&sid, "over to you");
+    let agent_session = t.info.agent_session_id.clone().unwrap();
+    let before = t.entries.len();
+    f.restart();
+
+    let info = f.hub.session_info(&sid).expect("the chat keeps its own id");
+    assert_eq!((info.account_id.as_str(), info.agent_session_id.as_deref()), (second.as_str(), Some(agent_session.as_str())));
+    let t = f.turn(&sid, "still there?");
+    assert_eq!(last_agent_text(&t), "second echo: still there?", "the second agent answers, into this chat");
+    assert_eq!(t.entries.len(), before + 2, "the replayed history wasn't added again");
+    let loads = f.requests("session/load");
+    assert_eq!(loads.len(), 1);
+    assert_eq!(loads[0]["sessionId"], agent_session.as_str(), "reopened by the id its agent knows");
+    let (_, prompt) = prompts(&f).pop().unwrap();
+    assert_eq!(prompt["sessionId"], agent_session.as_str());
+    assert_eq!(prompt["prompt"].as_array().unwrap().len(), 1, "no second hand-off");
+}
+
+fn switching_agents_is_refused_mid_turn() {
+    let f = Fixture::new(&[]);
+    let second = f.add_profile("Second", &[]);
+    let sid = f.chat();
+    f.prompt(&sid, "wait");
+    f.until(&sid, "the permission request", |t| waiting_permissions(t).first().copied());
+    let err = f.hub.switch_agent(&sid, &second).unwrap_err();
+    assert!(err.contains("Wait for the turn"), "{err}");
+    assert_eq!(f.hub.session_info(&sid).unwrap().account_id, ACCOUNT, "nothing changed");
+    f.hub.cancel(&sid).unwrap();
+    let t = f.finished(&sid);
+    assert!(!t.entries.iter().any(|e| matches!(e, Entry::Switch { .. })));
+    f.hub.switch_agent(&sid, &second).expect("once the turn is over");
 }

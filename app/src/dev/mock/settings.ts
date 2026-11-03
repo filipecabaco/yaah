@@ -16,6 +16,12 @@ const cardDefaults: Record<string, CardMode> = {
   Skill: "collapsed",
   TodoWrite: "collapsed",
   "mcp__yaah-ui": "collapsed",
+  mcp__fetch: "collapsed",
+  "kind:fetch": "collapsed",
+  Fetch: "collapsed",
+  WebFetch: "collapsed",
+  WebSearch: "collapsed",
+  "kind:execute": "collapsed",
 };
 
 /** A made-up VS Code theme, as if dropped into ~/.config/yaah/themes. */
