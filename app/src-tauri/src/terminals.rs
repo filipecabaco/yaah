@@ -1105,15 +1105,26 @@ mod tests {
         // The shell starts with the login PATH, then its own profile has its say: macOS's
         // path_helper reorders it, and some Linux profiles rewrite it. So the pane must end up with
         // every folder the same login shell ends up with when it starts from that PATH outside yaah.
-        let got = out.split("\nP=").nth(1).and_then(|r| r.split('|').next()).unwrap_or_default();
-        let got: HashSet<&str> = got.split(':').collect();
-        let login = crate::path_env::path();
-        let outside =
-            std::process::Command::new("/bin/sh").args(["-l", "-c", "printf %s \"$PATH\""]).env("PATH", &login).current_dir(tmp()).output().unwrap();
-        let expected = String::from_utf8_lossy(&outside.stdout).into_owned();
-        assert!(!expected.is_empty(), "the login shell printed no PATH");
+        let got_raw = out.split("\nP=").nth(1).and_then(|r| r.split('|').next()).unwrap_or_default();
+        let got: HashSet<&str> = got_raw.split(':').collect();
+        // The same interactive login shell outside yaah, from the same PATH and TERM, typed into
+        // through a pipe the way the pane types into its PTY.
+        let mut outside = std::process::Command::new("/bin/sh")
+            .arg("-il")
+            .env("PATH", crate::path_env::path())
+            .env("TERM", "xterm-256color")
+            .current_dir(tmp())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(&mut outside.stdin.take().unwrap(), b"printf 'P=%s|' \"$PATH\"; exit\n").unwrap();
+        let outside = String::from_utf8_lossy(&outside.wait_with_output().unwrap().stdout).into_owned();
+        let expected = outside.split("P=").nth(1).and_then(|r| r.split('|').next()).unwrap_or_default();
+        assert!(!expected.is_empty(), "the login shell printed no PATH: {outside:?}");
         let missing: Vec<&str> = expected.split(':').filter(|d| !got.contains(d)).collect();
-        assert!(missing.is_empty(), "the pane's shell lost {missing:?} that a login shell keeps");
+        assert!(missing.is_empty(), "the pane's shell lost {missing:?} that a login shell keeps.\npane:    {got_raw}\noutside: {expected}");
     }
 
     #[test]
