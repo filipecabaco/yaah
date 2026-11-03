@@ -1,8 +1,16 @@
 //! Sessions and transcripts.
 //!
 //! Rust owns the transcript (Principle 3): ACP `session/update` chunks are
-//! merged here into display entries and each changed entry is pushed to the
-//! UI as a `session-entry` event. The UI only renders what it is sent.
+//! merged here into display entries and pushed to the UI. The UI only renders
+//! what it is sent (`docs/research/streaming-contract.md`):
+//! - `session-entry` `{ sessionId, index, entry }`: a new entry, or any change that isn't a text append;
+//! - `session-append` `{ sessionId, index, field, text, len }`: text added to a message or thought,
+//!   coalesced to one emit per chat every [`COALESCE`], `len` in UTF-16 code units;
+//! - `session-draft` `{ sessionId, index, draft, draftBy }`: a form's unsent values changed.
+//!
+//! Each chat has its own lock, so one chat's save or emit never waits on another's.
+//! Transcripts are saved lazily on a thread of their own, and read from disk
+//! only when a chat is first opened (startup reads each chat's info only).
 //!
 //! Everything an agent sends is untrusted: ids become file names only when
 //! they're plain, and a permission answer only ever goes back to the process
@@ -18,8 +26,8 @@ use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
+use std::time::{Duration, Instant};
 
 /// Sends an event to the UI. The app wires this to `AppHandle::emit`; tests to a channel.
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
@@ -34,6 +42,12 @@ const TITLE_MAX_CHARS: usize = 60;
 const UNNAMED_REQUEST: &str = "The agent wants to run a tool";
 const UNNAMED_TOOL: &str = "Tool call";
 const REMEMBERED: &str = "(you said don't ask again)";
+/// At most one `session-append` per chat this often (about 30 a second).
+pub const COALESCE: Duration = Duration::from_millis(33);
+/// A changed transcript is written this long after its first unsaved change.
+pub const SAVE_DELAY: Duration = Duration::from_millis(750);
+/// Entries `get_entries` returns when not told how many: the end of the chat.
+pub const PAGE: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -158,6 +172,21 @@ pub struct Transcript {
     pub entries: Vec<Entry>,
 }
 
+/// Part of a transcript (`get_entries`): `entries` are those at `from..`, of `total`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Page {
+    #[serde(serialize_with = "shared_entries")]
+    pub entries: Vec<Arc<Entry>>,
+    pub from: usize,
+    pub total: usize,
+}
+
+/// Entries as a JSON list, without copying them out of their `Arc`s.
+fn shared_entries<S: serde::Serializer>(entries: &[Arc<Entry>], s: S) -> Result<S::Ok, S::Error> {
+    s.collect_seq(entries.iter().map(|e| &**e))
+}
+
 /// A `ui_ask` waiting on the user: its chat, and where the answer goes (`None` = cancelled).
 type PendingAsk = (String, mpsc::Sender<Option<Value>>);
 
@@ -188,9 +217,18 @@ struct Brief {
     text: String,
 }
 
+/// A chat, behind a lock of its own.
+type Cell = Arc<Mutex<Session>>;
+
 struct Session {
     info: SessionInfo,
-    entries: Vec<Entry>,
+    /// The transcript. Entries are shared so a snapshot for the saver is a cheap
+    /// copy of pointers; a change copies only the entry it touches, and only
+    /// while a snapshot still holds it (`Session::entry_mut`).
+    entries: Vec<Arc<Entry>>,
+    /// False while only the info has been read from disk; the entries are
+    /// read the first time anything needs them (`Session::ensure_loaded`).
+    loaded: bool,
     tool_index: HashMap<String, usize>,
     plan_index: Option<usize>,
     /// Taken (sent) with the first prompt.
@@ -211,22 +249,54 @@ struct Session {
     /// Permission requests still waiting, by entry index, with the process that
     /// asked (its generation, and where answers go): the answer goes there and nowhere else.
     waiting: HashMap<usize, (u64, Responder)>,
+    /// This chat's own cell, for the threads that flush appends and save.
+    me: Weak<Mutex<Session>>,
+    stream: Stream,
+    saving: Saving,
 }
+
+/// Appends on their way to the UI.
+#[derive(Default)]
+struct Stream {
+    /// Text appended since the last `session-append`, not sent yet.
+    pending: Option<Append>,
+    /// When the last `session-append` went out.
+    last: Option<Instant>,
+    /// The append flusher has this chat on its list.
+    scheduled: bool,
+    /// The entry last appended to and its text's length in UTF-16 code units,
+    /// so an append doesn't count the whole text again.
+    text_len: Option<(usize, usize)>,
+}
+
+/// Whether the transcript needs writing.
+#[derive(Default)]
+struct Saving {
+    /// Changed since it was last written.
+    dirty: bool,
+    /// The saver has this chat on its list.
+    scheduled: bool,
+}
+
+/// Text appended to one entry and not sent yet.
+struct Append {
+    index: usize,
+    text: String,
+    /// The field's whole length after the append, in UTF-16 code units (what JS's `length` counts).
+    len: usize,
+}
+
+/// The name of the field appends go to: messages and thoughts both keep their text in `text`.
+const TEXT_FIELD: &str = "text";
 
 impl Session {
     fn new(info: SessionInfo, entries: Vec<Entry>, save_to: Option<PathBuf>) -> Self {
-        let tool_index = entries
-            .iter()
-            .enumerate()
-            .filter_map(|(i, e)| match e {
-                Entry::Tool { tool_call_id, .. } => Some((tool_call_id.clone(), i)),
-                _ => None,
-            })
-            .collect();
+        let entries: Vec<Arc<Entry>> = entries.into_iter().map(Arc::new).collect();
         Self {
             info,
+            tool_index: index_tools(&entries),
             entries,
-            tool_index,
+            loaded: true,
             plan_index: None,
             brief: None,
             guide: None,
@@ -235,7 +305,50 @@ impl Session {
             save_to,
             remembered: HashMap::new(),
             waiting: HashMap::new(),
+            me: Weak::new(),
+            stream: Stream::default(),
+            saving: Saving::default(),
         }
+    }
+
+    /// A chat restored from `path` whose entries haven't been read yet.
+    fn unloaded(info: SessionInfo, path: PathBuf) -> Self {
+        Self { loaded: false, ..Self::new(info, vec![], Some(path)) }
+    }
+
+    /// Read the entries from disk if they haven't been yet. A turn that was
+    /// running when the app stopped is already marked stopped (`load_sessions`);
+    /// here unanswered permission prompts are marked cancelled. A transcript
+    /// that can't be read is left on disk as it is and not saved over.
+    fn ensure_loaded(&mut self) {
+        if self.loaded {
+            return;
+        }
+        self.loaded = true;
+        let Some(path) = &self.save_to else { return };
+        match read_entries(path) {
+            Ok(mut entries) => {
+                for e in &mut entries {
+                    if let Entry::Permission { chosen: chosen @ None, .. } = e {
+                        *chosen = Some("cancelled (app restarted)".into());
+                    }
+                }
+                self.entries = entries.into_iter().map(Arc::new).collect();
+                self.tool_index = index_tools(&self.entries);
+            }
+            Err(e) => {
+                eprintln!("[sessions] could not read {}: {e}", path.display());
+                self.entries = vec![Arc::new(Entry::error(format!(
+                    "Couldn't read this chat's saved transcript ({e}). The file was left as it is, and this chat won't be saved over it."
+                )))];
+                self.save_to = None;
+            }
+        }
+    }
+
+    /// The entry at `index`, to change. Copied first only if a snapshot being saved still holds it.
+    fn entry_mut(&mut self, index: usize) -> Option<&mut Entry> {
+        self.entries.get_mut(index).map(Arc::make_mut)
     }
 
     /// Answer the waiting permission requests from the agent generations `from`
@@ -248,7 +361,7 @@ impl Session {
             .into_iter()
             .filter_map(|i| {
                 let (_, responder) = self.waiting.remove(&i)?;
-                let Some(Entry::Permission { request_id, chosen, .. }) = self.entries.get_mut(i) else { return None };
+                let Some(Entry::Permission { request_id, chosen, .. }) = self.entry_mut(i) else { return None };
                 *chosen = Some(why.to_owned());
                 responder.ok(request_id.clone(), outcome(None));
                 Some(i)
@@ -257,8 +370,20 @@ impl Session {
     }
 }
 
-/// Load saved transcripts. Turns that were running when the app stopped are
-/// marked stopped, and unanswered permission prompts as cancelled.
+fn index_tools(entries: &[Arc<Entry>]) -> HashMap<String, usize> {
+    entries
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match &**e {
+            Entry::Tool { tool_call_id, .. } => Some((tool_call_id.clone(), i)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Find saved chats, reading only each one's info (the entries wait until the
+/// chat is opened). Turns that were running when the app stopped are marked
+/// stopped. Files that aren't a chat are skipped.
 fn load_sessions(dir: &Path) -> HashMap<String, Session> {
     let Ok(files) = std::fs::read_dir(dir) else { return HashMap::new() };
     files
@@ -266,81 +391,146 @@ fn load_sessions(dir: &Path) -> HashMap<String, Session> {
         .map(|f| f.path())
         .filter(|p| p.extension().is_some_and(|e| e == "json"))
         .filter_map(|path| {
-            let raw = std::fs::read(&path).ok()?;
-            let mut saved: Transcript =
-                serde_json::from_slice(&raw).inspect_err(|e| eprintln!("[sessions] skipping {}: {e}", path.display())).ok()?;
-            saved.info.running = false;
-            for e in &mut saved.entries {
-                if let Entry::Permission { chosen: chosen @ None, .. } = e {
-                    *chosen = Some("cancelled (app restarted)".into());
-                }
-            }
-            Some((saved.info.session_id.clone(), Session::new(saved.info, saved.entries, Some(path))))
+            let mut info = read_info(&path).inspect_err(|e| eprintln!("[sessions] skipping {}: {e}", path.display())).ok()?;
+            info.running = false;
+            Some((info.session_id.clone(), Session::unloaded(info, path)))
         })
         .collect()
 }
 
-/// Writes transcripts on a thread of its own, so neither the caller nor the
-/// session lock waits on the disk. A save replaces one still queued for the
-/// same file, so a burst of edits costs one write.
-struct Saver {
-    queue: Arc<SaveQueue>,
-    wake: Option<mpsc::Sender<()>>,
-}
+/// A saved chat's info, read from the start of its file. Reading stops once it
+/// has the info: a chat is saved with its info first, so the entries are never read.
+fn read_info(path: &Path) -> Result<SessionInfo, String> {
+    use serde::de::{DeserializeSeed, Error, IgnoredAny, MapAccess, Visitor};
 
-#[derive(Default)]
-struct SaveQueue {
-    /// File → its new contents, or `None` to delete it.
-    pending: Mutex<HashMap<PathBuf, Option<Vec<u8>>>>,
-    /// Held while writing, so a flush and the thread never write one file out of order.
-    io: Mutex<()>,
-}
+    struct InfoOnly<'a>(&'a mut Option<SessionInfo>);
+    const GOT_IT: &str = "stopped after the info";
 
-impl SaveQueue {
-    fn write_pending(&self) {
-        let _io = self.io.lock().unwrap();
-        let batch = std::mem::take(&mut *self.pending.lock().unwrap());
-        for (path, contents) in batch {
-            let res = match contents {
-                Some(bytes) => write_private(&path, &bytes),
-                None => std::fs::remove_file(&path).or_else(|e| if e.kind() == std::io::ErrorKind::NotFound { Ok(()) } else { Err(e) }),
-            };
-            if let Err(e) = res {
-                eprintln!("[sessions] could not save {}: {e}", path.display());
-            }
+    impl<'de> DeserializeSeed<'de> for InfoOnly<'_> {
+        type Value = ();
+        fn deserialize<D: serde::Deserializer<'de>>(self, d: D) -> Result<(), D::Error> {
+            d.deserialize_map(self)
         }
     }
+
+    impl<'de> Visitor<'de> for InfoOnly<'_> {
+        type Value = ();
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a saved chat")
+        }
+        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<(), A::Error> {
+            while let Some(key) = map.next_key::<String>()? {
+                if key == "info" {
+                    *self.0 = Some(map.next_value()?);
+                    // An error is the only way to stop serde_json before the end of the object.
+                    return Err(A::Error::custom(GOT_IT));
+                }
+                map.next_value::<IgnoredAny>()?;
+            }
+            Ok(())
+        }
+    }
+
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut de = serde_json::Deserializer::from_reader(std::io::BufReader::new(file));
+    let mut info = None;
+    let res = InfoOnly(&mut info).deserialize(&mut de);
+    info.ok_or_else(|| res.err().map_or_else(|| "no info".to_owned(), |e| e.to_string()))
 }
 
-impl Saver {
-    fn new() -> Self {
-        let queue = Arc::<SaveQueue>::default();
-        let (tx, rx) = mpsc::channel::<()>();
-        let q = queue.clone();
-        let started = std::thread::Builder::new().name("yaah-sessions".into()).spawn(move || {
-            while rx.recv().is_ok() {
-                q.write_pending();
+/// A saved chat's entries.
+fn read_entries(path: &Path) -> Result<Vec<Entry>, String> {
+    #[derive(Deserialize)]
+    struct Saved {
+        entries: Vec<Entry>,
+    }
+    let raw = std::fs::read(path).map_err(|e| e.to_string())?;
+    serde_json::from_slice::<Saved>(&raw).map(|s| s.entries).map_err(|e| e.to_string())
+}
+
+/// Runs `run` on chats at the times they're handed in, on a thread of its own.
+/// A chat already gone by then is skipped. When the sender side is dropped the
+/// thread runs everything still due, then ends.
+struct Timer(Option<mpsc::Sender<(Instant, Weak<Mutex<Session>>)>>);
+
+impl Timer {
+    fn start(name: &str, run: impl Fn(&Mutex<Session>) + Send + 'static) -> Self {
+        let (tx, rx) = mpsc::channel::<(Instant, Weak<Mutex<Session>>)>();
+        let started = std::thread::Builder::new().name(name.into()).spawn(move || {
+            let mut due: Vec<(Instant, Weak<Mutex<Session>>)> = vec![];
+            loop {
+                let next = due.iter().map(|(t, _)| *t).min();
+                let got = match next {
+                    None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                    Some(t) => rx.recv_timeout(t.saturating_duration_since(Instant::now())),
+                };
+                let done = match got {
+                    Ok(item) => {
+                        due.push(item);
+                        false
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => false,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => true,
+                };
+                let now = Instant::now();
+                let (ready, later): (Vec<_>, Vec<_>) = due.drain(..).partition(|(t, _)| done || *t <= now);
+                due = later;
+                for (_, chat) in ready {
+                    if let Some(chat) = chat.upgrade() {
+                        run(&chat);
+                    }
+                }
+                if done {
+                    return;
+                }
             }
         });
-        // Without the thread, saves are written by whoever asks.
-        Self { queue, wake: started.is_ok().then_some(tx) }
-    }
-
-    fn queue(&self, path: PathBuf, contents: Option<Vec<u8>>) {
-        self.queue.pending.lock().unwrap().insert(path, contents);
-        if self.wake.as_ref().is_none_or(|w| w.send(()).is_err()) {
-            self.queue.write_pending();
+        if let Err(e) = &started {
+            eprintln!("[sessions] {name} thread not started: {e}");
         }
+        Self(started.is_ok().then_some(tx))
     }
 
-    fn flush(&self) {
-        self.queue.write_pending();
+    /// Run on `chat` at `when`. False if there's no thread to do it.
+    fn at(&self, when: Instant, chat: Weak<Mutex<Session>>) -> bool {
+        self.0.as_ref().is_some_and(|tx| tx.send((when, chat)).is_ok())
     }
 }
 
-impl Drop for Saver {
-    fn drop(&mut self) {
-        self.flush();
+/// Send the text appended since the last `session-append`, if any.
+fn send_appends(app: &Emit, s: &mut Session) {
+    let Some(a) = s.stream.pending.take() else { return };
+    s.stream.last = Some(Instant::now());
+    app("session-append", json!({ "sessionId": s.info.session_id, "index": a.index, "field": TEXT_FIELD, "text": a.text, "len": a.len }));
+}
+
+/// Write a chat's transcript if it changed since it was last written. The
+/// snapshot is taken under the chat's lock (a copy of pointers); serialising
+/// and writing happen after it is released. `io` keeps writes of one file in
+/// the order their snapshots were taken.
+fn write_session(io: &Mutex<()>, chat: &Mutex<Session>) {
+    #[derive(Serialize)]
+    struct Saved<'a> {
+        info: &'a SessionInfo,
+        #[serde(serialize_with = "shared_entries")]
+        entries: &'a [Arc<Entry>],
+    }
+    let _io = io.lock().unwrap();
+    let (path, info, entries) = {
+        let mut s = chat.lock().unwrap();
+        s.saving.scheduled = false;
+        if !s.saving.dirty {
+            return;
+        }
+        s.saving.dirty = false;
+        let Some(path) = s.save_to.clone() else { return };
+        (path, s.info.clone(), s.entries.clone())
+    };
+    let bytes = serde_json::to_vec(&Saved { info: &info, entries: &entries });
+    drop(entries); // the chat's next change to these entries needn't copy them
+    let res = bytes.map_err(|e| e.to_string()).and_then(|bytes| write_private(&path, &bytes).map_err(|e| e.to_string()));
+    if let Err(e) = res {
+        eprintln!("[sessions] could not save {}: {e}", path.display());
     }
 }
 
@@ -362,49 +552,183 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 /// What the agents' reader tasks and the Hub share.
+///
+/// Locks: the chats map is only held to find, add or remove a chat, never
+/// while waiting on a chat's lock. A chat's lock may be held while taking the
+/// map's (deleting). The saver takes `io` and then one chat's lock; nothing
+/// takes `io` while holding a chat's lock.
 struct Shared {
     app: Emit,
-    sessions: Mutex<HashMap<String, Session>>,
+    sessions: Mutex<HashMap<String, Cell>>,
     /// Profiles whose agent answered "authentication required" since their last login.
     needs_login: Mutex<HashSet<String>>,
     profiles: &'static Store,
-    saver: Saver,
+    /// Sends a chat's coalesced appends once its interval is up.
+    flusher: Timer,
+    /// Writes a chat's transcript a moment after it changes.
+    saver: Timer,
+    /// Held while writing or deleting a transcript.
+    io: Arc<Mutex<()>>,
+    /// [`COALESCE`] and [`SAVE_DELAY`], in microseconds; tests change them.
+    coalesce_us: AtomicU64,
+    save_delay_us: AtomicU64,
+}
+
+fn micros(d: Duration) -> u64 {
+    u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
 }
 
 impl Shared {
-    /// Run `f` on a session, under the sessions lock.
+    fn new(app: Emit, sessions: HashMap<String, Session>, profiles: &'static Store) -> Self {
+        let io = Arc::<Mutex<()>>::default();
+        let flusher = Timer::start("yaah-appends", {
+            let app = app.clone();
+            move |chat| {
+                let mut s = chat.lock().unwrap();
+                s.stream.scheduled = false;
+                send_appends(&app, &mut s);
+            }
+        });
+        let saver = Timer::start("yaah-sessions", {
+            let io = io.clone();
+            move |chat| write_session(&io, chat)
+        });
+        Self {
+            app,
+            sessions: Mutex::new(sessions.into_iter().map(|(id, s)| (id, cell(s))).collect()),
+            needs_login: Mutex::default(),
+            profiles,
+            flusher,
+            saver,
+            io,
+            coalesce_us: AtomicU64::new(micros(COALESCE)),
+            save_delay_us: AtomicU64::new(micros(SAVE_DELAY)),
+        }
+    }
+
+    fn chat(&self, session_id: &str) -> Option<Cell> {
+        self.sessions.lock().unwrap().get(session_id).cloned()
+    }
+
+    fn chats(&self) -> Vec<Cell> {
+        self.sessions.lock().unwrap().values().cloned().collect()
+    }
+
+    /// Run `f` on a session under its own lock, its entries loaded.
     fn with<R>(&self, session_id: &str, f: impl FnOnce(&mut Session) -> R) -> Result<R, String> {
-        let mut sessions = self.sessions.lock().unwrap();
-        let s = sessions.get_mut(session_id).ok_or("unknown session")?;
-        Ok(f(s))
+        let chat = self.chat(session_id).ok_or("unknown session")?;
+        let mut s = chat.lock().unwrap();
+        s.ensure_loaded();
+        Ok(f(&mut s))
     }
 
-    fn emit_entry(&self, s: &Session, index: usize) {
-        (self.app)("session-entry", json!({ "sessionId": s.info.session_id, "index": index, "entry": &s.entries[index] }));
+    /// Run `f` on a session's info, without reading its entries.
+    fn with_info<R>(&self, session_id: &str, f: impl FnOnce(&SessionInfo) -> R) -> Result<R, String> {
+        let chat = self.chat(session_id).ok_or("unknown session")?;
+        let s = chat.lock().unwrap();
+        Ok(f(&s.info))
     }
 
-    fn emit_info(&self, info: &SessionInfo) {
-        (self.app)("session-info", serde_json::to_value(info).unwrap_or_default());
+    fn flush_appends(&self, s: &mut Session) {
+        send_appends(&self.app, s);
+    }
+
+    /// Every other event of a chat sends its pending appends first, so the UI sees changes in order.
+    fn emit_entry(&self, s: &mut Session, index: usize) {
+        self.flush_appends(s);
+        (self.app)("session-entry", json!({ "sessionId": s.info.session_id, "index": index, "entry": &*s.entries[index] }));
+    }
+
+    fn emit_info(&self, s: &mut Session) {
+        self.flush_appends(s);
+        (self.app)("session-info", serde_json::to_value(&s.info).unwrap_or_default());
+    }
+
+    /// A form's unsent values changed: just those, not the whole UI entry (which can hold images).
+    fn emit_draft(&self, s: &mut Session, index: usize) {
+        self.flush_appends(s);
+        if let Entry::Ui { draft, draft_by, .. } = &*s.entries[index] {
+            (self.app)("session-draft", json!({ "sessionId": s.info.session_id, "index": index, "draft": draft, "draftBy": draft_by }));
+        }
     }
 
     fn push(&self, s: &mut Session, entry: Entry) -> usize {
-        s.entries.push(entry);
+        s.entries.push(Arc::new(entry));
         let i = s.entries.len() - 1;
         self.emit_entry(s, i);
         i
     }
 
-    /// Queue the transcript for writing. Serialised here, written elsewhere.
-    fn save(&self, s: &Session) {
-        #[derive(Serialize)]
-        struct Saved<'a> {
-            info: &'a SessionInfo,
-            entries: &'a [Entry],
+    /// Add `text` to the message or thought at `index` and tell the UI with a
+    /// `session-append`: now if the last one went out at least [`COALESCE`] ago,
+    /// otherwise joined with what follows and sent when the interval is up (or
+    /// sooner, before any other change to the chat).
+    fn append(&self, s: &mut Session, index: usize, text: &str) {
+        if text.is_empty() {
+            return;
         }
-        let Some(path) = &s.save_to else { return };
-        match serde_json::to_vec(&Saved { info: &s.info, entries: &s.entries }) {
-            Ok(bytes) => self.saver.queue(path.clone(), Some(bytes)),
-            Err(e) => eprintln!("[sessions] could not save {}: {e}", path.display()),
+        let before = match (s.stream.text_len, s.entries.get(index).map(|e| &**e)) {
+            (Some((i, len)), _) if i == index => len,
+            (_, Some(Entry::Agent { text, .. } | Entry::Thought { text, .. })) => text.encode_utf16().count(),
+            _ => return,
+        };
+        let Some(Entry::Agent { text: t, .. } | Entry::Thought { text: t, .. }) = s.entry_mut(index) else { return };
+        t.push_str(text);
+        let len = before + text.encode_utf16().count();
+        s.stream.text_len = Some((index, len));
+        match &mut s.stream.pending {
+            Some(p) if p.index == index => {
+                p.text.push_str(text);
+                p.len = len;
+            }
+            _ => {
+                self.flush_appends(s);
+                s.stream.pending = Some(Append { index, text: text.to_owned(), len });
+            }
+        }
+        // While a flush is scheduled it is left to send this too, even if it's a little late,
+        // so a chat never gets two appends within one interval.
+        if s.stream.scheduled {
+            return;
+        }
+        let interval = Duration::from_micros(self.coalesce_us.load(Ordering::Relaxed));
+        match s.stream.last.map(|t| t + interval).filter(|due| *due > Instant::now()) {
+            None => self.flush_appends(s),
+            Some(due) => {
+                s.stream.scheduled = self.flusher.at(due, s.me.clone());
+                if !s.stream.scheduled {
+                    self.flush_appends(s);
+                }
+            }
+        }
+    }
+
+    /// Mark the transcript changed; the saver writes it in a moment.
+    fn save(&self, s: &mut Session) {
+        self.save_after(s, Duration::from_micros(self.save_delay_us.load(Ordering::Relaxed)));
+    }
+
+    /// Mark the transcript changed and have the saver write it now (a turn ended).
+    fn save_now(&self, s: &mut Session) {
+        self.save_after(s, Duration::ZERO);
+    }
+
+    fn save_after(&self, s: &mut Session, delay: Duration) {
+        if s.save_to.is_none() {
+            return;
+        }
+        s.saving.dirty = true;
+        if s.saving.scheduled && !delay.is_zero() {
+            return;
+        }
+        // Without the saver thread the change waits for the next flush (on exit at the latest).
+        s.saving.scheduled = self.saver.at(Instant::now() + delay, s.me.clone());
+    }
+
+    /// Write every changed transcript now.
+    fn flush_saves(&self) {
+        for chat in self.chats() {
+            write_session(&self.io, &chat);
         }
     }
 
@@ -434,6 +758,33 @@ impl Shared {
     }
 }
 
+impl Drop for Shared {
+    /// Whatever changed after the Hub's last flush (a turn ending as the app closes) is still written.
+    fn drop(&mut self) {
+        self.flush_saves();
+    }
+}
+
+#[cfg(test)]
+impl Shared {
+    /// Add a chat as if it had been started or restored.
+    fn insert(&self, session: Session) -> Cell {
+        let id = session.info.session_id.clone();
+        let chat = cell(session);
+        self.sessions.lock().unwrap().insert(id, chat.clone());
+        chat
+    }
+}
+
+/// A session in a cell of its own, which knows itself (for the flusher and saver).
+fn cell(session: Session) -> Cell {
+    Arc::new_cyclic(|me| {
+        let mut session = session;
+        session.me = me.clone();
+        Mutex::new(session)
+    })
+}
+
 pub struct Hub {
     shared: Arc<Shared>,
     /// Running agents, one per profile, shared by that profile's sessions.
@@ -444,6 +795,8 @@ pub struct Hub {
     generations: AtomicU64,
     /// Port of the UI MCP server (`ui_mcp.rs`), if it started.
     ui_port: OnceLock<u16>,
+    /// That server, to close a deleted chat's previews and refuse its tokens.
+    ui_host: OnceLock<Weak<ui_mcp::UiHost>>,
     /// UI MCP URL token → session id. Registered before `session/new` (the agent
     /// connects to MCP servers while creating the session), so `None` until it returns.
     ui_tokens: Mutex<HashMap<String, Option<String>>>,
@@ -468,18 +821,20 @@ impl Hub {
     }
 
     /// A hub over the agent profiles in `profiles`, saving transcripts in `store`
-    /// (and restoring the ones there) when it is given.
+    /// (and restoring the ones there) when it is given. Only each saved chat's
+    /// info is read now; its entries are read when it is first opened.
     pub fn open(app: Emit, store: Option<PathBuf>, profiles: &'static Store) -> Self {
         let sessions = store.as_deref().map(load_sessions).unwrap_or_default();
         if let Some(dir) = &store {
-            eprintln!("[sessions] restored {} chats from {}", sessions.len(), dir.display());
+            eprintln!("[sessions] found {} chats in {}", sessions.len(), dir.display());
         }
         Self {
-            shared: Arc::new(Shared { app, sessions: Mutex::new(sessions), needs_login: Mutex::default(), profiles, saver: Saver::new() }),
+            shared: Arc::new(Shared::new(app, sessions, profiles)),
             agents: Mutex::default(),
             starting: Mutex::default(),
             generations: AtomicU64::new(1),
             ui_port: OnceLock::new(),
+            ui_host: OnceLock::new(),
             ui_tokens: Mutex::default(),
             asks: Mutex::default(),
             store,
@@ -487,15 +842,27 @@ impl Hub {
         }
     }
 
-    /// Write every transcript change still queued. Saves happen in the
-    /// background; call this before the app exits.
+    /// Write every transcript change not written yet. Saves happen in the
+    /// background a moment after a change; call this before the app exits.
     pub fn flush(&self) {
-        self.shared.saver.flush();
+        self.shared.flush_saves();
+    }
+
+    /// Change how often appends are sent ([`COALESCE`]) and how long a change
+    /// waits to be written ([`SAVE_DELAY`]). For tests and benchmarks.
+    pub fn set_timings(&self, coalesce: Duration, save_delay: Duration) {
+        self.shared.coalesce_us.store(micros(coalesce), Ordering::Relaxed);
+        self.shared.save_delay_us.store(micros(save_delay), Ordering::Relaxed);
     }
 
     /// Called once the UI MCP server is listening.
     pub fn set_ui_port(&self, port: u16) {
         let _ = self.ui_port.set(port);
+    }
+
+    /// Called by `ui_mcp::start` with the server serving this hub's chats.
+    pub fn set_ui_host(&self, host: Weak<ui_mcp::UiHost>) {
+        let _ = self.ui_host.set(host);
     }
 
     /// Teach new and reattached chats' agents about yaah's UI with `guide`.
@@ -535,13 +902,14 @@ impl Hub {
             return;
         }
         let _ = self.shared.with(session_id, |s| {
-            for i in 0..s.entries.len() {
-                if let Entry::Ui { ask_id: Some(a), answer: answer @ None, .. } = &mut s.entries[i]
-                    && cancelled.contains_key(a)
-                {
+            let asked: Vec<usize> = (0..s.entries.len())
+                .filter(|&i| matches!(&*s.entries[i], Entry::Ui { ask_id: Some(a), answer: None, .. } if cancelled.contains_key(a)))
+                .collect();
+            for i in asked {
+                if let Some(Entry::Ui { answer, .. }) = s.entry_mut(i) {
                     *answer = Some(json!({ "$cancelled": true }));
-                    self.shared.emit_entry(s, i);
                 }
+                self.shared.emit_entry(s, i);
             }
             self.shared.save(s);
         });
@@ -555,7 +923,7 @@ impl Hub {
     /// so the agent carries on in the same turn; otherwise it becomes the next message.
     pub async fn answer_ui(&self, session_id: &str, index: usize, values: Value) -> Result<(), String> {
         let (ask, title) = self.shared.with(session_id, |s| {
-            let Some(Entry::Ui { ask_id, answer, title, component, .. }) = s.entries.get_mut(index) else {
+            let Some(Entry::Ui { ask_id, answer, title, component, .. }) = s.entry_mut(index) else {
                 return Err("no UI at that index".to_owned());
             };
             if answer.is_some() {
@@ -587,11 +955,12 @@ impl Hub {
     /// Change fields of a form that hasn't been sent yet. The user (as they type)
     /// and the agent (`ui_set_values`) edit the same draft; the last write to a
     /// field wins, and each field remembers who wrote it so the UI can say so.
+    /// The UI gets only the draft (`session-draft`), not the whole entry again.
     pub fn edit_form(&self, session_id: &str, form: FormRef<'_>, values: &Value, by: &str) -> Result<Value, String> {
         let changes = values.as_object().ok_or("values must be an object of field → value")?;
         self.shared.with(session_id, |s| {
             let index = form.find(&s.entries)?;
-            let Some(Entry::Ui { tree, answer, draft, draft_by, .. }) = s.entries.get_mut(index) else {
+            let Some(Entry::Ui { tree, answer, draft, draft_by, .. }) = s.entry_mut(index) else {
                 return Err("no form at that index".to_owned());
             };
             if answer.is_some() {
@@ -609,7 +978,7 @@ impl Hub {
                 values[k] = v.clone();
                 who[k] = json!(by);
             }
-            self.shared.emit_entry(s, index);
+            self.shared.emit_draft(s, index);
             self.shared.save(s);
             Ok(form_state(&s.entries[index]))
         })?
@@ -623,7 +992,7 @@ impl Hub {
 
     /// The folders a chat works in: its cwd and additional roots.
     pub fn session_roots(&self, session_id: &str) -> Vec<PathBuf> {
-        self.shared.with(session_id, |s| std::iter::once(&s.info.cwd).chain(&s.info.additional_dirs).map(PathBuf::from).collect()).unwrap_or_default()
+        self.shared.with_info(session_id, |i| std::iter::once(&i.cwd).chain(&i.additional_dirs).map(PathBuf::from).collect()).unwrap_or_default()
     }
 
     /// Add a UI entry to a chat's transcript (from the UI MCP server).
@@ -633,7 +1002,7 @@ impl Hub {
             .with(session_id, |s| {
                 let existing = match &entry {
                     Entry::Ui { ui_id: Some(id), .. } => {
-                        s.entries.iter().rposition(|e| matches!(e, Entry::Ui { ui_id: Some(other), .. } if other == id))
+                        s.entries.iter().rposition(|e| matches!(&**e, Entry::Ui { ui_id: Some(other), .. } if other == id))
                     }
                     _ => None,
                 };
@@ -646,12 +1015,12 @@ impl Hub {
                 if let (
                     Entry::Ui { answer: None, draft: Some(d), draft_by: Some(b), .. },
                     Entry::Ui { draft: new_draft @ None, draft_by: new_by, .. },
-                ) = (&s.entries[i], &mut entry)
+                ) = (&*s.entries[i], &mut entry)
                 {
                     *new_draft = Some(d.clone());
                     *new_by = Some(b.clone());
                 }
-                s.entries[i] = entry;
+                s.entries[i] = Arc::new(entry);
                 self.shared.emit_entry(s, i);
                 self.shared.save(s);
                 true
@@ -715,14 +1084,14 @@ impl Hub {
         session.brief = brief;
         session.guide = guide;
         session.attached = Some(agent.generation);
+        let chat = cell(session);
         let taken = {
             // An agent may only start new chats: an id yaah already has is another chat
             // (perhaps another agent's), which this one would take over and overwrite.
             let mut sessions = self.shared.sessions.lock().unwrap();
             let taken = sessions.contains_key(&session_id);
             if !taken {
-                self.shared.save(&session);
-                sessions.insert(session_id.clone(), session);
+                sessions.insert(session_id.clone(), chat.clone());
             }
             taken
         };
@@ -735,7 +1104,9 @@ impl Hub {
             *slot = Some(session_id);
         }
         drop(tokens);
-        self.shared.emit_info(&info);
+        let mut s = chat.lock().unwrap();
+        self.shared.save(&mut s);
+        self.shared.emit_info(&mut s);
         Ok(info)
     }
 
@@ -843,7 +1214,7 @@ impl Hub {
     pub fn set_session_project(&self, session_id: &str, project_id: Option<String>) -> Result<SessionInfo, String> {
         self.shared.with(session_id, |s| {
             s.info.project_id = project_id;
-            self.shared.emit_info(&s.info);
+            self.shared.emit_info(s);
             self.shared.save(s);
             s.info.clone()
         })
@@ -856,7 +1227,7 @@ impl Hub {
         }
         self.shared.with(session_id, |s| {
             s.info.title = truncate(title, TITLE_MAX_CHARS);
-            self.shared.emit_info(&s.info);
+            self.shared.emit_info(s);
             self.shared.save(s);
             s.info.clone()
         })
@@ -865,27 +1236,63 @@ impl Hub {
     /// Forget a chat and delete its saved transcript. The agent's own record
     /// (e.g. Claude Code's) is left alone.
     pub fn delete_session(&self, session_id: &str) -> Result<(), String> {
-        let s = {
-            let mut sessions = self.shared.sessions.lock().unwrap();
-            match sessions.get(session_id) {
-                None => return Err("unknown session".into()),
-                Some(s) if s.info.running => return Err("stop the chat before deleting it".into()),
-                Some(_) => sessions.remove(session_id),
+        let chat = self.shared.chat(session_id).ok_or("unknown session")?;
+        let path = {
+            // Under the chat's lock, so nothing changes or saves it in between.
+            let mut s = chat.lock().unwrap();
+            if s.info.running {
+                return Err("stop the chat before deleting it".into());
             }
+            let mut sessions = self.shared.sessions.lock().unwrap();
+            if !sessions.get(session_id).is_some_and(|c| Arc::ptr_eq(c, &chat)) {
+                return Err("unknown session".into());
+            }
+            sessions.remove(session_id);
+            s.saving.dirty = false;
+            s.save_to.take()
         };
         self.ui_tokens.lock().unwrap().retain(|_, sid| sid.as_deref() != Some(session_id));
-        if let Some(path) = s.and_then(|s| s.save_to) {
-            self.shared.saver.queue(path, None);
+        // Tokens an agent process still holds stop working too, and the chat's previews close.
+        if let Some(host) = self.ui_host.get().and_then(Weak::upgrade) {
+            host.revoke(session_id);
+        }
+        if let Some(path) = path {
+            // After any write of it already under way, so a save can't bring the file back.
+            let _io = self.shared.io.lock().unwrap();
+            if let Err(e) = std::fs::remove_file(&path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                eprintln!("[sessions] could not delete {}: {e}", path.display());
+            }
         }
         Ok(())
     }
 
+    /// Every chat's info. Reads no transcript.
     pub fn list_sessions(&self) -> Vec<SessionInfo> {
-        self.shared.sessions.lock().unwrap().values().map(|s| s.info.clone()).collect()
+        self.shared.chats().iter().map(|c| c.lock().unwrap().info.clone()).collect()
     }
 
+    /// A chat's info, without reading its transcript.
+    pub fn session_info(&self, session_id: &str) -> Result<SessionInfo, String> {
+        self.shared.with_info(session_id, SessionInfo::clone)
+    }
+
+    /// The whole transcript (read from disk if the chat wasn't opened yet).
     pub fn transcript(&self, session_id: &str) -> Result<Transcript, String> {
-        self.shared.with(session_id, |s| Transcript { info: s.info.clone(), entries: s.entries.clone() })
+        self.shared.with(session_id, |s| Transcript { info: s.info.clone(), entries: s.entries.iter().map(|e| (**e).clone()).collect() })
+    }
+
+    /// Up to `limit` entries (default [`PAGE`]) from `from` on; without `from`,
+    /// the last ones. Reads the transcript from disk if the chat wasn't opened yet.
+    pub fn entries(&self, session_id: &str, from: Option<usize>, limit: Option<usize>) -> Result<Page, String> {
+        let limit = limit.unwrap_or(PAGE);
+        self.shared.with(session_id, |s| {
+            let total = s.entries.len();
+            let from = from.map_or_else(|| total.saturating_sub(limit), |f| f.min(total));
+            let end = from.saturating_add(limit).min(total);
+            Page { entries: s.entries[from..end].to_vec(), from, total }
+        })
     }
 
     /// Start a prompt turn. Returns immediately; progress arrives as events.
@@ -936,7 +1343,8 @@ impl Hub {
             }
             blocks.push(json!({ "type": "text", "text": text }));
             self.shared.push(s, Entry::User { text, attachments });
-            self.shared.emit_info(&s.info);
+            self.shared.emit_info(s);
+            self.shared.save(s);
             Ok(blocks)
         })??;
 
@@ -979,7 +1387,7 @@ impl Hub {
     /// chat (the agent often asks several at once), and later ones, the same way.
     pub fn respond_permission(&self, session_id: &str, index: usize, option_id: Option<&str>) -> Result<(), String> {
         self.shared.with(session_id, |s| {
-            let Some(Entry::Permission { request_id, options, chosen, title, .. }) = s.entries.get_mut(index) else {
+            let Some(Entry::Permission { request_id, options, chosen, title, .. }) = s.entry_mut(index) else {
                 return Err("no permission request at that index".to_owned());
             };
             if chosen.is_some() {
@@ -999,19 +1407,25 @@ impl Hub {
                 && title != UNNAMED_TOOL
             {
                 s.remembered.insert(title.clone(), kind.to_owned());
-                for i in 0..s.entries.len() {
-                    if let Entry::Permission { request_id, options, chosen: chosen @ None, title: t, .. } = &mut s.entries[i]
-                        && *t == title
-                        && let Some((id, name)) = remembered_option(options, kind)
-                    {
-                        *chosen = Some(format!("{name} {REMEMBERED}"));
-                        if let Some((_, r)) = s.waiting.remove(&i) {
-                            r.ok(request_id.clone(), outcome(Some(&id)));
+                let same: Vec<(usize, Value, String, String)> = (0..s.entries.len())
+                    .filter_map(|i| match &*s.entries[i] {
+                        Entry::Permission { request_id, options, chosen: None, title: t, .. } if *t == title => {
+                            remembered_option(options, kind).map(|(id, name)| (i, request_id.clone(), id, name))
                         }
-                        self.shared.emit_entry(s, i);
+                        _ => None,
+                    })
+                    .collect();
+                for (i, request_id, id, name) in same {
+                    if let Some(Entry::Permission { chosen, .. }) = s.entry_mut(i) {
+                        *chosen = Some(format!("{name} {REMEMBERED}"));
                     }
+                    if let Some((_, r)) = s.waiting.remove(&i) {
+                        r.ok(request_id, outcome(Some(&id)));
+                    }
+                    self.shared.emit_entry(s, i);
                 }
             }
+            self.shared.save(s);
             if sent { Ok(()) } else { Err("agent process is not running".into()) }
         })?
     }
@@ -1084,38 +1498,44 @@ fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &
                 // While `session/load` replays, the chat isn't attached yet; replays are ignored anyway.
                 if s.attached == Some(generation) {
                     apply_update(shared, s, &params["update"]);
+                    shared.save(s);
                 }
             });
         }
         Incoming::Notification { .. } => {}
         Incoming::Request { id, method, mut params } if method == "session/request_permission" => {
             let sid = params.get("sessionId").and_then(Value::as_str).unwrap_or_default().to_owned();
-            let mut sessions = shared.sessions.lock().unwrap();
-            let Some(s) = sessions.get_mut(&sid).filter(|s| s.attached == Some(generation)) else {
-                responder.ok(id, outcome(None));
-                return;
-            };
-            let tool_call = &params["toolCall"];
-            upsert_tool(shared, s, tool_call);
-            let tool_call_id = tool_call.get("toolCallId").and_then(Value::as_str).map(str::to_owned);
-            let title = tool_call
-                .get("title")
-                .and_then(Value::as_str)
-                .or_else(|| tool_call_id.as_deref().and_then(|t| tool_title(s, t)))
-                .unwrap_or(UNNAMED_REQUEST)
-                .to_owned();
             let options = params.get_mut("options").map(Value::take).filter(Value::is_array).unwrap_or_else(|| json!([]));
-            // The user already said "don't ask again" to exactly this in this chat: answer it the same way,
-            // and still show it, marked, so nothing happens unseen.
-            let remembered = s.remembered.get(&title).and_then(|kind| remembered_option(&options, kind));
-            let chosen = remembered.map(|(option_id, name)| {
-                responder.ok(id.clone(), outcome(Some(&option_id)));
-                format!("{name} {REMEMBERED}")
+            let tool_call = &params["toolCall"];
+            let asked = shared.with(&sid, |s| {
+                if s.attached != Some(generation) {
+                    return false;
+                }
+                upsert_tool(shared, s, tool_call);
+                let tool_call_id = tool_call.get("toolCallId").and_then(Value::as_str).map(str::to_owned);
+                let title = tool_call
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .or_else(|| tool_call_id.as_deref().and_then(|t| tool_title(s, t)))
+                    .unwrap_or(UNNAMED_REQUEST)
+                    .to_owned();
+                // The user already said "don't ask again" to exactly this in this chat: answer it the same way,
+                // and still show it, marked, so nothing happens unseen.
+                let remembered = s.remembered.get(&title).and_then(|kind| remembered_option(&options, kind));
+                let chosen = remembered.map(|(option_id, name)| {
+                    responder.ok(id.clone(), outcome(Some(&option_id)));
+                    format!("{name} {REMEMBERED}")
+                });
+                let waiting = chosen.is_none();
+                let i = shared.push(s, Entry::Permission { request_id: id.clone(), tool_call_id, title, options, chosen });
+                if waiting {
+                    s.waiting.insert(i, (generation, responder.clone()));
+                }
+                shared.save(s);
+                true
             });
-            let waiting = chosen.is_none();
-            let i = shared.push(s, Entry::Permission { request_id: id, tool_call_id, title, options, chosen });
-            if waiting {
-                s.waiting.insert(i, (generation, responder.clone()));
+            if !asked.unwrap_or(false) {
+                responder.ok(id, outcome(None));
             }
         }
         // fs/* and terminal/* are not advertised in our capabilities.
@@ -1136,10 +1556,12 @@ fn outcome(option_id: Option<&str>) -> Value {
 /// Add a notice, joining the notices just before it (and skipping one already shown there).
 fn push_notice(shared: &Shared, s: &mut Session, notice: Notice) {
     if let Some(i) = s.entries.len().checked_sub(1)
-        && let Entry::Notices { items } = &mut s.entries[i]
+        && let Entry::Notices { items } = &*s.entries[i]
     {
         if !items.contains(&notice) {
-            items.push(notice);
+            if let Some(Entry::Notices { items }) = s.entry_mut(i) {
+                items.push(notice);
+            }
             shared.emit_entry(s, i);
         }
         return;
@@ -1181,19 +1603,19 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
             let thought = kind == "agent_thought_chunk";
             let text = content_text(&update["content"]);
             let message_id = update.get("messageId").and_then(Value::as_str);
-            // Chunks of the same message (or thought) join the entry they continue.
-            let last = s.entries.len().checked_sub(1);
-            let continued = match last.map(|i| &mut s.entries[i]) {
-                Some(Entry::Agent { text: t, message_id: m }) if !thought && same_message(m.as_deref(), message_id) => Some(t),
-                Some(Entry::Thought { text: t, message_id: m }) if thought && same_message(m.as_deref(), message_id) => Some(t),
-                _ => None,
-            };
-            if let (Some(t), Some(i)) = (continued, last) {
-                t.push_str(&text);
-                shared.emit_entry(s, i);
+            // Chunks of the same message (or thought) join the entry they continue, and go to the UI as appends.
+            let continued = s.entries.len().checked_sub(1).filter(|&i| match &*s.entries[i] {
+                Entry::Agent { message_id: m, .. } => !thought && same_message(m.as_deref(), message_id),
+                Entry::Thought { message_id: m, .. } => thought && same_message(m.as_deref(), message_id),
+                _ => false,
+            });
+            if let Some(i) = continued {
+                shared.append(s, i, &text);
             } else {
                 let message_id = message_id.map(str::to_owned);
-                shared.push(s, if thought { Entry::Thought { text, message_id } } else { Entry::Agent { text, message_id } });
+                let len = text.encode_utf16().count();
+                let i = shared.push(s, if thought { Entry::Thought { text, message_id } } else { Entry::Agent { text, message_id } });
+                s.stream.text_len = Some((i, len));
             }
         }
         "tool_call" | "tool_call_update" => upsert_tool(shared, s, update),
@@ -1201,7 +1623,7 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
             let entry = Entry::Plan { entries: update.get("entries").cloned().unwrap_or_else(|| json!([])) };
             match s.plan_index {
                 Some(i) => {
-                    s.entries[i] = entry;
+                    s.entries[i] = Arc::new(entry);
                     shared.emit_entry(s, i);
                 }
                 None => s.plan_index = Some(shared.push(s, entry)),
@@ -1210,7 +1632,7 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
         // user_message_chunk only appears when replaying a loaded session, which we skip.
         "available_commands_update" => {
             s.info.commands = update.get("availableCommands").and_then(Value::as_array).cloned().unwrap_or_default();
-            shared.emit_info(&s.info);
+            shared.emit_info(s);
         }
         // current_mode_update, config options, etc. are not rendered yet.
         _ => {}
@@ -1237,7 +1659,8 @@ fn upsert_tool(shared: &Shared, s: &mut Session, update: &Value) {
         s.tool_index.insert(id.to_owned(), i);
         return;
     };
-    if let Entry::Tool { title, kind, status, content, locations, raw_input, .. } = &mut s.entries[i] {
+    // The whole tool entry goes again (`session-entry`): updates replace fields wholesale, so a diff would save little.
+    if let Some(Entry::Tool { title, kind, status, content, locations, raw_input, .. }) = s.entry_mut(i) {
         if let Some(v) = str_field("title") {
             *title = v;
         }
@@ -1255,6 +1678,8 @@ fn upsert_tool(shared: &Shared, s: &mut Session, update: &Value) {
     shared.emit_entry(s, i);
 }
 
+/// A turn ended: what's left of its text goes to the UI before the chat stops
+/// running, and the transcript is written now rather than in a moment.
 fn finish_turn(shared: &Shared, sid: &str, stop: Option<String>, error: Option<Entry>) {
     let _ = shared.with(sid, |s| {
         s.info.running = false;
@@ -1262,8 +1687,8 @@ fn finish_turn(shared: &Shared, sid: &str, stop: Option<String>, error: Option<E
         if let Some(entry) = error {
             shared.push(s, entry);
         }
-        shared.emit_info(&s.info);
-        shared.save(s);
+        shared.emit_info(s);
+        shared.save_now(s);
     });
 }
 
@@ -1272,8 +1697,9 @@ fn finish_turn(shared: &Shared, sid: &str, stop: Option<String>, error: Option<E
 /// answered, even in chats that moved on to a newer process.
 fn on_exit(shared: &Shared, generation: u64) {
     eprintln!("[acp] agent #{generation} exited");
-    let mut sessions = shared.sessions.lock().unwrap();
-    for s in sessions.values_mut() {
+    // One chat at a time, and without reading transcripts: a chat not opened yet has nothing waiting.
+    for chat in shared.chats() {
+        let s = &mut *chat.lock().unwrap();
         if s.attached == Some(generation) {
             s.attached = None;
         }
@@ -1295,13 +1721,13 @@ pub enum FormRef<'a> {
 }
 
 impl FormRef<'_> {
-    fn find(&self, entries: &[Entry]) -> Result<usize, String> {
+    fn find(&self, entries: &[Arc<Entry>]) -> Result<usize, String> {
         let is_form = |e: &Entry| matches!(e, Entry::Ui { tree, .. } if !form_fields(tree).is_empty());
         match self {
             FormRef::Index(i) => entries.get(*i).filter(|e| is_form(e)).map(|_| *i).ok_or_else(|| "no form at that index".into()),
             FormRef::UiId(id) => entries
                 .iter()
-                .rposition(|e| matches!(e, Entry::Ui { ui_id: Some(other), .. } if other == id))
+                .rposition(|e| matches!(&**e, Entry::Ui { ui_id: Some(other), .. } if other == id))
                 .filter(|i| is_form(&entries[*i]))
                 .ok_or_else(|| format!("no form rendered with id `{id}`; render one with ui_render and an `id` first")),
         }
@@ -1375,7 +1801,7 @@ fn same_message(current: Option<&str>, incoming: Option<&str>) -> bool {
 }
 
 fn tool_title<'a>(s: &'a Session, tool_call_id: &str) -> Option<&'a str> {
-    match s.tool_index.get(tool_call_id).map(|&i| &s.entries[i]) {
+    match s.tool_index.get(tool_call_id).map(|&i| &*s.entries[i]) {
         Some(Entry::Tool { title, .. }) => Some(title),
         _ => None,
     }
@@ -1934,6 +2360,7 @@ mod persistence_tests {
     use super::*;
 
     #[test]
+    /// (A chat id no other test uses: deleting a chat revokes its id on every UI server in the process.)
     fn restores_saved_chats_as_stopped() {
         let dir = std::env::temp_dir().join(format!("yaah-sessions-{}", random_token()));
         let entries = vec![
@@ -1950,32 +2377,36 @@ mod persistence_tests {
             Entry::Permission { request_id: json!(3), tool_call_id: Some("t1".into()), title: "Write x".into(), options: json!([]), chosen: None },
         ];
         let hub = Hub::open(Arc::new(|_: &str, _: Value| {}), Some(dir.clone()), Store::user());
-        hub.shared.save(&Session::new(test_info("s1"), entries, Some(dir.join("s1.json"))));
+        let mut saved = Session::new(test_info("restored-1"), entries, Some(dir.join("restored-1.json")));
+        saved.saving.dirty = true;
+        hub.shared.insert(saved);
         hub.flush();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(dir.join("s1.json")).unwrap().permissions().mode() & 0o777;
+            let mode = std::fs::metadata(dir.join("restored-1.json")).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o600, "chats can hold secrets");
         }
         std::fs::write(dir.join("broken.json"), "{").unwrap();
 
-        let restored = load_sessions(&dir);
+        let mut restored = load_sessions(&dir);
         assert_eq!(restored.len(), 1, "an unreadable file is skipped");
-        let s = &restored["s1"];
+        let s = restored.get_mut("restored-1").unwrap();
         assert!(!s.info.running, "a turn can't still be running after a restart");
+        assert!(!s.loaded && s.entries.is_empty(), "entries wait until the chat is opened");
+        s.ensure_loaded();
         assert!(s.attached.is_none(), "restored chats reattach on their next prompt");
         assert_eq!(s.tool_index.get("t1"), Some(&1), "tool calls can still be updated");
-        assert!(matches!(&s.entries[2], Entry::Permission { chosen: Some(c), .. } if c.contains("cancelled")));
+        assert!(matches!(&*s.entries[2], Entry::Permission { chosen: Some(c), .. } if c.contains("cancelled")));
 
         // Deleting goes through the same queue, so a save still waiting can't bring the file back.
         let hub = Hub::open(Arc::new(|_: &str, _: Value| {}), Some(dir.clone()), Store::user());
-        assert_eq!(hub.rename_session("s1", "  renamed  ").unwrap().title, "renamed");
-        assert!(hub.rename_session("s1", " ").is_err());
-        hub.delete_session("s1").unwrap();
-        assert!(hub.delete_session("s1").is_err(), "already gone");
+        assert_eq!(hub.rename_session("restored-1", "  renamed  ").unwrap().title, "renamed");
+        assert!(hub.rename_session("restored-1", " ").is_err());
+        hub.delete_session("restored-1").unwrap();
+        assert!(hub.delete_session("restored-1").is_err(), "already gone");
         hub.flush();
-        assert!(!dir.join("s1.json").exists());
+        assert!(!dir.join("restored-1.json").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -2026,7 +2457,7 @@ mod ask_tests {
     fn ui_ask_waits_for_the_users_answer() {
         let hub = Arc::new(Hub::new(Arc::new(|_: &str, _: Value| {})));
         let info = test_info("s1");
-        hub.shared.sessions.lock().unwrap().insert("s1".into(), Session::new(info, vec![], None));
+        hub.shared.insert(Session::new(info, vec![], None));
         hub.ui_tokens.lock().unwrap().insert("tok".into(), Some("s1".into()));
         let dir = std::env::temp_dir().join(format!("yaah-ask-{}", random_token()));
         let library = Arc::new(Library::with_sources(vec![Box::new(LocalDir::new(dir))]));
@@ -2067,7 +2498,7 @@ mod ask_tests {
     fn user_and_agent_edit_one_form() {
         let hub = Arc::new(Hub::new(Arc::new(|_: &str, _: Value| {})));
         let info = test_info("s2");
-        hub.shared.sessions.lock().unwrap().insert("s2".into(), Session::new(info, vec![], None));
+        hub.shared.insert(Session::new(info, vec![], None));
         hub.ui_tokens.lock().unwrap().insert("tok2".into(), Some("s2".into()));
         let dir = std::env::temp_dir().join(format!("yaah-form-{}", random_token()));
         let library = Arc::new(Library::with_sources(vec![Box::new(LocalDir::new(dir))]));
@@ -2154,7 +2585,7 @@ mod permission_tests {
             fetch_request(5, UNNAMED_REQUEST),
             fetch_request(6, UNNAMED_REQUEST),
         ];
-        hub.shared.sessions.lock().unwrap().insert("p".into(), Session::new(info, entries, None));
+        hub.shared.insert(Session::new(info, entries, None));
         // No agent is running, so sending fails after the choice is recorded.
         assert!(hub.respond_permission("p", 0, Some("a")).is_err());
         assert!(hub.respond_permission("p", 0, Some("a")).unwrap_err().contains("already answered"));
@@ -2163,7 +2594,7 @@ mod permission_tests {
         let _ = hub.respond_permission("p", 4, Some("a"));
         let t = hub.transcript("p").unwrap().entries;
         assert!(matches!(&t[5], Entry::Permission { chosen: None, .. }), "an unnamed request still asks");
-        assert!(!hub.shared.sessions.lock().unwrap()["p"].remembered.contains_key(UNNAMED_REQUEST));
+        assert!(!hub.shared.chat("p").unwrap().lock().unwrap().remembered.contains_key(UNNAMED_REQUEST));
         let chosen = |i: usize| match &t[i] {
             Entry::Permission { chosen, .. } => chosen.clone(),
             _ => None,
@@ -2172,10 +2603,478 @@ mod permission_tests {
         assert!(chosen(1).unwrap().ends_with("(you said don't ask again)"));
         assert_eq!(chosen(2), None, "a different request still asks");
         assert!(chosen(3).unwrap().ends_with("(you said don't ask again)"));
-        assert_eq!(hub.shared.sessions.lock().unwrap()["p"].remembered["mcp__fetch__fetch"], "allow_always");
+        assert_eq!(hub.shared.chat("p").unwrap().lock().unwrap().remembered["mcp__fetch__fetch"], "allow_always");
         assert_eq!(
             remembered_option(&json!([{ "optionId": "x", "name": "Yes", "kind": "allow_once" }]), "allow_always"),
             Some(("x".into(), "Yes".into()))
         );
+    }
+}
+
+/// Streaming to the UI (`docs/research/streaming-contract.md`): appends, coalescing, ordering, drafts.
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    type Events = Arc<Mutex<Vec<(Instant, String, Value)>>>;
+
+    fn recorder() -> (Emit, Events) {
+        let events: Events = Arc::default();
+        let sink = events.clone();
+        (Arc::new(move |name: &str, payload: Value| sink.lock().unwrap().push((Instant::now(), name.to_owned(), payload))), events)
+    }
+
+    /// A hub with one attached, running chat `s`.
+    fn hub(coalesce: Duration) -> (Hub, Events) {
+        let (emit, events) = recorder();
+        let hub = Hub::new(emit);
+        hub.set_timings(coalesce, SAVE_DELAY);
+        let mut s = Session::new(test_info("s"), vec![], None);
+        s.attached = Some(1);
+        hub.shared.insert(s);
+        (hub, events)
+    }
+
+    fn update(hub: &Hub, update: &Value) {
+        hub.shared.with("s", |s| apply_update(&hub.shared, s, update)).unwrap();
+    }
+
+    fn chunk(hub: &Hub, text: &str, thought: bool) {
+        let kind = if thought { "agent_thought_chunk" } else { "agent_message_chunk" };
+        update(hub, &json!({ "sessionUpdate": kind, "messageId": "m1", "content": { "type": "text", "text": text } }));
+    }
+
+    fn names(events: &Events) -> Vec<String> {
+        events.lock().unwrap().iter().map(|(_, n, v)| format!("{n}:{}", v["index"])).collect()
+    }
+
+    fn utf16(s: &str) -> usize {
+        s.encode_utf16().count()
+    }
+
+    /// What the UI builds from the events, by the contract's rules: an append
+    /// applies only when the shown text plus it is `len` long (UTF-16).
+    fn replay(events: &Events) -> Vec<Value> {
+        let mut entries: Vec<Value> = vec![];
+        for (_, name, v) in events.lock().unwrap().iter() {
+            let Some(i) = v["index"].as_u64().and_then(|i| usize::try_from(i).ok()) else { continue };
+            match name.as_str() {
+                "session-entry" => {
+                    if entries.len() <= i {
+                        entries.resize(i + 1, Value::Null);
+                    }
+                    entries[i] = v["entry"].clone();
+                }
+                "session-append" => {
+                    let field = v["field"].as_str().unwrap();
+                    let shown = entries[i][field].as_str().expect("an append to a text field the UI has").to_owned();
+                    let text = v["text"].as_str().unwrap();
+                    assert_eq!(utf16(&shown) + utf16(text), usize::try_from(v["len"].as_u64().unwrap()).unwrap(), "in sync: {v}");
+                    entries[i][field] = json!(shown + text);
+                }
+                "session-draft" => {
+                    entries[i]["draft"] = v["draft"].clone();
+                    entries[i]["draftBy"] = v["draftBy"].clone();
+                }
+                _ => {}
+            }
+        }
+        entries
+    }
+
+    fn transcript_values(hub: &Hub) -> Vec<Value> {
+        hub.transcript("s").unwrap().entries.iter().map(|e| serde_json::to_value(e).unwrap()).collect()
+    }
+
+    /// Within the interval appends wait and join; any other change sends them first; the turn's end sends the rest.
+    #[test]
+    fn appends_join_and_go_out_before_any_other_change() {
+        let (hub, events) = hub(Duration::from_secs(3600));
+        chunk(&hub, "Hé", true);
+        assert_eq!(names(&events), ["session-entry:0"], "a thought that starts is a whole entry");
+        chunk(&hub, "llo 👋", true);
+        assert_eq!(names(&events), ["session-entry:0", "session-append:0"], "the first append goes at once");
+        let first = events.lock().unwrap()[1].2.clone();
+        // "Héllo 👋": 7 characters, 11 bytes, 8 UTF-16 code units (the emoji is a surrogate pair).
+        assert_eq!(first, json!({ "sessionId": "s", "index": 0, "field": "text", "text": "llo 👋", "len": 8 }));
+
+        for t in [" a", " b", " ç"] {
+            chunk(&hub, t, true);
+        }
+        assert_eq!(events.lock().unwrap().len(), 2, "appends within the interval wait");
+
+        // A message starts: the waiting thought text goes first, joined into one append.
+        chunk(&hub, "Answer", false);
+        assert_eq!(names(&events)[2..], ["session-append:0", "session-entry:1"]);
+        assert_eq!(events.lock().unwrap()[2].2["text"], " a b ç");
+        assert_eq!(events.lock().unwrap()[2].2["len"], utf16("Héllo 👋 a b ç"));
+
+        // A tool call (not an append) sends the waiting text before it.
+        chunk(&hub, " part", false);
+        update(&hub, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Read x", "status": "pending" }));
+        assert_eq!(names(&events)[4..], ["session-append:1", "session-entry:2"]);
+        update(&hub, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed" }));
+        assert_eq!(names(&events)[6..], ["session-entry:2"], "tool updates send the tool entry");
+
+        // The same message after the tool call is a new entry; the turn's end sends what's waiting, then the info.
+        chunk(&hub, "More", false);
+        chunk(&hub, "…𝄞", false);
+        assert_eq!(names(&events)[7..], ["session-entry:3"]);
+        finish_turn(&hub.shared, "s", Some("end_turn".into()), None);
+        assert_eq!(names(&events)[8..], ["session-append:3", "session-info:null"]);
+        assert_eq!(events.lock().unwrap()[8].2["len"], utf16("More…𝄞"));
+        assert_eq!(events.lock().unwrap()[9].2["running"], false);
+
+        assert_eq!(replay(&events), transcript_values(&hub), "the UI's copy, built from the events, is the transcript");
+    }
+
+    #[test]
+    fn with_no_interval_every_chunk_is_its_own_append() {
+        let (hub, events) = hub(Duration::ZERO);
+        let parts = ["a", "ß", "ﬃ", "🙂", " ", "z"];
+        for p in parts {
+            chunk(&hub, p, false);
+        }
+        let n = names(&events);
+        assert_eq!(n.len(), parts.len());
+        assert!(n[1..].iter().all(|e| e == "session-append:0"), "{n:?}");
+        assert_eq!(events.lock().unwrap().last().unwrap().2["len"], utf16(&parts.concat()));
+        assert_eq!(replay(&events), transcript_values(&hub));
+    }
+
+    /// Text that waits goes out on its own when the interval is up, and a chat
+    /// never gets more than about one append per interval.
+    #[test]
+    fn waiting_text_goes_out_after_the_interval_and_no_faster() {
+        let (hub, events) = hub(COALESCE);
+        chunk(&hub, "start", false);
+        chunk(&hub, " one", false);
+        chunk(&hub, " two", false);
+        let started = Instant::now();
+        while events.lock().unwrap().len() < 3 {
+            assert!(started.elapsed() < Duration::from_secs(5), "the waiting append never went out");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let ev = events.lock().unwrap().clone();
+        assert_eq!((ev[2].1.as_str(), ev[2].2["text"].as_str()), ("session-append", Some(" two")));
+        assert!(ev[2].0 - ev[1].0 >= COALESCE.saturating_sub(Duration::from_millis(2)), "sent before the interval was up");
+
+        // 300 chunks over about half a second: one append per interval at most.
+        events.lock().unwrap().clear();
+        let started = Instant::now();
+        let mut sent = String::new();
+        for i in 0..300 {
+            let t = format!(" {i}é");
+            chunk(&hub, &t, false);
+            sent.push_str(&t);
+            std::thread::sleep(Duration::from_micros(1500));
+        }
+        let took = started.elapsed();
+        finish_turn(&hub.shared, "s", None, None);
+        let appends = events.lock().unwrap().iter().filter(|(_, n, _)| n == "session-append").count();
+        let most = usize::try_from(took.as_millis() / COALESCE.as_millis()).unwrap() + 2;
+        assert!((1..=most).contains(&appends), "{appends} appends in {took:?} (at most {most})");
+        let text: String =
+            events.lock().unwrap().iter().filter(|(_, n, _)| n == "session-append").map(|(_, _, v)| v["text"].as_str().unwrap().to_owned()).collect();
+        assert_eq!(text, sent, "nothing lost or repeated");
+    }
+
+    /// Typing in a form sends the draft, not the UI entry with its inlined image.
+    #[test]
+    fn form_edits_send_only_the_draft() {
+        let (hub, events) = hub(COALESCE);
+        let image = format!("data:image/png;base64,{}", "A".repeat(200_000));
+        let tree = json!({ "type": "form", "children": [
+            { "type": "image", "props": { "src": image } },
+            { "type": "textfield", "props": { "name": "title", "label": "Title" } },
+            { "type": "toggle", "props": { "name": "notify", "label": "Notify" } }
+        ]});
+        let ui = Entry::Ui {
+            ui_id: Some("f".into()),
+            title: None,
+            component: None,
+            version: None,
+            tree,
+            props: json!({}),
+            ask_id: None,
+            answer: None,
+            draft: None,
+            draft_by: None,
+        };
+        assert!(!hub.push_ui("s", ui));
+        let before = events.lock().unwrap().len();
+
+        hub.edit_form("s", FormRef::Index(0), &json!({ "title": "Refunds" }), "user").unwrap();
+        hub.edit_form("s", FormRef::UiId("f"), &json!({ "notify": true }), "agent").unwrap();
+        let ev = events.lock().unwrap()[before..].to_vec();
+        assert_eq!(ev.iter().map(|(_, n, _)| n.as_str()).collect::<Vec<_>>(), ["session-draft", "session-draft"]);
+        assert_eq!(
+            ev[1].2,
+            json!({ "sessionId": "s", "index": 0, "draft": { "title": "Refunds", "notify": true }, "draftBy": { "title": "user", "notify": "agent" } })
+        );
+        assert!(ev.iter().all(|(_, _, v)| v.to_string().len() < 300), "no image in a draft event");
+        assert_eq!(replay(&events)[0]["draft"], json!({ "title": "Refunds", "notify": true }));
+    }
+}
+
+/// Each chat has its own lock: saving or reading one never holds up another.
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    fn chunk() -> Value {
+        json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "token " } })
+    }
+
+    fn big_entries(n: usize) -> Vec<Entry> {
+        (0..n)
+            .map(|i| Entry::Tool {
+                tool_call_id: format!("t{i}"),
+                title: "Read src/session.rs".into(),
+                kind: Some("read".into()),
+                status: Some("completed".into()),
+                content: json!([{ "type": "content", "content": { "type": "text", "text": "x".repeat(4000) } }]),
+                locations: json!([]),
+                raw_input: json!({}),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn one_chat_saving_a_huge_transcript_never_holds_up_another() {
+        let dir = std::env::temp_dir().join(format!("yaah-locks-{}", random_token()));
+        let hub = Arc::new(Hub::open(Arc::new(|_: &str, _: Value| {}), Some(dir.clone()), Store::user()));
+        hub.set_timings(Duration::ZERO, Duration::ZERO);
+        let mut form = big_entries(3000); // about 12 MB
+        form.push(Entry::Ui {
+            ui_id: Some("f".into()),
+            title: None,
+            component: None,
+            version: None,
+            tree: json!({ "type": "form", "children": [{ "type": "textfield", "props": { "name": "a" } }] }),
+            props: json!({}),
+            ask_id: None,
+            answer: None,
+            draft: None,
+            draft_by: None,
+        });
+        let a = hub.shared.insert(Session::new(test_info("a"), form, Some(dir.join("a.json"))));
+        let mut b = Session::new(test_info("b"), vec![], None);
+        b.attached = Some(1);
+        hub.shared.insert(b);
+        let stream_b = |n: usize| -> Vec<Duration> {
+            (0..n)
+                .map(|_| {
+                    let t = Instant::now();
+                    hub.shared.with("b", |s| apply_update(&hub.shared, s, &chunk())).unwrap();
+                    let took = t.elapsed();
+                    std::thread::sleep(Duration::from_micros(500));
+                    took
+                })
+                .collect()
+        };
+
+        // Chat A is held for half a second (as a slow save would): chat B streams on regardless.
+        let (held_tx, held_rx) = mpsc::channel();
+        let holder = std::thread::spawn({
+            let a = a.clone();
+            move || {
+                let _a = a.lock().unwrap();
+                held_tx.send(()).unwrap();
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        });
+        held_rx.recv().unwrap();
+        let lat = stream_b(100);
+        assert!(!holder.is_finished(), "chat A was held the whole time");
+        let worst = lat.iter().max().unwrap();
+        assert!(*worst < Duration::from_millis(100), "chat B waited {worst:?} on chat A");
+        holder.join().unwrap();
+
+        // Real work on chat A: form edits saved at once, and its whole transcript read, back to back.
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker = std::thread::spawn({
+            let (hub, stop) = (hub.clone(), stop.clone());
+            move || {
+                let mut slowest = Duration::ZERO;
+                let mut i = 0;
+                while !stop.load(Ordering::Relaxed) {
+                    i += 1;
+                    let t = Instant::now();
+                    hub.edit_form("a", FormRef::UiId("f"), &json!({ "a": format!("v{i}") }), "user").unwrap();
+                    hub.flush();
+                    std::hint::black_box(hub.transcript("a").unwrap());
+                    slowest = slowest.max(t.elapsed());
+                }
+                (i, slowest)
+            }
+        });
+        let mut lat = stream_b(600);
+        stop.store(true, Ordering::Relaxed);
+        let (rounds, slowest) = worker.join().unwrap();
+        lat.sort();
+        let p99 = lat[lat.len() * 99 / 100];
+        assert!(rounds > 1, "chat A was busy while chat B streamed");
+        assert!(p99 < Duration::from_millis(25), "chat B p99 {p99:?} while each save+read of A took up to {slowest:?}");
+        let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("a.json")).unwrap()).unwrap();
+        assert_eq!(saved["entries"].as_array().unwrap().len(), 3001);
+        assert!(saved["entries"][3000]["draft"]["a"].as_str().is_some_and(|v| v.starts_with('v')));
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+/// Lazy saves and lazy loading.
+#[cfg(test)]
+mod lazy_tests {
+    use super::*;
+
+    fn temp() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("yaah-lazy-{}", random_token()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn quiet() -> Emit {
+        Arc::new(|_: &str, _: Value| {})
+    }
+
+    fn saved_title(path: &Path) -> Option<String> {
+        let v: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+        v["info"]["title"].as_str().map(str::to_owned)
+    }
+
+    fn wait_for(what: &str, f: impl Fn() -> bool) {
+        let started = Instant::now();
+        while !f() {
+            assert!(started.elapsed() < Duration::from_secs(5), "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn a_change_is_written_a_moment_later_once_per_burst() {
+        let dir = temp();
+        let path = dir.join("s.json");
+        let hub = Hub::open(quiet(), Some(dir.clone()), Store::user());
+        hub.set_timings(COALESCE, Duration::from_millis(300));
+        let mut info = test_info("lazy-deleted");
+        info.running = false;
+        hub.shared.insert(Session::new(info, vec![], Some(path.clone())));
+        let started = Instant::now();
+        for i in 0..20 {
+            hub.rename_session("lazy-deleted", &format!("title {i}")).unwrap();
+        }
+        assert!(!path.exists(), "not written straight away");
+        wait_for("the save", || saved_title(&path).is_some());
+        assert!(started.elapsed() >= Duration::from_millis(250), "written after the delay");
+        assert_eq!(saved_title(&path).as_deref(), Some("title 19"), "the burst's last state, in one write");
+
+        // Deleting while a save waits: the file stays gone.
+        hub.rename_session("lazy-deleted", "again").unwrap();
+        hub.delete_session("lazy-deleted").unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(!path.exists(), "a waiting save didn't bring the file back");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Nothing is lost on exit: what's still waiting is written by the flush (and by dropping the Hub).
+    #[test]
+    fn changes_survive_an_exit() {
+        let dir = temp();
+        let hub = Hub::open(quiet(), Some(dir.clone()), Store::user());
+        hub.set_timings(COALESCE, Duration::from_secs(3600));
+        let mut s = Session::new(test_info("s"), vec![], Some(dir.join("s.json")));
+        s.attached = Some(1);
+        hub.shared.insert(s);
+        let update = json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "kept " } });
+        for _ in 0..3 {
+            hub.shared.with("s", |s| apply_update(&hub.shared, s, &update)).unwrap();
+            hub.shared.with("s", |s| hub.shared.save(s)).unwrap();
+        }
+        hub.rename_session("s", "Kept").unwrap();
+        assert!(!dir.join("s.json").exists(), "nothing written yet: the delay is an hour");
+        drop(hub); // the app exits
+
+        let hub = Hub::open(quiet(), Some(dir.clone()), Store::user());
+        let t = hub.transcript("s").unwrap();
+        assert_eq!(t.info.title, "Kept");
+        assert!(!t.info.running, "restored as stopped");
+        assert!(matches!(&t.entries[..], [Entry::Agent { text, .. }] if text == "kept kept kept "));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// The end of a turn writes the transcript now, not after the delay.
+    #[test]
+    fn a_turn_end_writes_at_once() {
+        let dir = temp();
+        let path = dir.join("s.json");
+        let hub = Hub::open(quiet(), Some(dir.clone()), Store::user());
+        hub.set_timings(COALESCE, Duration::from_secs(3600));
+        let mut s = Session::new(test_info("s"), vec![], Some(path.clone()));
+        s.attached = Some(1);
+        hub.shared.insert(s);
+        let update = json!({ "sessionUpdate": "agent_message_chunk", "content": { "type": "text", "text": "done" } });
+        hub.shared.with("s", |s| apply_update(&hub.shared, s, &update)).unwrap();
+        finish_turn(&hub.shared, "s", Some("end_turn".into()), None);
+        wait_for("the turn's save", || std::fs::read_to_string(&path).is_ok_and(|t| t.contains("\"done\"") && t.contains("end_turn")));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn write_chat(dir: &Path, id: &str, entries: usize) {
+        let entries: Vec<Entry> = (0..entries).map(|i| Entry::User { text: format!("message {i}"), attachments: vec![] }).collect();
+        std::fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(&Transcript { info: test_info(id), entries }).unwrap()).unwrap();
+    }
+
+    fn loaded(hub: &Hub, id: &str) -> bool {
+        hub.shared.chat(id).unwrap().lock().unwrap().loaded
+    }
+
+    /// Startup reads infos only: a chat whose entries can't even be parsed is still listed.
+    /// Its entries are read when it is first asked for, a page at a time.
+    #[test]
+    fn startup_reads_infos_and_entries_load_on_first_request() {
+        let dir = temp();
+        write_chat(&dir, "big", 450);
+        let info = serde_json::to_string(&test_info("broken")).unwrap();
+        let broken = format!(r#"{{"info":{info},"entries":[{{"type":"user","text":"x","attachments":[]}},{}"#, "!".repeat(10_000));
+        std::fs::write(dir.join("broken.json"), &broken).unwrap();
+        std::fs::write(dir.join("junk.json"), "not a chat").unwrap();
+
+        let hub = Hub::open(quiet(), Some(dir.clone()), Store::user());
+        let mut ids: Vec<String> = hub.list_sessions().into_iter().map(|i| i.session_id).collect();
+        ids.sort();
+        assert_eq!(ids, ["big", "broken"], "listed without parsing entries; a file with no info is skipped");
+        assert!(hub.list_sessions().iter().all(|i| !i.running), "restored as stopped");
+        assert!(!loaded(&hub, "big") && !loaded(&hub, "broken"));
+        assert_eq!(hub.session_info("big").unwrap().session_id, "big");
+        assert!(!loaded(&hub, "big"), "the info alone doesn't read entries");
+
+        let text = |p: &Page, k: usize| match &*p.entries[k] {
+            Entry::User { text, .. } => text.clone(),
+            _ => String::new(),
+        };
+        let last = hub.entries("big", None, None).unwrap();
+        assert!(loaded(&hub, "big"));
+        assert_eq!((last.from, last.total, last.entries.len()), (250, 450, PAGE), "the last page by default");
+        assert_eq!(text(&last, 0), "message 250");
+        let first = hub.entries("big", Some(0), Some(10)).unwrap();
+        assert_eq!((first.from, first.entries.len(), text(&first, 9)), (0, 10, "message 9".into()));
+        let tail = hub.entries("big", Some(445), Some(10)).unwrap();
+        assert_eq!((tail.from, tail.entries.len(), text(&tail, 4)), (445, 5, "message 449".into()), "cut at the end");
+        let past = hub.entries("big", Some(9999), None).unwrap();
+        assert_eq!((past.from, past.total, past.entries.len()), (450, 450, 0), "from past the end is the end");
+        assert!(hub.entries("big", None, Some(0)).unwrap().entries.is_empty());
+        let all = hub.entries("big", None, Some(usize::MAX)).unwrap();
+        assert_eq!((all.from, all.entries.len()), (0, 450));
+        assert_eq!(serde_json::to_value(&first).unwrap()["entries"][0], json!({ "type": "user", "text": "message 0", "attachments": [] }));
+        assert!(hub.entries("nope", None, None).is_err());
+
+        // A transcript that can't be read says so, and the file is never written over.
+        let page = hub.entries("broken", None, None).unwrap();
+        assert!(matches!(&*page.entries[0], Entry::Error { message, .. } if message.contains("Couldn't read")));
+        hub.rename_session("broken", "renamed").unwrap();
+        hub.flush();
+        assert_eq!(std::fs::read_to_string(dir.join("broken.json")).unwrap(), broken);
+        std::fs::remove_dir_all(dir).ok();
     }
 }
