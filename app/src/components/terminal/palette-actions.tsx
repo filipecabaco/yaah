@@ -1,0 +1,39 @@
+// The ⌘K palette's terminal actions: a new terminal pane (in the default folder, or
+// the focused pane's), and "Open in terminal" (the user's own terminal app).
+import type { ReactNode } from "react";
+import { ExternalLink } from "lucide-react";
+import { compactPath } from "@/lib/format";
+import type { ShortcutId } from "@/lib/shortcuts";
+import { openInTerminalApp } from "@/lib/terminal-api";
+import type { useTerminals } from "./use-terminals";
+
+export type Terminals = ReturnType<typeof useTerminals>;
+
+type Action = { id: string; icon?: ReactNode; label: string; detail?: string; shortcut?: ShortcutId; onSelect: () => void };
+
+export function terminalActions(t: Terminals, icon: ReactNode, close: (then?: () => void) => void): Action[] {
+  const folder = t.focusedFolder();
+  const actions: Action[] = [
+    { id: "new-terminal", icon, label: "New terminal", detail: "in the default folder", onSelect: () => close(() => t.open({}, "split")) },
+  ];
+  if (folder) {
+    actions.push(
+      {
+        id: "new-terminal-here",
+        icon,
+        label: "New terminal here",
+        detail: compactPath(folder),
+        shortcut: "newTerminal",
+        onSelect: () => close(t.openHere),
+      },
+      {
+        id: "open-in-terminal",
+        icon: <ExternalLink />,
+        label: "Open in terminal",
+        detail: `${compactPath(folder)} · your terminal app`,
+        onSelect: () => close(() => openInTerminalApp(folder)),
+      },
+    );
+  }
+  return actions;
+}

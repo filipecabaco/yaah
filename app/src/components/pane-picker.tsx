@@ -1,12 +1,14 @@
 // What a new split pane opens on: start a chat (with an agent) or a project, or
 // open any chat or project, through one search ranked like the ⌘K palette's.
 import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
-import { FolderGit2, FolderOpen, FolderPlus, Loader2, MessageSquare, MessageSquarePlus, X } from "lucide-react";
+import { FolderGit2, FolderOpen, FolderPlus, History, Loader2, MessageSquare, MessageSquarePlus, SquareTerminal, X } from "lucide-react";
+import { TerminalFolders } from "@/components/terminal/terminal-folders";
 import { AgentSelect } from "@/components/agent-choice";
+import { ResumeSession } from "@/components/resume-session";
 import { Badge } from "@/components/ui/badge";
 import { Command, CommandGroup, CommandInput, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
 import { Kbd } from "@/components/ui/kbd";
-import type { AgentProfile, Project, SessionInfo } from "@/lib/api";
+import { mayListSessions, type AgentProfile, type AgentSession, type Project, type SessionInfo } from "@/lib/api";
 import { rankTop } from "@/lib/fuzzy";
 import type { Selection } from "@/lib/layout";
 import { baseName, compactPath } from "@/lib/format";
@@ -31,6 +33,8 @@ export function PanePicker({
   onNewProject,
   onOpen,
   onClose,
+  onResume,
+  onNewTerminal,
 }: {
   agents: AgentProfile[];
   /** The agent a new chat starts with until another is picked here (the sidebar's). */
@@ -45,8 +49,16 @@ export function PanePicker({
   onOpen: (s: Selection) => void;
   /** Esc on an empty search: close the pane. */
   onClose: () => void;
+  /** "Resume a session…": bring one of an agent's own sessions in and open it here. */
+  onResume?: (accountId: string, session: AgentSession) => Promise<unknown>;
+  /** "New terminal…": a shell in this pane, in the folder picked (`undefined`: the default one). */
+  onNewTerminal?: (cwd: string | undefined) => void;
 }) {
+  // Showing the "New terminal…" folder step instead of the picker's own list.
+  const [terminalFolder, setTerminalFolder] = useState(false);
   const [search, setSearch] = useState("");
+  // Showing the "Resume a session…" steps instead of the picker's own list.
+  const [resuming, setResuming] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
   const agent = agents.find((a) => a.id === picked) ?? agents.find((a) => a.id === agentId) ?? agents[0];
   const [active, setActive] = useState<{ id: string; query: string } | null>(null);
@@ -76,6 +88,12 @@ export function PanePicker({
       run: chooseRepos,
     },
     { id: "new-project", icon: <FolderPlus />, label: "New project…", keys: formatKeys(SHORTCUTS.newProject.keys), run: onNewProject },
+    ...(onNewTerminal
+      ? [{ id: "new-terminal", icon: <SquareTerminal />, label: "New terminal…", detail: "pick a folder", run: () => setTerminalFolder(true) }]
+      : []),
+    ...(onResume && agents.some(mayListSessions)
+      ? [{ id: "resume", icon: <History />, label: "Resume a session…", detail: "started in an agent's CLI", run: () => setResuming(true) }]
+      : []),
   ];
   const projectName = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects]);
   const chatEntries = useMemo(
@@ -112,6 +130,34 @@ export function PanePicker({
   const all = groups.flatMap((g) => g.list);
   // Each search starts on its best match, as in the palette.
   const value = active?.query === query && all.some((e) => e.id === active.id) ? active.id : (all[0]?.id ?? "");
+
+  if (terminalFolder && onNewTerminal) {
+    return (
+      <main className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
+        <div className="mt-[max(0px,calc(12cqh-2rem))] flex h-fit w-full max-w-md flex-col gap-3">
+          <div className="flex flex-col gap-1 px-1">
+            <h2 className="text-sm font-medium">New terminal</h2>
+            <p className="text-xs text-muted-foreground">A shell in this pane. Where should it start?</p>
+          </div>
+          <TerminalFolders chats={chats} projects={projects} onPick={onNewTerminal} onBack={() => setTerminalFolder(false)} />
+        </div>
+      </main>
+    );
+  }
+
+  if (resuming && onResume) {
+    return (
+      <main className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
+        <div className="mt-[max(0px,calc(12cqh-2rem))] flex h-fit w-full max-w-lg flex-col gap-3">
+          <div className="flex flex-col gap-1 px-1">
+            <h2 className="text-sm font-medium">Resume a session</h2>
+            <p className="text-xs text-muted-foreground">Carry on, in this pane, with a session you started in an agent's CLI.</p>
+          </div>
+          <ResumeSession agents={agents} inPane onResume={onResume} onBack={() => setResuming(false)} />
+        </div>
+      </main>
+    );
+  }
 
   return (
     // Its top gap follows the pane's own height (a pane below another is short), not the window's.

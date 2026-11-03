@@ -338,12 +338,20 @@ pub struct Sandbox {
     root: PathBuf,
 }
 
+/// Codex's config in the sandbox (see [`Sandbox::new`]).
+const CODEX_SANDBOX_CONFIG: &str = "[features]\nplugins = false\nremote_plugin = false\n";
+
 impl Sandbox {
     pub fn new() -> Result<Self, String> {
         let root = std::env::temp_dir().join(format!("yaah-conformance-{}", crate::random::token()));
         for sub in ["home/.claude", "home/.codex", "home/.config", "home/.local/share", "home/.local/state", "home/.cache", "work", "tmp"] {
             std::fs::create_dir_all(root.join(sub)).map_err(|e| format!("can't create {}: {e}", root.display()))?;
         }
+        // Codex refreshes its plugin marketplace at startup with a `git ls-remote` of
+        // github.com/openai/plugins that it doesn't wait for. On CI runners that fetch can outlive
+        // the agent and fail the shutdown check, which is about processes the adapter leaks, not
+        // Codex's own plugin sync. Plugins are off here so any other leftover process still shows.
+        std::fs::write(root.join("home/.codex/config.toml"), CODEX_SANDBOX_CONFIG).map_err(|e| format!("can't write Codex's sandbox config: {e}"))?;
         // Agents see the resolved path (macOS's /var is /private/var).
         let root = root.canonicalize().unwrap_or(root);
         Ok(Self { root })
@@ -568,10 +576,12 @@ pub async fn run_checks(preset: &Preset, program: &str, args: &[String]) -> Vec<
     let init = match tokio::time::timeout(INIT_TIMEOUT, agents::initialize(&conn)).await {
         Ok(Ok(init)) => {
             checks.push(Check::pass("initialize", format!("answered in {:.1}s", started.elapsed().as_secs_f64())));
+            checks.push(terminal_offer_check(true));
             init
         }
         Ok(Err(e)) => {
             checks.push(Check::fail("initialize", e));
+            checks.push(terminal_offer_check(false));
             return checks;
         }
         Err(_) => {
@@ -580,6 +590,7 @@ pub async fn run_checks(preset: &Preset, program: &str, args: &[String]) -> Vec<
                 "initialize",
                 format!("no answer within {INIT_TIMEOUT:?}{}", if tail.is_empty() { String::new() } else { format!(": {tail}") }),
             ));
+            checks.push(terminal_offer_check(false));
             let _ = conn.shutdown(Duration::from_secs(1)).await;
             return checks;
         }
@@ -613,6 +624,21 @@ pub async fn run_checks(preset: &Preset, program: &str, args: &[String]) -> Vec<
         eprintln!("[conformance] {} asked for {requests:?} (refused)", preset.id);
     }
     checks
+}
+
+/// yaah offers client terminals (`clientCapabilities.terminal: true`, `acp_terminals.rs`):
+/// `initialize` with that offer must still be answered. Whether the agent then uses
+/// them is its choice; one that ignores them runs its commands itself, as before.
+fn terminal_offer_check(answered: bool) -> Check {
+    const NAME: &str = "initialize with terminal: true";
+    if agents::client_capabilities()["terminal"] != true {
+        return Check::fail(NAME, "yaah no longer offers client terminals");
+    }
+    if answered {
+        Check::pass(NAME, "answered with client terminals offered")
+    } else {
+        Check::fail(NAME, "initialize failed with client terminals offered")
+    }
 }
 
 /// An unknown method: "method not found", and the agent carries on.
@@ -1501,7 +1527,9 @@ process.stdin.on("data", (d) => {
     const line = buf.slice(0, i); buf = buf.slice(i + 1);
     if (!line.trim()) continue;
     const m = JSON.parse(line);
-    if (m.method === "initialize") {
+    if (m.method === "initialize" && mode === "no-terminals" && m.params.clientCapabilities.terminal === true) {
+      send({ id: m.id, error: { code: -32602, message: "unknown client capability: terminal" } });
+    } else if (m.method === "initialize") {
       const caps = { loadSession: mode !== "no-load", mcpCapabilities: { http: true }, promptCapabilities: { embeddedContext: true },
         sessionCapabilities: { additionalDirectories: {}, systemPrompt: {} } };
       const auth = mode === "bad-terminal" ? [{ id: "t", name: "Log in", type: "terminal" }]
@@ -1548,6 +1576,7 @@ process.stdin.on("end", () => { if (mode !== "linger") process.exit(0); });
         let names: Vec<&str> = good.iter().map(|c| c.name.as_str()).collect();
         for n in [
             "initialize",
+            "initialize with terminal: true",
             "protocolVersion",
             "capability loadSession",
             "authMethods",
@@ -1562,6 +1591,7 @@ process.stdin.on("end", () => { if (mode !== "linger") process.exit(0); });
 
         assert!(run("auth").await.iter().all(|c| c.ok), "auth-required is what yaah's login flow expects");
         assert_eq!(failing(&run("v2").await), ["protocolVersion"]);
+        assert_eq!(failing(&run("no-terminals").await), ["initialize", "initialize with terminal: true"], "an agent refusing the offer is caught");
         assert_eq!(failing(&run("no-load").await), ["capability loadSession"]);
         assert_eq!(failing(&run("bad-terminal").await), ["authMethods terminal args"]);
         assert_eq!(failing(&run("crashy-session").await), ["session/new signed out"]);

@@ -29,6 +29,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
 use std::time::{Duration, Instant};
 
+/// "Resume a session…": an agent's own sessions (`session/list`), brought in as chats.
+mod resume;
+pub use resume::{AgentSession, AgentSessions, project_for_cwd};
+/// `ui_request_folders`: the agent asks to add folders to the chat, the user answers inline.
+mod folder_request;
+/// ACP `terminal/*`: which chat a request is for, and keeping a released terminal's output.
+mod terminal_chats;
+use terminal_chats::TerminalChats;
+
 /// Sends an event to the UI. The app wires this to `AppHandle::emit`; tests to a channel.
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
 
@@ -139,6 +148,18 @@ pub enum Entry {
         paths: Vec<String>,
         /// `"project"` or `"chat"`: what they were added to.
         to: String,
+    },
+    /// The agent asked to add folders to the chat (`ui_request_folders`) and
+    /// waits for the user's Add / Not now ([`Hub::request_folders`]).
+    FolderRequest {
+        /// The folders asked for, absolute.
+        paths: Vec<String>,
+        /// Why, in the agent's words.
+        reason: String,
+        /// The waiting tool call's ask, as `ui_ask`'s.
+        ask_id: Option<String>,
+        /// `"added"`, `"declined"` or `"cancelled"`; `None` while waiting.
+        answer: Option<String>,
     },
 }
 
@@ -301,6 +322,9 @@ struct Session {
     attached: Option<u64>,
     /// True while `session/load` replays history we already have.
     replaying: bool,
+    /// Set while an imported session's `session/load` runs: its replay is the transcript,
+    /// so it is recorded rather than ignored (`resume.rs`).
+    importing: Option<resume::Import>,
     /// Where the transcript is saved; `None` keeps it in memory only.
     save_to: Option<PathBuf>,
     /// Permission requests the user said "don't ask again" to, by request title
@@ -369,6 +393,7 @@ impl Session {
             guide: None,
             attached: None,
             replaying: false,
+            importing: None,
             save_to,
             remembered: HashMap::new(),
             waiting: HashMap::new(),
@@ -647,6 +672,8 @@ struct Shared {
     /// [`COALESCE`] and [`SAVE_DELAY`], in microseconds; tests change them.
     coalesce_us: AtomicU64,
     save_delay_us: AtomicU64,
+    /// Terminal panes' shells and agents' commands (`terminals.rs`, `acp_terminals.rs`).
+    terminals: Arc<crate::terminals::Terminals>,
 }
 
 fn micros(d: Duration) -> u64 {
@@ -670,6 +697,7 @@ impl Shared {
         });
         let aliases = sessions.values().filter_map(|s| Some((s.info.agent_session_id.clone()?, s.info.session_id.clone()))).collect();
         Self {
+            terminals: crate::terminals::Terminals::new(app.clone()),
             app,
             sessions: Mutex::new(sessions.into_iter().map(|(id, s)| (id, cell(s))).collect()),
             aliases: Mutex::new(aliases),
@@ -972,6 +1000,11 @@ impl Hub {
         let _ = self.guide.set(guide);
     }
 
+    /// Terminal panes' shells and agents' commands (`terminals.rs`).
+    pub fn terminals(&self) -> &Arc<crate::terminals::Terminals> {
+        &self.shared.terminals
+    }
+
     pub fn guide(&self) -> Option<&Arc<Guide>> {
         self.guide.get()
     }
@@ -1005,11 +1038,18 @@ impl Hub {
         }
         let _ = self.shared.with(session_id, |s| {
             let asked: Vec<usize> = (0..s.entries.len())
-                .filter(|&i| matches!(&*s.entries[i], Entry::Ui { ask_id: Some(a), answer: None, .. } if cancelled.contains_key(a)))
+                .filter(|&i| match &*s.entries[i] {
+                    Entry::Ui { ask_id: Some(a), answer: None, .. } | Entry::FolderRequest { ask_id: Some(a), answer: None, .. } => {
+                        cancelled.contains_key(a)
+                    }
+                    _ => false,
+                })
                 .collect();
             for i in asked {
-                if let Some(Entry::Ui { answer, .. }) = s.entry_mut(i) {
-                    *answer = Some(json!({ "$cancelled": true }));
+                match s.entry_mut(i) {
+                    Some(Entry::Ui { answer, .. }) => *answer = Some(json!({ "$cancelled": true })),
+                    Some(Entry::FolderRequest { answer, .. }) => *answer = Some("cancelled".into()),
+                    _ => {}
                 }
                 self.shared.emit_entry(s, i);
             }
@@ -1582,6 +1622,7 @@ impl Hub {
         };
         self.ui_tokens.lock().unwrap().retain(|_, sid| sid.as_deref() != Some(session_id));
         self.shared.aliases.lock().unwrap().retain(|_, chat| chat != session_id);
+        self.shared.terminals.release_chat(session_id);
         // Tokens an agent process still holds stop working too, and the chat's previews close.
         if let Some(host) = self.ui_host.get().and_then(Weak::upgrade) {
             host.revoke(session_id);
@@ -1854,8 +1895,9 @@ fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &
         Incoming::Notification { method, params } if method == "session/update" => {
             let Some(sid) = params.get("sessionId").and_then(Value::as_str) else { return };
             let _ = shared.with(sid, |s| {
-                // While `session/load` replays, the chat isn't attached yet; replays are ignored anyway.
-                if s.attached == Some(generation) {
+                // While `session/load` replays, the chat isn't attached yet; replays are ignored anyway,
+                // except an import's, which is the chat's history.
+                if s.attached == Some(generation) || s.importing.as_ref().is_some_and(|i| i.generation == generation) {
                     apply_update(shared, s, &params["update"]);
                     shared.save(s);
                 }
@@ -1897,7 +1939,10 @@ fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &
                 responder.ok(id, outcome(None));
             }
         }
-        // fs/* and terminal/* are not advertised in our capabilities.
+        Incoming::Request { id, method, params } if crate::acp_terminals::handles(&method) => {
+            crate::acp_terminals::handle(&shared.terminals, &TerminalChats { shared, generation }, generation, id, &method, &params, responder);
+        }
+        // fs/* is not advertised in our capabilities.
         Incoming::Request { id, method, .. } => {
             responder.method_not_found(id, &method);
         }
@@ -2025,10 +2070,14 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
                 None => s.plan_index = Some(shared.push(s, entry)),
             }
         }
-        // user_message_chunk only appears when replaying a loaded session, which we skip.
+        // user_message_chunk only appears when replaying a loaded session: skipped, unless it's an import's.
+        "user_message_chunk" if s.importing.is_some() => resume::user_chunk(shared, s, update),
         "available_commands_update" => {
             s.info.commands = update.get("availableCommands").and_then(Value::as_array).cloned().unwrap_or_default();
-            shared.emit_info(s);
+            // An import's chat reaches the UI once it is in (`Hub::import_agent_session`).
+            if s.importing.is_none() {
+                shared.emit_info(s);
+            }
         }
         // current_mode_update, config options, etc. are not rendered yet.
         _ => {}
@@ -2066,7 +2115,9 @@ fn upsert_tool(shared: &Shared, s: &mut Session, update: &Value) {
             }
         }
         for (slot, key) in [(content, "content"), (locations, "locations"), (raw_input, "rawInput")] {
-            if let Some(v) = field(key) {
+            if let Some(mut v) = field(key) {
+                // A released terminal's kept output stays when the agent sends the content again.
+                terminal_chats::carry_kept(slot, &mut v);
                 *slot = v;
             }
         }
@@ -2096,6 +2147,8 @@ fn finish_turn(shared: &Shared, sid: &str, stop: Option<String>, error: Option<E
 /// answered, even in chats that moved on to a newer process.
 fn on_exit(shared: &Shared, generation: u64) {
     eprintln!("[acp] agent #{generation} exited");
+    // The commands it ran in terminals go with it.
+    shared.terminals.release_generation(generation);
     // One chat at a time, and without reading transcripts: a chat not opened yet has nothing waiting.
     for chat in shared.chats() {
         let s = &mut *chat.lock().unwrap();

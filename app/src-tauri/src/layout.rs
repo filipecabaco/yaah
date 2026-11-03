@@ -28,10 +28,37 @@ pub const SIDEBAR_DEFAULT: u32 = 288;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum Content {
-    Chat { id: String },
-    Project { id: String },
+    Chat {
+        id: String,
+    },
+    Project {
+        id: String,
+    },
     Components,
     Picker,
+    /// A terminal pane: a shell in `cwd` (the default folder when there's none).
+    /// `id` is the running shell's (`terminals.rs`); after a restart it names
+    /// nothing, and the pane opens a new shell in the same folder.
+    Terminal {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
+}
+
+/// A folder path or terminal id longer than this isn't one the UI made.
+const MAX_FIELD: usize = 4096;
+
+impl Content {
+    fn sane(&self) -> bool {
+        match self {
+            Self::Terminal { cwd, id } => {
+                cwd.as_ref().is_none_or(|c| c.len() <= MAX_FIELD && !c.contains('\0')) && id.as_ref().is_none_or(|i| i.len() <= MAX_ID)
+            }
+            _ => true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,6 +129,14 @@ impl Node {
         }
     }
 
+    /// Every pane's content is one the UI could have made.
+    fn sane(&self) -> bool {
+        match self {
+            Self::Pane { content, .. } => content.as_ref().is_none_or(Content::sane),
+            Self::Split { a, b, .. } => a.sane() && b.sane(),
+        }
+    }
+
     /// Ratios within bounds (a missing or broken one is an even split).
     fn with_sane_ratios(self) -> Self {
         match self {
@@ -119,6 +154,23 @@ impl Layout {
     #[must_use]
     pub fn home() -> Self {
         Self { root: Node::Pane { id: "p1".into(), content: None }, focused: "p1".into() }
+    }
+
+    /// The shells the terminal panes show.
+    pub fn terminal_ids(&self) -> Vec<&str> {
+        fn walk<'a>(n: &'a Node, out: &mut Vec<&'a str>) {
+            match n {
+                Node::Pane { content: Some(Content::Terminal { id: Some(id), .. }), .. } => out.push(id),
+                Node::Pane { .. } => {}
+                Node::Split { a, b, .. } => {
+                    walk(a, out);
+                    walk(b, out);
+                }
+            }
+        }
+        let mut out = vec![];
+        walk(&self.root, &mut out);
+        out
     }
 
     pub fn pane_ids(&self) -> Vec<&str> {
@@ -146,6 +198,9 @@ impl Layout {
         let mut seen = HashSet::new();
         if let Some(dup) = ids.iter().find(|id| !seen.insert(**id)) {
             return Err(format!("two panes or splits are called {dup}"));
+        }
+        if !self.root.sane() {
+            return Err("a terminal pane's folder or id is too long".into());
         }
         let root = self.root.with_sane_ratios();
         let mut panes = vec![];
@@ -275,7 +330,7 @@ mod tests {
     fn what_the_ui_could_not_have_made_is_refused() {
         let dup = json!({ "root": split("s1", "row", 0.5, pane("p1", Value::Null), pane("p1", Value::Null)), "focused": "p1" });
         assert!(from_saved(Some(&dup)).is_none(), "duplicate ids");
-        let bad_kind = json!({ "root": pane("p1", json!({ "kind": "terminal" })), "focused": "p1" });
+        let bad_kind = json!({ "root": pane("p1", json!({ "kind": "browser" })), "focused": "p1" });
         assert!(from_saved(Some(&bad_kind)).is_none(), "an unknown kind of content");
         let empty_id = json!({ "root": pane("", Value::Null), "focused": "" });
         assert!(from_saved(Some(&empty_id)).is_none());
@@ -289,6 +344,28 @@ mod tests {
         }
         let err = serde_json::from_value::<Layout>(json!({ "root": node, "focused": "p0" })).unwrap().checked().unwrap_err();
         assert!(err.contains("at most 16") || err.contains("nest"), "{err}");
+    }
+
+    #[test]
+    fn terminal_panes_round_trip_and_are_never_pruned() {
+        let saved = json!({
+            "root": split(
+                "s1",
+                "row",
+                0.5,
+                pane("p1", json!({ "kind": "chat", "id": "c1" })),
+                split("s2", "column", 0.5, pane("p2", json!({ "kind": "terminal", "cwd": "/work/repo", "id": "tabc" })), pane("p3", json!({ "kind": "terminal" }))),
+            ),
+            "focused": "p2",
+        });
+        let l = from_saved(Some(&saved)).expect("valid");
+        assert_eq!(serde_json::to_value(&l).unwrap(), saved, "saved as the UI sent it, an empty terminal pane too");
+        assert_eq!(l.terminal_ids(), ["tabc"]);
+        // A terminal pane has nothing that can be deleted from under it: it stays when its neighbour's chat goes.
+        let pruned = l.pruned(|_| false, |_| false);
+        assert_eq!(pruned.pane_ids(), ["p2", "p3"]);
+        let long = json!({ "root": pane("p1", json!({ "kind": "terminal", "cwd": "x".repeat(5000) })), "focused": "p1" });
+        assert!(from_saved(Some(&long)).is_none());
     }
 
     #[test]

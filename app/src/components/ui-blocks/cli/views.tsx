@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/markdown";
 import { useFind } from "@/components/ui-blocks/find";
+import { inlineMax, useUiView } from "@/components/ui-view";
 import { formatBytes, formatDuration, plural } from "@/lib/format";
 import { fuzzyScore } from "@/lib/fuzzy";
 import { asArray, asNumber, isObj, optArray, optText, show } from "@/lib/narrow";
@@ -338,6 +339,7 @@ export function FileTreeView({ text, paths, open, find }: { text?: string; paths
   const [allOpen, setAllOpen] = useState<boolean | null>(null);
   const [query, setQuery] = useFind(find);
   const hits = useMemo(() => searchTree(root, query), [root, query]);
+  const { expanded } = useUiView();
   const box = useScrollToHit(hits);
   return (
     <div className="flex flex-col gap-1">
@@ -359,7 +361,7 @@ export function FileTreeView({ text, paths, open, find }: { text?: string; paths
             {hits && <span className="text-xs text-muted-foreground">{plural(hits.matches.size, "match", "matches")}</span>}
           </div>
         )}
-        <div ref={box} key={`${key}:${query}`} className="max-h-[480px] overflow-auto py-1 font-mono text-xs">
+        <div ref={box} key={`${key}:${query}`} className={cn("overflow-auto py-1 font-mono text-xs", inlineMax(expanded, "max-h-[480px]"))}>
           {hits && hits.matches.size === 0 ? (
             <p className="px-3 py-2 font-sans text-muted-foreground">Nothing matches “{query}”.</p>
           ) : (
@@ -476,6 +478,7 @@ export function JsonView({ text, value, open, find }: { text?: string; value?: u
     [text, value],
   );
   const [raw, setRaw] = useState(false);
+  const { expanded } = useUiView();
   const [query, setQuery] = useFind(find);
   const hits = useMemo(() => (parsed.ok ? searchJson(parsed.value, query) : null), [parsed, query]);
   // Once per document, not per keystroke in the search box.
@@ -504,7 +507,7 @@ export function JsonView({ text, value, open, find }: { text?: string; value?: u
         </Button>
         <CopyButton text={pretty} />
       </div>
-      <div ref={box} key={query} className="max-h-[520px] overflow-auto p-2 pl-5 font-mono text-xs leading-5">
+      <div ref={box} key={query} className={cn("overflow-auto p-2 pl-5 font-mono text-xs leading-5", inlineMax(expanded, "max-h-[520px]"))}>
         {raw ? (
           <pre className="whitespace-pre">{pretty}</pre>
         ) : (
@@ -742,6 +745,7 @@ export function TextFileView({
 /** Short text sits inline; longer text gets line numbers, a scroll box and search. */
 function Lines({ lines, start, highlight, follow, find }: { lines: string[]; start: number; highlight: number[]; follow: boolean; find?: string }) {
   const box = useRef<HTMLDivElement>(null);
+  const { expanded } = useUiView();
   // Follow the end as the text grows, unless the reader scrolled up to look at something.
   const pinned = useRef(true);
   const [query, setQuery] = useFind(find);
@@ -801,7 +805,7 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
       <div
         ref={box}
         onScroll={(e) => (pinned.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 24)}
-        className="max-h-[480px] overflow-auto py-1 font-mono text-xs leading-5"
+        className={cn("overflow-auto py-1 font-mono text-xs leading-5", inlineMax(expanded, "max-h-[480px]"))}
       >
         {lines.slice(0, cap).map((line, i) => (
           <div

@@ -8,6 +8,7 @@ import uiSkill from "../../../src-tauri/agent-guide/yaah-ui.md?raw";
 import componentsSkill from "../../../src-tauri/agent-guide/yaah-components.md?raw";
 import { home, ws, type Mock, type Replies } from "./context";
 import { bundledComponents } from "./fixtures";
+import { TERMINAL_APPS } from "./terminals";
 
 type CardMode = GeneralSettings["toolCards"]["rules"][string];
 
@@ -97,6 +98,8 @@ export function settingsReplies({ state }: Mock): Replies {
       version: "0.1.0",
       dataDirs,
       teachAgents: state.teachAgents,
+      terminalApp: state.terminalApp,
+      terminalApps: TERMINAL_APPS,
     }),
     set_appearance: ({ appearance }: { appearance: Appearance }) => {
       state.appearance = appearance;

@@ -8,7 +8,9 @@
 //! yaah's UI server), `YAAH_AGENT_SYSTEM_PROMPT` (advertises the ACP `systemPrompt`),
 //! `YAAH_AGENT_NAME` (echo replies start with it, so a test sees which agent answered),
 //! `YAAH_AGENT_PROVIDERS` (advertises ACP `providers`; `refuse` answers `providers/set` with an
-//! error quoting what it got), `YAAH_AGENT_ENV_DUMP` (a file it writes its environment to).
+//! error quoting what it got), `YAAH_AGENT_ENV_DUMP` (a file it writes its environment to),
+//! `YAAH_AGENT_NO_LIST` (no `session/list`), `YAAH_AGENT_PAGE` (sessions per `session/list` page).
+//! Its own sessions, started "outside yaah", are `$CLAUDE_CONFIG_DIR/sessions.json`.
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -139,6 +141,9 @@ impl Agent {
             "initialize" => {
                 let protocol: u64 = std::env::var("YAAH_AGENT_PROTOCOL").ok().and_then(|v| v.parse().ok()).unwrap_or(1);
                 let mut session_caps = json!({ "additionalDirectories": {} });
+                if std::env::var_os("YAAH_AGENT_NO_LIST").is_none() {
+                    session_caps["list"] = json!({});
+                }
                 if std::env::var_os("YAAH_AGENT_SYSTEM_PROMPT").is_some() {
                     session_caps["systemPrompt"] = json!({});
                 }
@@ -178,11 +183,21 @@ impl Agent {
                 let sid = std::env::var("YAAH_AGENT_SESSION_ID").unwrap_or_else(|_| format!("s{}-{}", self.sessions, std::process::id()));
                 Self::respond(id, &json!({ "sessionId": sid }));
             }
+            "session/list" => Self::respond(id, &list_sessions(params)),
             "session/load" => {
-                // Replay the history, as agents do; yaah already has it.
                 let sid = params["sessionId"].as_str().unwrap_or_default();
-                update(sid, &json!({ "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "replayed question" } }));
-                chunk(sid, "replayed history");
+                match stored_sessions().into_iter().find(|s| s["sessionId"] == sid) {
+                    Some(s) if s["broken"] == true => {
+                        return send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32002, "message": "Resource not found" } }));
+                    }
+                    // One of "its own" sessions, started elsewhere: its whole history.
+                    Some(s) => replay_history(sid, s["title"].as_str().unwrap_or("hello")),
+                    // Replay the history, as agents do; yaah already has it.
+                    None => {
+                        update(sid, &json!({ "sessionUpdate": "user_message_chunk", "content": { "type": "text", "text": "replayed question" } }));
+                        chunk(sid, "replayed history");
+                    }
+                }
                 Self::respond(id, &json!({}));
             }
             "session/prompt" => self.prompt(id, params),
@@ -278,6 +293,9 @@ impl Agent {
                 std::process::exit(3);
             }
             "garbage" => self.garbage(&sid),
+            "terminal" => self.terminal(&sid),
+            // `terminal-live <seconds>`: a command that prints for a while, shown live in its tool card (for looking at it in the app).
+            "terminal-live" => self.terminal_live(&sid, text.split_whitespace().nth(1).and_then(|n| n.parse().ok()).unwrap_or(20)),
             // `spoof <other chat id>`: write into, and ask permission in, a chat this process didn't start.
             "spoof" => {
                 let other = text.split_whitespace().nth(1).unwrap_or_default().to_owned();
@@ -299,6 +317,79 @@ impl Agent {
     }
 
     /// Everything a broken agent might print, then a request yaah doesn't serve and one for a chat it doesn't know.
+    /// Ask yaah and wait for its answer.
+    fn call(&mut self, method: &str, params: &Value) -> Value {
+        let id = self.ask(method, params);
+        self.wait(std::slice::from_ref(&id), false).remove(&id.to_string()).unwrap_or_default()
+    }
+
+    /// ACP client terminals: a command shown in a tool call, waited on, read within a byte
+    /// limit and released; one killed; ones yaah refuses. Reports what it got as one line.
+    fn terminal(&mut self, sid: &str) {
+        let s = json!(sid);
+        let made = self
+            .call("terminal/create", &json!({ "sessionId": s, "command": "printf 'hello \\033[1mworld\\033[0m\\n'; exit 4", "outputByteLimit": 8 }));
+        let t1 = made["result"]["terminalId"].clone();
+        update(
+            sid,
+            &json!({ "sessionUpdate": "tool_call", "toolCallId": "run1", "title": "Run printf", "kind": "execute", "status": "in_progress",
+                              "content": [{ "type": "terminal", "terminalId": t1 }] }),
+        );
+        let waited = self.call("terminal/wait_for_exit", &json!({ "sessionId": s, "terminalId": t1 }));
+        let out = self.call("terminal/output", &json!({ "sessionId": s, "terminalId": t1 }));
+        let released = self.call("terminal/release", &json!({ "sessionId": s, "terminalId": t1 }));
+        let after = self.call("terminal/output", &json!({ "sessionId": s, "terminalId": t1 }));
+        // The final update sends the content again; what yaah kept of the terminal stays.
+        update(
+            sid,
+            &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "run1", "status": "completed",
+                              "content": [{ "type": "terminal", "terminalId": t1 }] }),
+        );
+
+        let t2 = self.call("terminal/create", &json!({ "sessionId": s, "command": "sleep", "args": ["30"] }))["result"]["terminalId"].clone();
+        let killed = self.call("terminal/kill", &json!({ "sessionId": s, "terminalId": t2 }));
+        let stopped = self.call("terminal/wait_for_exit", &json!({ "sessionId": s, "terminalId": t2 }));
+        let still = self.call("terminal/output", &json!({ "sessionId": s, "terminalId": t2 }));
+        self.call("terminal/release", &json!({ "sessionId": s, "terminalId": t2 }));
+
+        let outside = self.call("terminal/create", &json!({ "sessionId": s, "command": "true", "cwd": "/" }));
+        let other_chat = self.call("terminal/create", &json!({ "sessionId": "no-such-session", "command": "true" }));
+        let report = json!({
+            "id": t1,
+            "exit": waited["result"],
+            "output": out["result"],
+            "released": released["result"],
+            "afterRelease": after["error"]["code"],
+            "killed": killed["result"],
+            "stopped": stopped["result"],
+            "stillReadable": still["result"]["exitStatus"].is_object(),
+            "outside": outside["error"]["message"],
+            "otherChat": other_chat["error"]["message"],
+        });
+        chunk(sid, &format!("terminal: {report}"));
+    }
+
+    fn terminal_live(&mut self, sid: &str, seconds: u32) {
+        let s = json!(sid);
+        let script = format!(
+            "printf '\\033[1mcargo test\\033[0m\\n'; i=1; while [ $i -le {n} ]; do printf '\\033[32m   Compiling\\033[0m crate-%02d v0.%d.0\\n' $i $i; \
+             if [ $((i % 4)) -eq 0 ]; then printf 'test invoice::tax_%d ... \\033[32mok\\033[0m\\n' $i; fi; sleep 0.5; i=$((i+1)); done; \
+             printf '\\ntest result: \\033[32mok\\033[0m. %d passed\\n' {n}",
+            n = seconds * 2
+        );
+        let t = self.call("terminal/create", &json!({ "sessionId": s, "command": script }))["result"]["terminalId"].clone();
+        update(
+            sid,
+            &json!({ "sessionUpdate": "tool_call", "toolCallId": "live", "title": "cargo test", "kind": "execute", "status": "in_progress",
+                              "rawInput": { "command": "cargo test" }, "content": [{ "type": "terminal", "terminalId": t }] }),
+        );
+        let exit = self.call("terminal/wait_for_exit", &json!({ "sessionId": s, "terminalId": t }));
+        self.call("terminal/release", &json!({ "sessionId": s, "terminalId": t }));
+        let ok = exit["result"]["exitCode"] == 0;
+        update(sid, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "live", "status": if ok { "completed" } else { "failed" } }));
+        chunk(sid, if ok { "The tests pass." } else { "The command was stopped." });
+    }
+
     fn garbage(&mut self, sid: &str) {
         raw(b"not json\n\xff\xfe not utf-8\n[1,2,3]\n42\n{\"jsonrpc\":\"2.0\"}\n{\"jsonrpc\":\"2.0\",\"id\":999999,\"result\":{}}\n");
         raw(b"{\"jsonrpc\":\"2.0\",\"id\":\"str\",\"error\":{}}\n");
@@ -318,6 +409,60 @@ impl Agent {
         let got = self.wait(&[fs.clone(), lost.clone()], false);
         chunk(sid, &format!("fs: {}; lost: {}", got[&fs.to_string()]["error"]["code"], chosen(&got[&lost.to_string()])));
     }
+}
+
+/// The sessions this agent "has", started outside yaah: `$CLAUDE_CONFIG_DIR/sessions.json`
+/// (`[{ sessionId, cwd, title, updatedAt, broken? }]`), kept per config dir as Claude Code keeps its own.
+fn stored_sessions() -> Vec<Value> {
+    let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") else { return vec![] };
+    let raw = std::fs::read_to_string(std::path::Path::new(&dir).join("sessions.json")).unwrap_or_default();
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+/// `session/list`: pages of `YAAH_AGENT_PAGE` (default 2), cursor `page:<offset>`, optionally one `cwd`'s.
+fn list_sessions(params: &Value) -> Value {
+    let size: usize = std::env::var("YAAH_AGENT_PAGE").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    let all: Vec<Value> = stored_sessions().into_iter().filter(|s| params["cwd"].as_str().is_none_or(|cwd| s["cwd"] == cwd)).collect();
+    let offset: usize = params["cursor"].as_str().and_then(|c| c.strip_prefix("page:")).and_then(|n| n.parse().ok()).unwrap_or(0);
+    let page: Vec<Value> = all
+        .iter()
+        .skip(offset)
+        .take(size)
+        .map(|s| json!({ "sessionId": s["sessionId"], "cwd": s["cwd"], "title": s["title"], "updatedAt": s["updatedAt"] }))
+        .collect();
+    let mut result = json!({ "sessions": page });
+    if offset + size < all.len() {
+        result["nextCursor"] = json!(format!("page:{}", offset + size));
+    }
+    result
+}
+
+/// A stored session's history, as `session/load` replays it: two turns, the first a
+/// message in two blocks, a thought, a reply, a tool call and a plan.
+fn replay_history(sid: &str, question: &str) {
+    let user = |id: &str, text: &str| {
+        update(sid, &json!({ "sessionUpdate": "user_message_chunk", "messageId": id, "content": { "type": "text", "text": text } }));
+    };
+    let agent = |id: &str, text: &str| {
+        update(sid, &json!({ "sessionUpdate": "agent_message_chunk", "messageId": id, "content": { "type": "text", "text": text } }));
+    };
+    user("u1", question);
+    user("u1", "It's in notes.md");
+    update(sid, &json!({ "sessionUpdate": "agent_thought_chunk", "messageId": "th1", "content": { "type": "text", "text": "Reading it" } }));
+    agent("a1", "Found ");
+    agent("a1", "it.");
+    update(sid, &json!({ "sessionUpdate": "tool_call", "toolCallId": "r1", "title": "Read notes.md", "kind": "read", "status": "pending" }));
+    update(
+        sid,
+        &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "r1", "status": "completed",
+                "content": [{ "type": "content", "content": { "type": "text", "text": "the notes" } }] }),
+    );
+    update(sid, &json!({ "sessionUpdate": "plan", "entries": [{ "content": "fix it", "status": "in_progress" }] }));
+    update(sid, &json!({ "sessionUpdate": "plan", "entries": [{ "content": "fix it", "status": "completed" }] }));
+    user("u2", "Now the tests");
+    update(sid, &json!({ "sessionUpdate": "plan", "entries": [{ "content": "run tests", "status": "completed" }] }));
+    agent("a2", "Tests pass.");
+    update(sid, &json!({ "sessionUpdate": "available_commands_update", "availableCommands": [{ "name": "review", "description": "Review" }] }));
 }
 
 /// `long <n>`: one message in n chunks, back to back, with text that isn't ASCII.

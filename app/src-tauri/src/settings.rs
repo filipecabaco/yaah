@@ -303,6 +303,37 @@ pub fn set_tool_card(key: &str, mode: Option<&str>) -> Result<(), String> {
     })
 }
 
+// ── terminals ────────────────────────────────────────────────────────────────
+/// The app "Open in terminal" uses (`terminal_apps.rs`): "system" or one found.
+fn terminal_app_in(s: &Map<String, Value>) -> String {
+    s.get("terminalApp").and_then(Value::as_str).filter(|a| !a.is_empty() && a.len() <= 64).unwrap_or(crate::terminal_apps::SYSTEM).to_owned()
+}
+
+pub fn terminal_app() -> String {
+    terminal_app_in(&load())
+}
+
+pub fn set_terminal_app(id: &str) -> Result<(), String> {
+    if !crate::terminal_apps::detected().iter().any(|a| a.id == id) {
+        return Err(format!("{id} isn't a terminal app yaah found"));
+    }
+    set("terminalApp", json!(id))
+}
+
+/// Where a new terminal pane opens when nothing says where: the last folder one
+/// opened in, while it's still a folder, else the home folder.
+pub fn terminal_dir() -> PathBuf {
+    terminal_dir_in(&load())
+}
+
+fn terminal_dir_in(s: &Map<String, Value>) -> PathBuf {
+    s.get("lastTerminalDir").and_then(Value::as_str).and_then(|d| crate::terminals::checked_dir(d).ok()).unwrap_or_else(home)
+}
+
+pub fn set_terminal_dir(dir: &std::path::Path) -> Result<(), String> {
+    set("lastTerminalDir", json!(dir.to_string_lossy()))
+}
+
 // ── window layout ────────────────────────────────────────────────────────────
 /// The split panes and the sidebar as last left (`layout.rs`), panes on chats or
 /// projects that are gone already dropped: `{ panes, sidebar }`.
@@ -365,6 +396,8 @@ pub fn general() -> Value {
         "theme": theme_in(&s),
         "toolCards": tool_cards_in(&s),
         "teachAgents": teach_agents_in(&s),
+        "terminalApp": terminal_app_in(&s),
+        "terminalApps": crate::terminal_apps::detected(),
         "customThemes": custom_themes(),
         "workspaceRoots": crate::repos::roots(),
         "dataDirs": data_dirs(),

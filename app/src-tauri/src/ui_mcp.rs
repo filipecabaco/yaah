@@ -28,8 +28,18 @@ pub const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_hours(1);
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// Every tool the server has, by its own (bare) name.
-pub const TOOL_NAMES: &[&str] =
-    &["ui_catalog", "ui_guide", "ui_get_component", "ui_render", "source_read", "ui_ask", "ui_get_values", "ui_set_values", "ui_save_component"];
+pub const TOOL_NAMES: &[&str] = &[
+    "ui_catalog",
+    "ui_guide",
+    "ui_get_component",
+    "ui_render",
+    "source_read",
+    "ui_ask",
+    "ui_request_folders",
+    "ui_get_values",
+    "ui_set_values",
+    "ui_save_component",
+];
 
 /// A tool's name as agents that prefix MCP tools by server see it (Claude Code): `mcp__yaah-ui__ui_catalog`.
 pub fn full_tool_name(tool: &str) -> String {
@@ -82,16 +92,28 @@ have typed so far with ui_get_values; the last change to a field wins.
 6. For data the app can read itself (this machine's CPU/memory/disks, Docker containers, stats and logs, \
 git diffs, logs and status in this chat's folder, GitHub pull requests and Linear issues, boards and cycles, the user's databases), don't paste it into props: use a yaah component for it, or wrap your UI in a \
 `live` node with that `source` (and `every` for refreshing). The app fetches it and keeps it current \
-after your turn ends; you never see credentials. Look at the data first with source_read.
+after your turn ends; you never see credentials. Look at the data first with source_read. Git sources and \
+diff-review read another of the chat's folders with `repo`; for a repository outside them, call ui_request_folders \
+once, then use `repo`. Never loop shell commands to find or read a repository.
 
 Validation errors say exactly what to fix; fix and call again.";
 
 /// Tools Claude Code may call without a permission prompt: the ones that only
 /// show UI in this chat or read and grow the component library. `source_read`
 /// isn't one: it reads the user's databases, Docker logs and integrations, so
-/// the user approves it like any other tool.
-const NO_PROMPT_TOOLS: &[&str] =
-    &["ui_catalog", "ui_guide", "ui_get_component", "ui_render", "ui_ask", "ui_get_values", "ui_set_values", "ui_save_component"];
+/// the user approves it like any other tool. `ui_request_folders` is: it changes
+/// nothing until the user clicks Add on its card, so that card is the prompt.
+const NO_PROMPT_TOOLS: &[&str] = &[
+    "ui_catalog",
+    "ui_guide",
+    "ui_get_component",
+    "ui_render",
+    "ui_ask",
+    "ui_request_folders",
+    "ui_get_values",
+    "ui_set_values",
+    "ui_save_component",
+];
 
 /// Claude Code's `allowedTools` for this server: each tool by its full name,
 /// never the whole server (`mcp__yaah-ui`), so a tool added later asks first.
@@ -563,12 +585,91 @@ fn clip(text: String, max: usize) -> String {
     format!("{}… (truncated; {} bytes in full)", &text[..text.floor_char_boundary(max)], text.len())
 }
 
-/// `source_read`, in the chat's folder. This runs on the request's own thread
+/// `source_read`, in the chat's folders. This runs on the request's own thread
 /// (not an async worker), so blocking on it is fine.
 fn read_source(host: &UiHost, session_id: &str, source: &Value) -> Result<String, String> {
-    let cwd = host.hub.session_roots(session_id).into_iter().next();
+    let roots = host.hub.session_roots(session_id);
     // Enough to design UI from; the live UI reads the full data itself.
-    tauri::async_runtime::block_on(host.sources.read_in(source, cwd.as_deref())).map(|v| clip(v.to_string(), MAX_SOURCE_TEXT))
+    tauri::async_runtime::block_on(host.sources.read_in(source, &roots)).map(|v| clip(v.to_string(), MAX_SOURCE_TEXT)).map_err(|e| {
+        if e.contains(crate::sources::git::NOT_A_CHAT_FOLDER) {
+            format!("{e}. Ask the user once with ui_request_folders, then read it with `repo`; don't look for it with shell commands")
+        } else {
+            e
+        }
+    })
+}
+
+/// At most this many folders in one `ui_request_folders`.
+const MAX_REQUESTED_FOLDERS: usize = 10;
+
+/// `ui_request_folders`'s paths: existing folders, absolute or `~/…`, canonical and once each.
+fn requested_folders(paths: &Value) -> Result<Vec<String>, Vec<String>> {
+    let list: Vec<&Value> = match paths {
+        Value::String(_) => vec![paths],
+        Value::Array(items) if !items.is_empty() => items.iter().collect(),
+        _ => return Err(vec!["`paths` must be a list of 1 to 10 folders (absolute, or ~/…)".into()]),
+    };
+    if list.len() > MAX_REQUESTED_FOLDERS {
+        return Err(vec![format!("at most {MAX_REQUESTED_FOLDERS} folders at a time")]);
+    }
+    let mut out: Vec<String> = vec![];
+    let mut errs = vec![];
+    for v in list {
+        let Some(raw) = v.as_str().map(str::trim) else {
+            errs.push(format!("`paths` must be strings, got {v}"));
+            continue;
+        };
+        let path = crate::sources::git::expand_home(raw);
+        if !path.is_absolute() {
+            errs.push(format!("`{raw}` must be an absolute path (or ~/…)"));
+        } else if !path.exists() {
+            errs.push(format!("`{raw}` doesn't exist"));
+        } else if !path.is_dir() {
+            errs.push(format!("`{raw}` isn't a folder"));
+        } else if let Ok(dir) = std::fs::canonicalize(&path) {
+            let dir = dir.to_string_lossy().into_owned();
+            if !out.contains(&dir) {
+                out.push(dir);
+            }
+        } else {
+            errs.push(format!("`{raw}` can't be read"));
+        }
+    }
+    if errs.is_empty() { Ok(out) } else { Err(errs) }
+}
+
+/// `ui_request_folders`: show the request inline and wait for Add / Not now, as `ui_ask` waits.
+/// Folders the chat already has are left out; with none left, nothing is asked.
+fn request_folders(host: &UiHost, session_id: &str, args: &Value) -> Result<String, Vec<String>> {
+    let paths = requested_folders(&args["paths"])?;
+    let reason = args["reason"].as_str().map(str::trim).unwrap_or_default();
+    if reason.is_empty() {
+        return Err(vec!["`reason` is required: why you need these folders, in a few words, for the user".into()]);
+    }
+    let reason: String = reason.chars().take(300).collect();
+    let have: Vec<PathBuf> = host.hub.session_roots(session_id).iter().filter_map(|r| std::fs::canonicalize(r).ok()).collect();
+    let (already, wanted): (Vec<String>, Vec<String>) = paths.into_iter().partition(|p| have.iter().any(|h| h == Path::new(p)));
+    let how =
+        |dir: &str| format!("Read git data there with `repo`: diff-review {{ \"repo\": \"{dir}\" }}, or git.* sources with \"repo\": \"{dir}\".");
+    if wanted.is_empty() {
+        return Ok(format!("Already in this chat's folders: {}. {}", already.join(", "), how(&already[0])));
+    }
+    let (ask_id, answers) = host.hub.request_folders(session_id, wanted.clone(), reason).map_err(|e| vec![e])?;
+    Ok(match answers.recv_timeout(ASK_TIMEOUT) {
+        Ok(Some(answer)) if answer["added"] == true => format!(
+            "The user added {} to this chat. {} Your own tools (files, shell) get these folders from their next message on.",
+            wanted.join(", "),
+            how(&wanted[0])
+        ),
+        Ok(Some(_)) => "The user said not now: these folders stay out of this chat. Don't ask for them again, and don't look for them \
+                        with shell commands; carry on without them, and tell the user they can add them with /repos."
+            .into(),
+        Ok(None) => "The user cancelled instead of answering. Stop and wait for their next message.".into(),
+        Err(_) => {
+            host.hub.drop_ask(&ask_id);
+            "No answer within an hour. Carry on without these folders; the user can add them with /repos.".into()
+        }
+    })
 }
 
 fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) -> Value {
@@ -586,8 +687,9 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
                 format!("{library},\"connections\":{connections}}}")
             })
             .map_err(|e| vec![e]),
-        // Git sources read the chat's own folder, from the session: never a path the agent passes.
+        // Git sources read the chat's folders, from the session: `repo` can only pick one of them.
         "source_read" => read_source(host, session_id, &args["source"]).map_err(|e| vec![e]),
+        "ui_request_folders" => request_folders(host, session_id, args),
         "ui_guide" => guide_topic(lib, args["topic"].as_str().unwrap_or("ui")),
         "ui_get_component" => match lib.get(args["name"].as_str().unwrap_or_default()) {
             Ok(Some(c)) => Ok(serde_json::to_string(&c).unwrap_or_default()),
@@ -678,6 +780,31 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
 }
 
 fn tools() -> Value {
+    let mut all = tools_but_folders();
+    if let Some(list) = all.as_array_mut() {
+        let at = list.iter().position(|t| t["name"] == "ui_ask").map_or(list.len(), |i| i + 1);
+        list.insert(at, request_folders_tool());
+    }
+    all
+}
+
+/// `ui_request_folders`: ask to add folders to the chat, and wait.
+fn request_folders_tool() -> Value {
+    json!({
+        "name": "ui_request_folders",
+        "description": "Ask the user to add folders to this chat and WAIT for their answer (Add or Not now). Git sources and diff-review read only this chat's folders; to show git data for a repository outside them (e.g. \"the diff of my project in ~/work/api\"), call this once with its path, then use diff-review or git.* with `repo` set to it. Don't look for the repository with shell commands, and don't ask again after Not now. Paths must be existing folders (absolute, or ~/…).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "paths": { "type": "array", "items": { "type": "string" }, "description": "The folders to add (1 to 10), absolute or ~/…." },
+                "reason": { "type": "string", "description": "Why, in a few words, shown to the user (e.g. \"to review its diff\")." }
+            },
+            "required": ["paths", "reason"]
+        }
+    })
+}
+
+fn tools_but_folders() -> Value {
     json!([
         {
             "name": "ui_catalog",
@@ -713,7 +840,7 @@ fn tools() -> Value {
         },
         {
             "name": "source_read",
-            "description": "Read a data source the app can fetch itself: this machine (`system`), Docker (`docker.containers`, `docker.stats`, `docker.logs`), git in this chat's folder (`git.diff`, `git.log`, `git.status`, `git.show`; the folder is the chat's, never a path you pass) or a database the user connected (`postgres.schema`, `postgres.query`, read-only). Use it to see the data before designing UI, then show it with a `live` node bound to the same source so it stays fresh without you. ui_catalog lists the sources and the connection names.",
+            "description": "Read a data source the app can fetch itself: this machine (`system`), Docker (`docker.containers`, `docker.stats`, `docker.logs`), git in this chat's folders (`git.diff`, `git.log`, `git.status`, `git.show`; the chat's own folder, or another of its folders with `repo`) or a database the user connected (`postgres.schema`, `postgres.query`, read-only). Use it to see the data before designing UI, then show it with a `live` node bound to the same source so it stays fresh without you. ui_catalog lists the sources and the connection names.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -925,25 +1052,30 @@ mod tests {
         if write!(s, "{head}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).is_err() {
             return (0, String::new());
         }
-        let mut out = String::new();
-        let _ = s.read_to_string(&mut out);
-        let status = out.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
-        let (head, mut body) = out.split_once("\r\n\r\n").map(|(h, b)| (h.to_ascii_lowercase(), b.to_owned())).unwrap_or_default();
+        // Bytes, not text: a chunk can end inside a multibyte character, so the raw stream
+        // is only UTF-8 once the chunk headers are taken out.
+        let mut out = vec![];
+        let _ = s.read_to_end(&mut out);
+        let Some(split) = out.windows(4).position(|w| w == b"\r\n\r\n") else { return (0, String::new()) };
+        let head = String::from_utf8_lossy(&out[..split]).to_ascii_lowercase();
+        let status = head.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
+        let mut body = out[split + 4..].to_vec();
         if head.contains("transfer-encoding: chunked") {
             // Large answers come chunked: `<hex size>\r\n<data>\r\n`… until a zero.
-            let mut plain = String::new();
-            let mut rest = body.as_str();
-            while let Some((size, after)) = rest.split_once("\r\n") {
-                let n = usize::from_str_radix(size.trim(), 16).unwrap_or(0);
-                if n == 0 {
+            let mut plain = vec![];
+            let mut rest = body.as_slice();
+            while let Some(eol) = rest.windows(2).position(|w| w == b"\r\n") {
+                let n = usize::from_str_radix(String::from_utf8_lossy(&rest[..eol]).trim(), 16).unwrap_or(0);
+                let data = &rest[eol + 2..];
+                if n == 0 || data.len() < n {
                     break;
                 }
-                plain.push_str(&after[..n]);
-                rest = &after[n + 2..];
+                plain.extend_from_slice(&data[..n]);
+                rest = data.get(n + 2..).unwrap_or_default();
             }
             body = plain;
         }
-        (status, body)
+        (status, String::from_utf8(body).expect("the answer is UTF-8"))
     }
 
     fn get(port: u16, path: &str, host: &str) -> (u16, String) {
@@ -1046,7 +1178,7 @@ mod tests {
         assert_eq!(init["result"]["protocolVersion"], PROTOCOL_VERSIONS[0], "an unknown version gets the newest");
         let (_, list) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
         let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-        assert_eq!(names.len(), 9);
+        assert_eq!(names.len(), 10);
         assert!(names.contains(&"ui_ask") && names.contains(&"source_read") && names.contains(&"ui_guide"));
         let (_, nope) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 3, "method": "sampling/createMessage" }));
         assert_eq!(nope["error"]["code"], -32601);
@@ -1159,6 +1291,66 @@ mod tests {
         wait_for_ask(&hub);
         hub.cancel("s1").unwrap();
         assert!(asking.join().unwrap().0.contains("cancelled"));
+    }
+
+    #[test]
+    fn ui_request_folders_waits_for_add_or_not_now() {
+        let cwd = temp_dir("cwd");
+        let (hub, _, port) = serve_chat(&cwd);
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap().to_string_lossy().into_owned();
+        let ask = move |paths: Value| {
+            std::thread::spawn(move || call(port, "ui_request_folders", &json!({ "paths": paths, "reason": "to review its diff" })))
+        };
+        let api = temp_dir("api");
+        std::fs::write(api.join("README.md"), "# api\n").unwrap();
+
+        // Bad paths and a missing reason are refused before anything is shown.
+        let (text, err) =
+            call(port, "ui_request_folders", &json!({ "paths": [api.join("nope"), api.join("README.md"), "relative/dir"], "reason": "x" }));
+        assert!(err && text.contains("doesn't exist") && text.contains("isn't a folder") && text.contains("must be an absolute path"), "{text}");
+        assert!(call(port, "ui_request_folders", &json!({ "paths": [api] })).0.contains("`reason` is required"));
+        assert!(call(port, "ui_request_folders", &json!({ "paths": [], "reason": "x" })).0.contains("1 to 10 folders"));
+        // A folder the chat already has needs no asking.
+        let (text, err) = call(port, "ui_request_folders", &json!({ "paths": [cwd], "reason": "x" }));
+        assert!(!err && text.starts_with("Already in this chat's folders"), "{text}");
+        assert!(entries(&hub).is_empty(), "nothing was shown");
+
+        // Add: the card goes away answered, the folder is the chat's, and git sources can read it with `repo`.
+        let asking = ask(json!([api, format!("{}/", api.display())]));
+        let index = wait_for_ask(&hub);
+        let card = &entries(&hub)[index];
+        assert_eq!((card["type"].as_str(), card["reason"].as_str()), (Some("folderRequest"), Some("to review its diff")));
+        assert_eq!(card["paths"], json!([canon(&api)]), "canonical, once");
+        assert!(!asking.is_finished(), "the tool waits for the user");
+        hub.answer_folders("s1", index, true, |paths| hub.add_dirs("s1", paths, |_, _| Ok(None)).map(|_| ())).unwrap();
+        let (text, err) = asking.join().unwrap();
+        assert!(!err && text.contains("The user added") && text.contains(&format!("\"repo\": \"{}\"", canon(&api))), "{text}");
+        assert_eq!(entries(&hub)[index]["answer"], "added");
+        assert!(hub.session_roots("s1").contains(&PathBuf::from(canon(&api))));
+        assert!(hub.answer_folders("s1", index, false, |_| Ok(())).unwrap_err().contains("already answered"));
+        // Asked again for a folder it now has: no card, it's read with `repo` straight away.
+        let (text, _) = call(port, "ui_request_folders", &json!({ "paths": [api], "reason": "x" }));
+        assert!(text.starts_with("Already in this chat's folders"), "{text}");
+
+        // Not now: nothing is added, and the agent is told not to go looking.
+        let web = temp_dir("web");
+        let asking = ask(json!([web]));
+        let index = wait_for_ask(&hub);
+        hub.answer_folders("s1", index, false, |_| panic!("declining adds nothing")).unwrap();
+        let (text, _) = asking.join().unwrap();
+        assert!(text.contains("not now") && text.contains("don't look for them"), "{text}");
+        assert_eq!(entries(&hub)[index]["answer"], "declined");
+        assert!(!hub.session_roots("s1").contains(&PathBuf::from(canon(&web))));
+
+        // Adding can fail (here: the folder went away); the card stays open to try again or decline.
+        let asking = ask(json!([web]));
+        let index = wait_for_ask(&hub);
+        assert!(hub.answer_folders("s1", index, true, |_| Err("gone".into())).is_err());
+        assert!(entries(&hub)[index]["answer"].is_null() && !asking.is_finished());
+        // Stopping the turn cancels it.
+        hub.cancel("s1").unwrap();
+        assert!(asking.join().unwrap().0.contains("cancelled"));
+        assert_eq!(entries(&hub)[index]["answer"], "cancelled");
     }
 
     fn wait_for_ask(hub: &Hub) -> usize {

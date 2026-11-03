@@ -3,6 +3,8 @@
 // yaah's own UI tools, `source_read`, ToolSearch and other MCP servers' tools get words;
 // everything else (Read, shell commands…) keeps the title the agent gave it (`null` here).
 
+import { compactPath } from "@/lib/format";
+
 export type ToolStatus = "pending" | "in_progress" | "completed" | "failed" | null;
 
 export type ToolCallLike = {
@@ -30,6 +32,7 @@ const UI_TOOLS = new Set([
   "ui_get_component",
   "ui_render",
   "ui_ask",
+  "ui_request_folders",
   "ui_get_values",
   "ui_set_values",
   "ui_save_component",
@@ -96,6 +99,12 @@ function uiLabel(tool: string, input: Input, output: string | undefined, tense: 
         text: name ? `${tense("Asking you", "Asked you")}: ${name}` : tense("Asking you…", "Asked you"),
         detail: treeSummary(input.tree) ?? undefined,
       };
+    }
+    case "ui_request_folders": {
+      const paths = Array.isArray(input.paths) ? input.paths.flatMap((p) => str(p) ?? []) : [];
+      const what = paths.length === 1 ? compactPath(paths[0]) : paths.length ? `${paths.length} folders` : "folders";
+      if (failed) return { text: `Couldn't ask to add ${what}` };
+      return { text: `${tense("Asking to add", "Asked to add")} ${what}` };
     }
     case "ui_set_values": {
       const id = str(input.id);

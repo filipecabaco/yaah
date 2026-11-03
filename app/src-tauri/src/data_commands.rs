@@ -114,7 +114,8 @@ pub async fn export_library(
 // ── Sources and data connections ────────────────────────────────────────────
 
 /// Read a source for the UI. `session` is the chat the UI is in: git sources
-/// read that chat's folder (looked up here, so the page never names a path).
+/// read that chat's folder, or another of its folders named by `repo` (the
+/// folders are looked up here, so the page can't reach any other).
 #[tauri::command]
 pub async fn read_source(
     sources: State<'_, Arc<sources::Sources>>,
@@ -122,8 +123,8 @@ pub async fn read_source(
     source: serde_json::Value,
     session: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let cwd = session.and_then(|id| hub.session_roots(&id).into_iter().next());
-    sources.read_in(&source, cwd.as_deref()).await
+    let roots = session.map(|id| hub.session_roots(&id)).unwrap_or_default();
+    sources.read_in(&source, &roots).await
 }
 
 /// Kinds of file the system would run, install or follow rather than show:
@@ -245,10 +246,14 @@ pub fn window_layout(hub: State<'_, Arc<Hub>>, projects: State<'_, Projects>) ->
     Ok(settings::window_layout(|id| chats.contains(id), |id| projects.contains(id)))
 }
 
-/// Saved as the UI sends it, once checked (`layout.rs`).
+/// Saved as the UI sends it, once checked (`layout.rs`). Shells whose terminal pane
+/// is gone from it are closed (`Terminals::retain_in_layout`).
 #[tauri::command]
-pub fn set_layout(layout: crate::layout::Layout) -> Result<(), String> {
-    settings::set_layout(layout)
+pub fn set_layout(hub: State<'_, Arc<Hub>>, layout: crate::layout::Layout) -> Result<(), String> {
+    let shells = layout.terminal_ids().into_iter().map(str::to_owned).collect();
+    settings::set_layout(layout)?;
+    hub.terminals().retain_in_layout(shells);
+    Ok(())
 }
 
 #[tauri::command]

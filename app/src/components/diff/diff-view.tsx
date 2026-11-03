@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
+import { inlineMax, useUiView } from "@/components/ui-view";
 import { menuActions } from "@/lib/menu-actions";
 import { changed, hunkRange, type DiffFile, type Hunk } from "@/components/diff/model";
 import { hunkTop, rowsOf, useWrap, WRAP_MAX } from "@/components/diff/lines";
@@ -122,6 +123,7 @@ function Summary({ files, onOpen }: { files: DiffFile[]; onOpen: (path: string) 
 function FileBlock({ file, folded, wrap, onReview }: { file: DiffFile; folded: boolean; wrap: boolean; onReview: () => void }) {
   const [open, setOpen] = useState(true);
   const [all, setAll] = useState(!folded);
+  const { expanded } = useUiView();
   const lines = file.hunks.reduce((n, h) => n + h.lines.length + 1, 0);
   const cut = !all && lines > PREVIEW_LINES;
 
@@ -154,7 +156,7 @@ function FileBlock({ file, folded, wrap, onReview }: { file: DiffFile; folded: b
       {open && (
         <>
           {/* Unwrapped, the file scrolls sideways as one block, line numbers staying put. */}
-          <div className="max-h-[28rem] overflow-auto">
+          <div className={cn("overflow-auto", inlineMax(expanded, "max-h-[28rem]"))}>
             <div className={wrap ? "w-full" : "w-max min-w-full"}>
               {shown.map((h, i) => (
                 <HunkView key={i} file={file} hunk={h} index={i} wrap={wrap} />

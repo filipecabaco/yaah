@@ -1,8 +1,8 @@
 {
-  "version": 1,
-  "changeNote": "First release in the yaah pack.",
+  "version": 2,
+  "changeNote": "Adds `repo`: review another of the chat's folders (its extra folders or its project's repos).",
   "name": "diff-review",
-  "description": "Review a change in this chat's git repository, read live with git.diff (no diff text goes through you): a file list with status, +/− and viewed ticks, one file at a time (tabs when narrow), j/k files, n/p hunks, v viewed. Per file and hunk the user can ask about it or ask for a change or revert (drafted into their message box, never applied), copy, and open the file in their editor. Use it to show what you changed, a branch against main, or the staged changes, instead of pasting a diff or a --stat.",
+  "description": "Review a change in one of this chat's git repositories (its folder, or another of its folders with `repo`), read live with git.diff (no diff text goes through you): a file list with status, +/− and viewed ticks, one file at a time (tabs when narrow), j/k files, n/p hunks, v viewed. Per file and hunk the user can ask about it or ask for a change or revert (drafted into their message box, never applied), copy, and open the file in their editor. Use it to show what you changed, a branch against main, or the staged changes, instead of pasting a diff or a --stat.",
   "props": {
     "type": "object",
     "properties": {
@@ -18,6 +18,10 @@
         "type": "array",
         "description": "Only these paths, relative to the chat's folder."
       },
+      "repo": {
+        "type": "string",
+        "description": "Another of this chat's folders to read (absolute path, or ~/…): its extra folders or its project's repos. Omit for the chat's own folder. For a repo outside them, call ui_request_folders once first."
+      },
       "title": {
         "type": "string",
         "description": "What the change is, e.g. \"Refunds: this branch against main\"."
@@ -31,7 +35,8 @@
         "kind": "git.diff",
         "range": "{{range}}",
         "staged": "{{staged}}",
-        "paths": "{{paths}}"
+        "paths": "{{paths}}",
+        "repo": "{{repo}}"
       },
       "every": 15000,
       "as": "diff"
@@ -64,6 +69,14 @@
         "staged": true,
         "paths": ["src"],
         "title": "Staged changes"
+      }
+    },
+    {
+      "title": "Another of the chat's repos",
+      "props": {
+        "repo": "~/work/api",
+        "range": "HEAD~1",
+        "title": "api: the last commit"
       }
     },
     {

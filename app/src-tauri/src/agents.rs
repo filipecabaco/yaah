@@ -1092,6 +1092,10 @@ pub struct Report {
     /// Takes a client `systemPrompt` (append) on `session/new` and `session/load`.
     #[serde(default)]
     pub system_prompt: bool,
+    /// Lists its sessions (`sessionCapabilities.list`), so "Resume a session…" offers it.
+    /// `None` in reports saved before yaah asked: unknown until the agent runs again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list_sessions: Option<bool>,
     /// Unix seconds.
     pub checked_at: u64,
 }
@@ -1117,6 +1121,7 @@ impl Report {
             audio: flag("/promptCapabilities/audio"),
             additional_dirs: caps.pointer("/sessionCapabilities/additionalDirectories").is_some_and(|v| !v.is_null()),
             system_prompt: caps.pointer("/sessionCapabilities/systemPrompt").is_some_and(|v| !v.is_null()),
+            list_sessions: Some(caps.pointer("/sessionCapabilities/list").is_some_and(|v| !v.is_null())),
             checked_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
         }
     }
@@ -1143,6 +1148,20 @@ fn auth_method(m: &Value) -> Option<AuthMethod> {
     })
 }
 
+/// What yaah's ACP client offers agents in `initialize`.
+pub fn client_capabilities() -> Value {
+    json!({
+        "fs": { "readTextFile": false, "writeTextFile": false },
+        // Agents may run commands in terminals yaah shows (acp_terminals.rs).
+        "terminal": true,
+        // We can rerun the agent command with a method's args (see login.rs),
+        // so the agent may offer `terminal` login methods.
+        "auth": { "terminal": true },
+        // We show `notice` updates (MCP servers that didn't start, …) as their own card.
+        "session": { "notices": {} }
+    })
+}
+
 /// Send `initialize` the way yaah always does.
 pub async fn initialize(conn: &Connection) -> Result<Value, String> {
     tokio::time::timeout(
@@ -1151,15 +1170,7 @@ pub async fn initialize(conn: &Connection) -> Result<Value, String> {
             "initialize",
             json!({
                 "protocolVersion": acp::PROTOCOL_VERSION,
-                "clientCapabilities": {
-                    "fs": { "readTextFile": false, "writeTextFile": false },
-                    "terminal": false,
-                    // We can rerun the agent command with a method's args (see login.rs),
-                    // so the agent may offer `terminal` login methods.
-                    "auth": { "terminal": true },
-                    // We show `notice` updates (MCP servers that didn't start, …) as their own card.
-                    "session": { "notices": {} }
-                },
+                "clientCapabilities": client_capabilities(),
                 "clientInfo": { "name": "yaah", "version": env!("CARGO_PKG_VERSION") }
             }),
         ),

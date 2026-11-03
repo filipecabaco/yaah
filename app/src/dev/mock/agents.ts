@@ -23,6 +23,7 @@ const reports: Record<string, Omit<AgentReport, "checkedAt">> = {
     audio: false,
     additionalDirs: true,
     systemPrompt: true,
+    listSessions: true,
   },
   gemini: {
     name: "gemini-cli",
@@ -47,6 +48,7 @@ const reports: Record<string, Omit<AgentReport, "checkedAt">> = {
     image: true,
     audio: true,
     additionalDirs: false,
+    listSessions: false,
   },
   opencode: {
     name: "OpenCode",

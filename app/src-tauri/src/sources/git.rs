@@ -1,5 +1,7 @@
 //! Git sources: `git.diff`, `git.log`, `git.status` and `git.show`, read in
-//! the chat's folder (given by yaah from the session, never by the agent).
+//! the chat's folder (given by yaah from the session), or in another of the
+//! chat's folders named by `repo` ([`folder`]): its extra folders and its
+//! project's repos, checked by canonical path. Never a folder outside them.
 //!
 //! Read-only: git runs through [`crate::path_env::tokio_command`] (no shell),
 //! with optional locks off (so `status` never rewrites the index) and nothing
@@ -9,7 +11,7 @@
 //! `--end-of-options` / `--` anyway. Output is capped at [`MAX_TEXT`].
 
 use serde_json::{Value, json};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
@@ -69,6 +71,34 @@ pub(crate) async fn read(kind: &str, source: &Value, cwd: &Path) -> Result<Value
 }
 
 // ── validation ──────────────────────────────────────────────────────────────
+
+/// How a `repo` outside the chat's folders is refused (the agent is told how to ask for it).
+pub(crate) const NOT_A_CHAT_FOLDER: &str = "isn't one of this chat's folders";
+
+/// `path` with a leading `~` or `~/` as the home folder (`~user` is left alone).
+pub(crate) fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix('~') {
+        Some("") => crate::accounts::home(),
+        Some(rest) if rest.starts_with('/') => crate::accounts::home().join(rest.trim_start_matches('/')),
+        _ => PathBuf::from(path),
+    }
+}
+
+/// The folder a git source reads, of a chat whose folders are `roots` (its cwd
+/// first): the cwd, or the folder `repo` names when that is one of the others.
+/// `repo` is an absolute path (or `~/…`) compared by canonical path, so a
+/// symlink or `..` out of the chat's folders is refused like any other folder.
+pub(crate) fn folder(kind: &str, source: &Value, roots: &[PathBuf]) -> Result<PathBuf, String> {
+    let cwd = roots.first().ok_or_else(|| format!("{kind} reads the chat's folder: show it inside a chat"))?;
+    let Some(repo) = opt_str(source, "repo")? else { return Ok(cwd.clone()) };
+    let refused = || format!("`{repo}` {NOT_A_CHAT_FOLDER}: add it with /repos");
+    let path = expand_home(repo);
+    if !path.is_absolute() {
+        return Err(refused());
+    }
+    let wanted = std::fs::canonicalize(&path).map_err(|_| refused())?;
+    if roots.iter().any(|root| std::fs::canonicalize(root).is_ok_and(|r| r == wanted)) { Ok(wanted) } else { Err(refused()) }
+}
 
 /// A revision or range (`main`, `HEAD~3`, `main...HEAD`, `v1.2^{commit}`, `HEAD@{1}`).
 pub(crate) fn valid_rev(r: &str) -> Result<&str, String> {
@@ -723,11 +753,117 @@ mod tests {
         let s = crate::sources::Sources::with_connections_file(dir.join("connections.json"));
         let e = tauri::async_runtime::block_on(s.read(&json!({ "kind": "git.status", "cwd": dir }))).unwrap_err();
         assert!(e.contains("reads the chat's folder"), "{e}");
-        // A folder named in the source is ignored: the chat's is read.
+        // `cwd` and `dir` in the source are ignored: the chat's folder is read.
         let elsewhere = temp("elsewhere");
-        let source = json!({ "kind": "git.status", "cwd": elsewhere, "dir": elsewhere, "repo": elsewhere });
-        let v = tauri::async_runtime::block_on(s.read_in(&source, Some(&dir))).unwrap();
+        let source = json!({ "kind": "git.status", "cwd": elsewhere, "dir": elsewhere });
+        let v = tauri::async_runtime::block_on(s.read_in(&source, std::slice::from_ref(&dir))).unwrap();
         assert_eq!(v["branch"], "feature");
+        // `repo` names a folder, and one that isn't the chat's is refused.
+        let source = json!({ "kind": "git.status", "repo": elsewhere });
+        let e = tauri::async_runtime::block_on(s.read_in(&source, std::slice::from_ref(&dir))).unwrap_err();
+        assert_eq!(e, format!("`{}` isn't one of this chat's folders: add it with /repos", elsewhere.display()));
+    }
+
+    /// A second repository, on `main` with one commit, for `repo`.
+    fn other_repo() -> PathBuf {
+        let dir = temp("other");
+        sh_git(&dir, &["init", "-q"]);
+        write(&dir, "notes.md", b"one\n");
+        sh_git(&dir, &["add", "-A"]);
+        sh_git(&dir, &["commit", "-qm", "Other repo"]);
+        write(&dir, "notes.md", b"one\ntwo\n");
+        dir
+    }
+
+    fn folder_of(source: &Value, roots: &[PathBuf]) -> Result<PathBuf, String> {
+        folder("git.diff", source, roots)
+    }
+
+    #[test]
+    fn repo_picks_one_of_the_chats_folders_by_canonical_path() {
+        let (cwd, other) = (repo(), other_repo());
+        let roots = vec![cwd.clone(), other.clone()];
+        let canon = |p: &Path| std::fs::canonicalize(p).unwrap();
+        // No `repo` (or an empty one): the chat's cwd, as before.
+        assert_eq!(folder_of(&json!({}), &roots).unwrap(), cwd);
+        assert_eq!(folder_of(&json!({ "repo": " " }), &roots).unwrap(), cwd);
+        // Another of its folders, also spelt with a trailing `/`, `.` or a `..` that comes back inside.
+        let name = other.file_name().unwrap().to_str().unwrap();
+        for spelt in [other.display().to_string(), format!("{}/", other.display()), format!("{}/./", other.display())] {
+            assert_eq!(folder_of(&json!({ "repo": spelt }), &roots).unwrap(), canon(&other), "{spelt}");
+        }
+        let back_in = format!("{}/../{name}", other.display());
+        assert_eq!(folder_of(&json!({ "repo": back_in }), &roots).unwrap(), canon(&other));
+        // The cwd by name works too.
+        assert_eq!(folder_of(&json!({ "repo": cwd }), &roots).unwrap(), canon(&cwd));
+
+        let refused = |repo: &str| {
+            let e = folder_of(&json!({ "repo": repo }), &roots).unwrap_err();
+            assert_eq!(e, format!("`{repo}` isn't one of this chat's folders: add it with /repos"));
+        };
+        // Outside the folders: elsewhere, a parent, a child, a relative path, one that doesn't exist.
+        refused(&temp("outside").display().to_string());
+        refused(&other.parent().unwrap().display().to_string());
+        refused(&cwd.join("src").display().to_string());
+        refused("src");
+        refused(&format!("{}/../{name}-nope", other.display()));
+        refused("~/definitely-not-a-chat-folder-yaah");
+        assert!(folder_of(&json!({ "repo": 3 }), &roots).unwrap_err().contains("must be a string"));
+        // Outside any chat there is no folder to read.
+        assert!(folder_of(&json!({ "repo": other }), &[]).unwrap_err().contains("reads the chat's folder"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_out_of_the_chats_folders_is_refused() {
+        let (cwd, outside) = (repo(), other_repo());
+        // A link inside the chat's folder pointing at a repository outside it.
+        let link = cwd.join("escape");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let e = folder_of(&json!({ "repo": link }), std::slice::from_ref(&cwd)).unwrap_err();
+        assert!(e.contains("isn't one of this chat's folders"), "{e}");
+        // A chat folder that is itself a link is that folder, whichever way it's named.
+        let alias = temp("alias").join("repo");
+        std::os::unix::fs::symlink(&outside, &alias).unwrap();
+        let roots = vec![cwd.clone(), alias.clone()];
+        assert_eq!(folder_of(&json!({ "repo": alias }), &roots).unwrap(), std::fs::canonicalize(&outside).unwrap());
+        assert_eq!(folder_of(&json!({ "repo": outside }), &roots).unwrap(), std::fs::canonicalize(&outside).unwrap());
+    }
+
+    #[test]
+    fn git_sources_read_the_repo_they_name() {
+        let (cwd, other) = (repo(), other_repo());
+        let s = crate::sources::Sources::with_connections_file(cwd.join("connections.json"));
+        let roots = vec![cwd.clone(), other.clone()];
+        let read = |source: Value| tauri::async_runtime::block_on(s.read_in(&source, &roots));
+        // The same read with and without `repo` are different repositories (and different cache entries).
+        assert_eq!(read(json!({ "kind": "git.status" })).unwrap()["branch"], "feature");
+        assert_eq!(read(json!({ "kind": "git.status", "repo": other })).unwrap()["branch"], "main");
+        let diff = read(json!({ "kind": "git.diff", "repo": other })).unwrap();
+        assert!(diff["text"].as_str().unwrap().contains("+two"), "{diff}");
+        assert_eq!(diff["files"][0]["path"], "notes.md");
+        let log = read(json!({ "kind": "git.log", "repo": other })).unwrap();
+        assert_eq!(log[0]["subject"], "Other repo");
+        let show = read(json!({ "kind": "git.show", "rev": "HEAD", "path": "notes.md", "repo": other })).unwrap();
+        assert_eq!(show["text"], "one\n");
+        // `paths` are relative to the repo read, and still can't leave it.
+        assert!(read(json!({ "kind": "git.diff", "repo": other, "paths": ["../x"] })).unwrap_err().contains("can't use .."));
+    }
+
+    #[test]
+    fn diff_review_reads_the_repo_prop() {
+        // The yaah pack's diff-review passes its `repo` prop through to git.diff.
+        let component: Value = serde_json::from_str(include_str!("../../components/diff-review.json")).unwrap();
+        assert_eq!(component["tree"]["props"]["source"]["repo"], "{{repo}}");
+        assert!(component["props"]["properties"]["repo"]["description"].as_str().unwrap().contains("ui_request_folders"));
+        let (cwd, other) = (repo(), other_repo());
+        let s = crate::sources::Sources::with_connections_file(cwd.join("connections.json"));
+        // What the bound source reads with `repo` set, and refused outside the chat's folders.
+        let source = json!({ "kind": "git.diff", "range": null, "staged": null, "paths": null, "repo": other });
+        let v = tauri::async_runtime::block_on(s.read_in(&source, &[cwd.clone(), other.clone()])).unwrap();
+        assert_eq!(v["files"][0]["path"], "notes.md");
+        let e = tauri::async_runtime::block_on(s.read_in(&source, std::slice::from_ref(&cwd))).unwrap_err();
+        assert!(e.contains("add it with /repos"), "{e}");
     }
 
     #[test]

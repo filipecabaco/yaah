@@ -68,7 +68,11 @@ describe("adding repositories to a quick chat", () => {
     await user.click(folders());
     let menu = await screen.findByRole("menu");
     expect(within(menu).getByText("This chat works in")).toBeInTheDocument();
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    // Its one folder, then the actions on it: open it in a terminal, or add more.
+    const items = within(menu).getAllByRole("menuitem");
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveAccessibleName(/^3f9c2a7e41d0\s*~\/\.yaah\/scratch\/3f9c2a7e41d0/);
+    expect(items.slice(1).map((i) => i.textContent?.trim())).toEqual(["Open in terminal", "Add repositories…"]);
     await user.click(within(menu).getByRole("menuitem", { name: "Add repositories…" }));
     await pickRepo(user, await screen.findByRole("dialog", { name: "Add repositories to this chat" }), "docs");
     await within(log).findByRole("status", { name: "Repositories added" });

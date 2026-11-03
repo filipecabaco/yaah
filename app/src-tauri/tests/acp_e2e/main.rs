@@ -16,7 +16,7 @@ use yaah_lib::agent_routes;
 use yaah_lib::agents::{self, Draft, Store};
 use yaah_lib::login::Logins;
 use yaah_lib::projects::{Project, Status};
-use yaah_lib::session::{ChatTarget, Emit, Entry, Hub, Transcript, random_token};
+use yaah_lib::session::{AgentSessions, ChatTarget, Emit, Entry, Hub, SessionInfo, Transcript, random_token};
 
 const ACCOUNT: &str = "scripted";
 const PATIENCE: Duration = Duration::from_secs(20);
@@ -71,6 +71,16 @@ fn main() {
             "claude_on_openrouter_gets_providers_set_and_the_key_never_reaches_logs",
             claude_on_openrouter_gets_providers_set_and_the_key_never_reaches_logs,
         ),
+        ("resume_lists_an_agents_sessions_page_by_page", resume_lists_an_agents_sessions_page_by_page),
+        ("resume_records_the_replay_and_the_next_prompt_continues_it", resume_records_the_replay_and_the_next_prompt_continues_it),
+        ("resume_files_a_session_under_the_project_that_holds_its_folder", resume_files_a_session_under_the_project_that_holds_its_folder),
+        (
+            "resume_opens_the_chat_yaah_already_has_and_leaves_nothing_on_failure",
+            resume_opens_the_chat_yaah_already_has_and_leaves_nothing_on_failure,
+        ),
+        ("resume_refuses_agents_that_cant_list_or_reopen", resume_refuses_agents_that_cant_list_or_reopen),
+        ("resume_lists_each_profiles_own_sessions_on_its_own_agent", resume_lists_each_profiles_own_sessions_on_its_own_agent),
+        ("agents_run_commands_in_yaahs_terminals", agents_run_commands_in_yaahs_terminals),
     ];
     let filters: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let chosen: Vec<_> = tests.iter().filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))).collect();
@@ -129,6 +139,36 @@ impl Fixture {
             draft.env.insert((*k).into(), (*v).into());
         }
         self.profiles.save(&draft).unwrap().0.id
+    }
+
+    /// A Claude profile with a config dir of its own (as `claude-personal` and `claude-work`
+    /// have) running the scripted agent, whose sessions started outside yaah are `sessions`.
+    fn add_claude_profile(&self, label: &str, sessions: &Value, env: &[(&str, &str)]) -> String {
+        let config = self.dir.join(format!("config-{}", random_token()));
+        std::fs::create_dir_all(&config).unwrap();
+        std::fs::write(config.join("sessions.json"), sessions.to_string()).unwrap();
+        let exe = std::env::current_exe().unwrap();
+        let mut draft = Draft {
+            label: label.into(),
+            preset: "claude".into(),
+            command_line: agents::join_args([exe.to_string_lossy()]),
+            config_dir: Some(config.to_string_lossy().into_owned()),
+            ..Draft::default()
+        };
+        draft.env.insert(agent::ENV.into(), "1".into());
+        draft.env.insert("YAAH_AGENT_LOG".into(), self.dir.join("agent.log").to_string_lossy().into_owned());
+        for (k, v) in env {
+            draft.env.insert((*k).into(), (*v).into());
+        }
+        self.profiles.save(&draft).unwrap().0.id
+    }
+
+    fn list(&self, account: &str, cwd: Option<&str>, cursor: Option<&str>) -> Result<AgentSessions, String> {
+        tauri::async_runtime::block_on(self.hub.list_agent_sessions(account, cwd, cursor))
+    }
+
+    fn import(&self, account: &str, id: &str, cwd: &str, title: Option<&str>, projects: &[Project]) -> Result<SessionInfo, String> {
+        tauri::async_runtime::block_on(self.hub.import_agent_session(account, id, cwd, title, projects))
     }
 
     /// As in the app: a UI server for agents that reach HTTP MCP servers (nothing
@@ -274,7 +314,7 @@ fn initialize_advertises_notices_and_a_turn_streams() {
     assert_eq!(init["protocolVersion"], 1);
     assert_eq!(init["clientCapabilities"]["session"]["notices"], json!({}), "yaah advertises notices");
     assert_eq!(init["clientCapabilities"]["auth"]["terminal"], true);
-    assert_eq!(init["clientCapabilities"]["terminal"], false);
+    assert_eq!(init["clientCapabilities"]["terminal"], true, "agents may run commands in yaah's terminals");
     let report = f.profiles.find(ACCOUNT).unwrap().report.expect("initialize is recorded on the profile");
     assert!(report.compatible && report.load_session && report.embedded_context && report.additional_dirs && !report.mcp_http);
 
@@ -1165,4 +1205,297 @@ fn a_new_chat_reports_how_far_it_got() {
     let before = f.events.lock().unwrap().iter().filter(|(n, _)| n == "session-starting").count();
     tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd), ACCOUNT, &[], None)).unwrap();
     assert_eq!(f.events.lock().unwrap().iter().filter(|(n, _)| n == "session-starting").count(), before, "none without a start id");
+}
+
+// ── Resume a session… (sessions started outside yaah) ───────────────────────
+
+/// Three sessions "started in the CLI", in folders that exist: two in `ws/api`, one in `ws/web`.
+fn outside_sessions(f: &Fixture) -> (Vec<String>, Value) {
+    let dirs: Vec<String> = ["api", "web"]
+        .iter()
+        .map(|d| {
+            let dir = f.dir.join("ws").join(d);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir.to_string_lossy().into_owned()
+        })
+        .collect();
+    let sessions = json!([
+        { "sessionId": "cli-1", "cwd": dirs[0], "title": "Fix the invoice rounding", "updatedAt": "2026-11-03T10:00:00Z" },
+        { "sessionId": "cli-2", "cwd": dirs[1], "title": "Billing page layout", "updatedAt": "2026-11-02T09:00:00Z" },
+        { "sessionId": "cli-3", "cwd": dirs[0], "title": null, "updatedAt": "2026-10-30T08:00:00+02:00" },
+    ]);
+    (dirs, sessions)
+}
+
+fn ids(page: &AgentSessions) -> Vec<&str> {
+    page.sessions.iter().map(|s| s.session_id.as_str()).collect()
+}
+
+fn kinds(t: &Transcript) -> Vec<&'static str> {
+    t.entries
+        .iter()
+        .map(|e| match e {
+            Entry::User { .. } => "user",
+            Entry::Thought { .. } => "thought",
+            Entry::Agent { .. } => "agent",
+            Entry::Tool { .. } => "tool",
+            Entry::Plan { .. } => "plan",
+            _ => "other",
+        })
+        .collect()
+}
+
+fn resume_lists_an_agents_sessions_page_by_page() {
+    let f = Fixture::new(&[]);
+    let (dirs, sessions) = outside_sessions(&f);
+    let personal = f.add_claude_profile("Claude personal", &sessions, &[]);
+
+    let first = f.list(&personal, None, None).unwrap();
+    assert_eq!(ids(&first), ["cli-1", "cli-2"], "the agent's order, one page");
+    assert_eq!(first.next_cursor.as_deref(), Some("page:2"));
+    let s = &first.sessions[0];
+    assert_eq!((s.title.as_deref(), s.cwd.as_str(), s.updated_at), (Some("Fix the invoice rounding"), dirs[0].as_str(), Some(1_793_700_000)));
+    assert_eq!(s.already_in_yaah, None);
+
+    let rest = f.list(&personal, None, first.next_cursor.as_deref()).unwrap();
+    assert_eq!((ids(&rest), rest.next_cursor.as_deref()), (vec!["cli-3"], None));
+    assert_eq!((rest.sessions[0].title.as_deref(), rest.sessions[0].updated_at), (None, Some(1_793_340_000)), "the offset is applied");
+    assert_eq!(f.requests("session/list")[1]["cursor"], "page:2", "the cursor goes back as the agent gave it");
+
+    let api = f.list(&personal, Some(&dirs[0]), None).unwrap();
+    assert_eq!(ids(&api), ["cli-1", "cli-3"]);
+    assert_eq!(f.requests("session/list")[2]["cwd"], json!(dirs[0]));
+    let err = f.list(&personal, Some("relative/dir"), None).unwrap_err();
+    assert!(err.contains("absolute"), "{err}");
+    assert_eq!(f.requests("session/list").len(), 3, "a relative folder never reaches the agent");
+
+    // Once one is a chat, the list says which.
+    f.import(&personal, "cli-2", &dirs[1], Some("Billing page layout"), &[]).unwrap();
+    let marked = f.list(&personal, None, None).unwrap();
+    let in_yaah: Vec<Option<&str>> = marked.sessions.iter().map(|s| s.already_in_yaah.as_deref()).collect();
+    assert_eq!(in_yaah, [None, Some("cli-2")]);
+    let wire = serde_json::to_value(&marked).unwrap();
+    assert_eq!(wire["sessions"][1]["alreadyInYaah"], "cli-2");
+    assert!(wire["sessions"][0].get("alreadyInYaah").is_none());
+    assert_eq!(wire["nextCursor"], "page:2");
+}
+
+fn resume_records_the_replay_and_the_next_prompt_continues_it() {
+    let mut f = Fixture::new(&[]);
+    let (dirs, sessions) = outside_sessions(&f);
+    let personal = f.add_claude_profile("Claude personal", &sessions, &[]);
+    let info = f.import(&personal, "cli-1", &dirs[0], Some("  Fix the invoice\nrounding "), &[]).unwrap();
+    assert_eq!(
+        (info.session_id.as_str(), info.title.as_str(), info.cwd.as_str(), info.account_id.as_str()),
+        ("cli-1", "Fix the invoice rounding", dirs[0].as_str(), personal.as_str())
+    );
+    assert_eq!((info.project_id, info.additional_dirs.len(), info.running), (None, 0, false), "a quick chat in the session's folder");
+
+    let load = f.requests("session/load");
+    assert_eq!(load.len(), 1);
+    assert_eq!((load[0]["sessionId"].as_str(), load[0]["cwd"].as_str()), (Some("cli-1"), Some(dirs[0].as_str())));
+
+    // The replay is the transcript: messages, a thought, the tool call, the plans of each turn.
+    let t = f.hub.transcript("cli-1").unwrap();
+    assert_eq!(kinds(&t), ["user", "thought", "agent", "tool", "plan", "user", "plan", "agent"]);
+    assert!(matches!(&t.entries[0], Entry::User { text, .. } if text == "Fix the invoice rounding\n\nIt's in notes.md"), "one message's blocks join");
+    assert!(matches!(&t.entries[2], Entry::Agent { text, .. } if text == "Found it."));
+    let Entry::Tool { title, status, content, .. } = &t.entries[3] else { panic!() };
+    assert_eq!((title.as_str(), status.as_deref(), &content[0]["content"]["text"]), ("Read notes.md", Some("completed"), &json!("the notes")));
+    assert!(matches!(&t.entries[4], Entry::Plan { entries } if entries[0]["status"] == "completed"), "a plan update replaces its turn's plan");
+    assert!(matches!(&t.entries[6], Entry::Plan { entries } if entries[0]["content"] == "run tests"), "the next turn's plan is its own");
+    assert_eq!(t.info.commands, [json!({ "name": "review", "description": "Review" })]);
+
+    // The UI hears about the chat once it's in, whole.
+    let infos: Vec<Value> =
+        f.events.lock().unwrap().iter().filter(|(n, v)| n == "session-info" && v["sessionId"] == "cli-1").map(|(_, v)| v.clone()).collect();
+    assert_eq!(infos.len(), 1, "{infos:?}");
+    assert_eq!(infos[0]["commands"][0]["name"], "review");
+
+    // The next prompt goes to the same ACP session, without loading it again.
+    let t = f.turn("cli-1", "echo carry on");
+    assert_eq!(last_agent_text(&t), "echo: echo carry on");
+    assert_eq!(f.requests("session/prompt").pop().unwrap()["sessionId"], "cli-1");
+    assert_eq!(f.requests("session/load").len(), 1);
+    assert_eq!(t.entries.len(), 10);
+
+    // Without a title from the list, the first message names the chat.
+    let untitled = f.import(&personal, "cli-3", &dirs[0], None, &[]).unwrap();
+    assert_eq!(untitled.title, "hello It's in notes.md");
+
+    // Saved: after a restart it's there with its history, and reattaches as any chat does.
+    f.restart();
+    let t = f.hub.transcript("cli-1").unwrap();
+    assert_eq!((t.entries.len(), t.info.title.as_str()), (10, "Fix the invoice rounding"));
+    let t = f.turn("cli-1", "echo after restart");
+    assert_eq!(t.entries.len(), 12, "the reattach's replay isn't recorded again");
+    assert_eq!(f.requests("session/load").len(), 3);
+}
+
+fn resume_files_a_session_under_the_project_that_holds_its_folder() {
+    let f = Fixture::new(&[]);
+    let (dirs, sessions) = outside_sessions(&f);
+    let personal = f.add_claude_profile("Claude personal", &sessions, &[]);
+    let (ws, ctx) = (f.dir.join("ws"), f.dir.join("ctx"));
+    std::fs::create_dir_all(&ctx).unwrap();
+    std::fs::write(ctx.join("project.md"), "# Shop\n\nRefunds must be exact.\n").unwrap();
+    let project = Project {
+        id: "p1".into(),
+        name: "Shop".into(),
+        dirs: vec![ws.to_string_lossy().into()],
+        status: Status::Ongoing,
+        created_at: 0,
+        context_dir: ctx.to_string_lossy().into(),
+        link: None,
+        agent_id: None,
+    };
+    let info = f.import(&personal, "cli-2", &dirs[1], None, std::slice::from_ref(&project)).unwrap();
+    assert_eq!((info.project_id.as_deref(), info.cwd.as_str()), (Some("p1"), dirs[1].as_str()), "it keeps the session's folder");
+    assert_eq!(info.additional_dirs, [ws.to_string_lossy(), ctx.to_string_lossy()], "and gets the project's");
+    assert_eq!(f.requests("session/load")[0]["additionalDirectories"], json!([ws, ctx]));
+
+    f.turn("cli-2", "echo hi");
+    let prompt = f.requests("session/prompt").pop().unwrap();
+    assert_eq!(prompt["prompt"][0]["resource"]["text"], "# Shop\n\nRefunds must be exact.\n", "the brief goes with the next prompt");
+}
+
+fn resume_opens_the_chat_yaah_already_has_and_leaves_nothing_on_failure() {
+    let f = Fixture::new(&[]);
+    let (dirs, mut sessions) = outside_sessions(&f);
+    sessions.as_array_mut().unwrap().push(json!({ "sessionId": "cli-gone", "cwd": dirs[0], "title": "Lost", "broken": true }));
+    let personal = f.add_claude_profile("Claude personal", &sessions, &[]);
+    f.import(&personal, "cli-1", &dirs[0], Some("Fix the invoice rounding"), &[]).unwrap();
+    f.turn("cli-1", "echo more");
+    let before = f.hub.transcript("cli-1").unwrap().entries.len();
+
+    // Again (another pane, a second Enter): the same chat, untouched, nothing sent.
+    let again = f.import(&personal, "cli-1", "/not/even/there", None, &[]).unwrap();
+    assert_eq!((again.session_id.as_str(), again.title.as_str()), ("cli-1", "Fix the invoice rounding"));
+    assert_eq!(f.hub.transcript("cli-1").unwrap().entries.len(), before);
+    assert_eq!(f.requests("session/load").len(), 1);
+    assert_eq!(f.hub.list_sessions().len(), 1);
+
+    // A chat yaah started is the agent's session too: it opens, not a copy.
+    let sid = f.chat();
+    assert_eq!(f.import(ACCOUNT, &sid, &dirs[0], None, &[]).unwrap().session_id, sid);
+    assert_eq!(f.requests("session/load").len(), 1);
+
+    // One the agent can't reopen leaves no chat, no file and no UI behind.
+    let err = f.import(&personal, "cli-gone", &dirs[0], Some("Lost"), &[]).unwrap_err();
+    assert!(err.contains("Couldn't reopen this session"), "{err}");
+    assert!(f.hub.transcript("cli-gone").is_err());
+    f.hub.flush();
+    assert!(!f.dir.join("sessions/cli-gone.json").exists());
+    assert!(!f.events.lock().unwrap().iter().any(|(n, v)| n == "session-info" && v["sessionId"] == "cli-gone"));
+
+    // A folder that's gone is said plainly, before the agent is asked.
+    let err = f.import(&personal, "cli-2", &f.dir.join("gone").to_string_lossy(), None, &[]).unwrap_err();
+    assert!(err.contains("isn't there any more"), "{err}");
+    assert_eq!(f.requests("session/load").len(), 2);
+}
+
+fn resume_refuses_agents_that_cant_list_or_reopen() {
+    let f = Fixture::new(&[]);
+    let (dirs, sessions) = outside_sessions(&f);
+    let no_list = f.add_claude_profile("No list", &sessions, &[("YAAH_AGENT_NO_LIST", "1")]);
+    let err = f.list(&no_list, None, None).unwrap_err();
+    assert_eq!(err, "No list can't list its sessions.");
+    assert_eq!(f.profiles.find(&no_list).unwrap().report.unwrap().list_sessions, Some(false), "recorded for the picker");
+    assert!(f.requests("session/list").is_empty(), "never asked");
+
+    let no_load = f.add_claude_profile("No load", &sessions, &[("YAAH_AGENT_NO_LOAD", "1")]);
+    assert_eq!(f.profiles.find(&no_load).map(|p| p.report.is_none()), Some(true), "unknown until its agent runs");
+    assert_eq!(ids(&f.list(&no_load, None, None).unwrap()), ["cli-1", "cli-2"]);
+    assert_eq!(f.profiles.find(&no_load).unwrap().report.unwrap().list_sessions, Some(true));
+    let err = f.import(&no_load, "cli-1", &dirs[0], None, &[]).unwrap_err();
+    assert!(err.contains("can't reopen its sessions"), "{err}");
+    assert!(f.hub.list_sessions().is_empty());
+    assert_eq!(f.requests("session/load").len(), 0, "no session/load expected");
+}
+
+fn resume_lists_each_profiles_own_sessions_on_its_own_agent() {
+    let f = Fixture::new(&[]);
+    let (dirs, sessions) = outside_sessions(&f);
+    let personal = f.add_claude_profile("Claude personal", &sessions, &[("YAAH_AGENT_PAGE", "10")]);
+    let work_sessions = json!([{ "sessionId": "work-1", "cwd": dirs[1], "title": "Quarterly report", "updatedAt": "2026-11-01T12:00:00Z" }]);
+    let work = f.add_claude_profile("Claude work", &work_sessions, &[]);
+
+    assert_eq!(ids(&f.list(&personal, None, None).unwrap()), ["cli-1", "cli-2", "cli-3"]);
+    assert_eq!(ids(&f.list(&work, None, None).unwrap()), ["work-1"]);
+    // Each list came from that profile's own agent process (its own CLAUDE_CONFIG_DIR).
+    let pid_of = |method: &str| -> Vec<u64> { f.received().into_iter().filter(|(_, m)| m["method"] == method).map(|(pid, _)| pid).collect() };
+    let lists = pid_of("session/list");
+    assert_eq!(lists.len(), 2);
+    let (personal_pid, work_pid) = (lists[0], lists[1]);
+    assert_ne!(personal_pid, work_pid);
+
+    // Imported from the work profile, it loads and continues on the work profile's agent.
+    let info = f.import(&work, "work-1", &dirs[1], Some("Quarterly report"), &[]).unwrap();
+    assert_eq!(info.account_id, work);
+    let t = f.turn("work-1", "echo from work");
+    assert_eq!(last_agent_text(&t), "echo: echo from work");
+    assert_eq!(pid_of("session/load"), [work_pid]);
+    assert_eq!(pid_of("session/prompt"), [work_pid]);
+    // The personal profile's sessions are untouched.
+    assert!(f.list(&personal, None, None).unwrap().sessions.iter().all(|s| s.already_in_yaah.is_none()));
+}
+
+/// ACP client terminals: `terminal/create` runs the command in a PTY in the chat's folder, its
+/// output comes back as text within `outputByteLimit`, `wait_for_exit` waits, `kill` stops it
+/// and keeps it readable, `release` frees it and keeps its bytes with the tool call; a folder
+/// outside the chat's, or a chat the agent didn't open, is refused.
+fn agents_run_commands_in_yaahs_terminals() {
+    use base64::Engine;
+    let f = Fixture::new(&[]);
+    let sid = f.chat();
+    let t = f.turn(&sid, "terminal");
+    let line = t
+        .entries
+        .iter()
+        .find_map(|e| match e {
+            Entry::Agent { text, .. } => text.strip_prefix("terminal: "),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no report: {:#?}", t.entries));
+    let r: Value = serde_json::from_str(line).unwrap();
+    assert_eq!(r["exit"], json!({ "exitCode": 4, "signal": null }), "{r:#}");
+    assert_eq!(r["output"]["output"], "o world\n", "escapes removed, the start cut to 8 bytes: {r:#}");
+    assert_eq!(r["output"]["truncated"], true);
+    assert_eq!(r["output"]["exitStatus"]["exitCode"], 4);
+    assert_eq!(r["released"], json!({}));
+    assert_eq!(r["afterRelease"], -32602, "a released terminal is gone");
+    assert_eq!(r["killed"], json!({}));
+    assert!(r["stopped"]["signal"].is_string(), "killed by a signal: {r:#}");
+    assert_eq!(r["stillReadable"], true, "killed, not released: its output is still there");
+    assert!(r["outside"].as_str().unwrap().contains("isn't one of this chat's folders"), "{r:#}");
+    assert_eq!(r["otherChat"], "unknown session");
+
+    // The tool call shows the terminal, and keeps its bytes (base64) after the agent sent the content again.
+    let Some(Entry::Tool { content, status, .. }) =
+        t.entries.iter().find(|e| matches!(e, Entry::Tool { tool_call_id, .. } if tool_call_id == "run1"))
+    else {
+        panic!("no tool call: {:#?}", t.entries)
+    };
+    assert_eq!(status.as_deref(), Some("completed"));
+    let item = &content[0];
+    assert_eq!(item["terminalId"], r["id"]);
+    let kept = base64::engine::general_purpose::STANDARD.decode(item["keptOutput"].as_str().expect("kept output")).unwrap();
+    let kept = String::from_utf8_lossy(&kept);
+    assert!(kept.contains("hello \u{1b}[1mworld"), "the raw bytes, escapes and all, for the replay: {kept:?}");
+    assert_eq!(item["exitStatus"]["exitCode"], 4);
+    assert_eq!(f.hub.terminals().len(), 0, "both terminals were released");
+
+    // A command still running when its agent goes is stopped with it.
+    let id = f.hub.terminals().open(
+        yaah_lib::terminals::Spec::command(f.dir.canonicalize().unwrap(), "sleep", &["30".into()], vec![], 80, 24).unwrap(),
+        yaah_lib::terminals::Owner::User,
+        None,
+    );
+    let pid = id.unwrap().pid.unwrap();
+    f.hub.terminals().close_all();
+    let gone = Instant::now();
+    while std::process::Command::new("kill").args(["-0", &pid.to_string()]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success()) {
+        assert!(gone.elapsed() < PATIENCE, "the shell outlived close_all");
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

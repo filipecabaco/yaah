@@ -14,6 +14,7 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
+  History,
   Keyboard,
   LayoutPanelTop,
   Loader2,
@@ -24,12 +25,14 @@ import {
   Plus,
   Settings2,
   Square,
+  SquareTerminal,
   TextCursorInput,
   Bot,
   Trash2,
 } from "lucide-react";
 import { focusComposer } from "@/components/chat-context";
 import { focusPaneDom } from "@/lib/pane-focus";
+import { terminalActions, type Terminals } from "@/components/terminal/palette-actions";
 import { openAddRepos } from "@/lib/app-events";
 import { ErrorText } from "@/components/error-text";
 import { connectionReady } from "@/components/settings/form-state";
@@ -38,12 +41,14 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
+import { ResumeSession } from "@/components/resume-session";
 import type { Yaah } from "@/hooks/use-yaah";
 import type { SettingsTab } from "@/components/agent-setup";
 import {
   agentDetail,
   api,
   canChat,
+  mayListSessions,
   needsProviderFix,
   PROJECT_STATUSES,
   type AgentProfile,
@@ -64,6 +69,8 @@ export type PalettePage =
   /** The agent a chat's next message goes to (`switch_agent`). */
   | { kind: "chatAgent"; sessionId: string }
   | { kind: "quickChatWith" }
+  /** "Resume a session…": an agent's own sessions, brought in as chats (resume-session.tsx). */
+  | { kind: "resume" }
   | { kind: "move"; chat: SessionInfo }
   | { kind: "promote"; chat: SessionInfo }
   | { kind: "connections" }
@@ -87,6 +94,8 @@ type Props = {
   // Settings, optionally on one tab.
   onSettings: (tab?: SettingsTab) => void;
   onHelp: () => void;
+  /** Terminal panes and "Open in terminal" (components/terminal/use-terminals.ts). */
+  terminals?: Terminals;
 };
 
 // cmdk filters the small pages on `keywords`; `value` is only an id. The root page ranks itself.
@@ -153,6 +162,7 @@ function PaletteBody({
   onIntegrations,
   onSettings,
   onHelp,
+  terminals,
 }: Props & { page: PalettePage; close: (then?: () => void) => void }) {
   const [search, setSearch] = useState("");
   // The list follows the typing a beat behind, so keystrokes never wait on it.
@@ -339,6 +349,15 @@ function PaletteBody({
         <Item id="add-agent" icon={<Plus />} label="Add agent…" onSelect={() => close(onAddAgent)} />
       </CommandGroup>
     );
+  } else if (page.kind === "resume") {
+    // Its own search, steps and empty states; opens the chat in the focused pane.
+    body = (
+      <ResumeSession
+        agents={y.agents}
+        onBack={() => onPage({ kind: "root" })}
+        onResume={(a, s) => y.resumeSession(a, s).then(() => close(focusComposer))}
+      />
+    );
   } else if (page.kind === "quickChatWith") {
     placeholder = "New quick chat with…";
     body = (
@@ -385,6 +404,13 @@ function PaletteBody({
         label: "New quick chat with…",
         detail: "pick the agent",
         onSelect: () => onPage({ kind: "quickChatWith" }),
+      },
+      y.agents.some(mayListSessions) && {
+        id: "resume-session",
+        icon: <History />,
+        label: "Resume a session…",
+        detail: "started in an agent's CLI",
+        onSelect: () => onPage({ kind: "resume" }),
       },
       ready && {
         id: "folder-chat",
@@ -441,6 +467,7 @@ function PaletteBody({
         detail: project.status,
         onSelect: () => onPage({ kind: "status", project }),
       },
+      ...(terminals ? terminalActions(terminals, <SquareTerminal />, close) : []),
       // Split panes: the keyboard lands in the pane that opens or takes over.
       {
         id: "split-right",
@@ -640,7 +667,7 @@ function PaletteBody({
     firstId = groups.map((g) => shownGroups[g.id][0]?.id).find(Boolean) ?? "";
   }
 
-  if (page.kind === "rename" || page.kind === "promote" || page.kind === "addConnection") return body;
+  if (page.kind === "rename" || page.kind === "promote" || page.kind === "addConnection" || page.kind === "resume") return body;
   const root = page.kind === "root";
   // cmdk doesn't filter the root page, so it doesn't move the selection either: each search starts on its best match, at the top.
   const pick = root ? { value: active?.query === query ? active.id : firstId, onValueChange: (id: string) => setActive({ id, query }) } : {};

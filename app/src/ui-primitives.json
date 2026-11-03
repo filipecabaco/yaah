@@ -950,7 +950,7 @@
     "libraries": "Components from an installed component library are referenced by qualified name, library/name: { type: \"acme/pr-card\", props: { … } }. They are read-only; save your own variant under an unqualified name."
   },
   "sources": {
-    "about": "Data the app reads itself. Use with a `live` node (and source_read to look first). GitHub, GitLab and Linear sources use the connections the user made in Settings → Integrations (read-only; you never see a token). Git sources read the folder of the chat the UI is in (yaah supplies it; never pass a path), read-only, with refs and paths checked and output capped. Database sources take a `connection` name from ui_catalog `connections`; credentials never reach you.",
+    "about": "Data the app reads itself. Use with a `live` node (and source_read to look first). GitHub, GitLab and Linear sources use the connections the user made in Settings → Integrations (read-only; you never see a token). Git sources read the folder of the chat the UI is in (yaah supplies it), or another of the chat's folders named by `repo` (its extra folders, its project's repos; anything else is refused, so call ui_request_folders first for a repo outside them), read-only, with refs and paths checked and output capped. Database sources take a `connection` name from ui_catalog `connections`; credentials never reach you.",
     "kinds": {
       "system": {
         "params": {},
@@ -1075,15 +1075,17 @@
       },
       "git.diff": {
         "params": {
+          "repo": "optional: another of this chat's folders (absolute path or ~/…); default the chat's own folder",
           "range": "optional, e.g. \"main...HEAD\" or \"HEAD~3\" (default: the working tree, staged and not, against HEAD)",
           "staged": "true for the staged changes only (index against HEAD)",
-          "paths": "optional [paths] relative to the chat's folder",
+          "paths": "optional [paths] relative to the repository read",
           "context": "lines of context, default 3"
         },
         "returns": "{ range, staged, text (unified diff, for `patch`/`diffreview`), files: [{ path, oldPath?, status: added|modified|deleted|renamed, additions, deletions, binary }], additions, deletions, truncated (text cut at 4 MB; files stay whole) }"
       },
       "git.log": {
         "params": {
+          "repo": "optional: another of this chat's folders (absolute path or ~/…); default the chat's own folder",
           "range": "optional, e.g. \"main..HEAD\"",
           "limit": "default 50, max 500",
           "paths": "optional [paths]"
@@ -1091,11 +1093,14 @@
         "returns": "[{ sha, short, author, email, date (ISO 8601), subject, body }] — newest first; [] before the first commit"
       },
       "git.status": {
-        "params": {},
+        "params": {
+          "repo": "optional: another of this chat's folders (absolute path or ~/…); default the chat's own folder"
+        },
         "returns": "{ branch (null when detached), detached, oid, upstream, ahead, behind, clean, files: [{ path, oldPath?, index, worktree }] } — index/worktree: modified|added|deleted|renamed|copied|typechange|unmerged|untracked, or null when unchanged there"
       },
       "git.show": {
         "params": {
+          "repo": "optional: another of this chat's folders (absolute path or ~/…); default the chat's own folder",
           "rev": "a commit, tag or branch (required)",
           "path": "optional: the file at that revision instead of the commit"
         },

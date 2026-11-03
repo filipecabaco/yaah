@@ -1,12 +1,13 @@
 // Choosing the agent a chat or project starts with: a select (forms, the
 // project page) and a "… with…" menu (split buttons beside New chat buttons).
 import type { ReactElement, ReactNode } from "react";
-import { Bot } from "lucide-react";
+import { Bot, History } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -63,6 +64,7 @@ export function AgentMenu({
   currentHint,
   onPick,
   align = "start",
+  extra,
   children,
 }: {
   agents: AgentProfile[];
@@ -71,6 +73,8 @@ export function AgentMenu({
   currentHint?: ReactNode;
   onPick: (id: string) => void;
   align?: "start" | "end";
+  /** One more entry below the agents ("Resume a session…" on the home screen). */
+  extra?: { label: string; onSelect: () => void };
   children: ReactElement;
 }) {
   return (
@@ -86,6 +90,15 @@ export function AgentMenu({
             {a.id === current && currentHint && <DropdownMenuShortcut>{currentHint}</DropdownMenuShortcut>}
           </DropdownMenuItem>
         ))}
+        {extra && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={extra.onSelect}>
+              <History />
+              {extra.label}
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

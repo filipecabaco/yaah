@@ -47,7 +47,7 @@ const DEFAULT_ROW_LIMIT: u64 = 1_000;
 const MAX_ROW_LIMIT: u64 = 10_000;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 
-mod git;
+pub(crate) mod git;
 
 /// A reading shared by concurrent callers: the first runs it, the rest wait and
 /// reuse it while it is fresh (when it was taken, for how long, the answer).
@@ -220,16 +220,17 @@ impl Sources {
 
     /// Read a source outside any chat (git sources need one). Errors are written for the agent or user to act on.
     pub async fn read(&self, source: &Value) -> Result<Value, String> {
-        self.read_in(source, None).await
+        self.read_in(source, &[]).await
     }
 
-    /// Read a source for a chat whose folder is `cwd`: git sources read that
-    /// folder (yaah supplies it from the session; a source never names one).
-    pub async fn read_in(&self, source: &Value, cwd: Option<&Path>) -> Result<Value, String> {
+    /// Read a source for a chat whose folders are `roots` (its cwd first, from
+    /// the session): git sources read the cwd, or the one of those folders their
+    /// `repo` names ([`git::folder`]); any other folder is refused.
+    pub async fn read_in(&self, source: &Value, roots: &[PathBuf]) -> Result<Value, String> {
         let kind = source["kind"].as_str().ok_or("a source needs a `kind`")?;
         if git::is_git(kind) {
-            let cwd = cwd.ok_or_else(|| format!("{kind} reads the chat's folder: show it inside a chat"))?;
-            return self.git_shared(kind, source, cwd).await;
+            let folder = git::folder(kind, source, roots)?;
+            return self.git_shared(kind, source, &folder).await;
         }
         match kind {
             "system" => {
