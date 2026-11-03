@@ -3,13 +3,19 @@
 //! Served over MCP's streamable HTTP transport (JSON responses only) on
 //! 127.0.0.1. Each chat gets its own URL, `/mcp/<token>`, passed to the agent
 //! in `session/new`; the unguessable token both routes renders to the right
-//! chat and keeps other local processes out.
+//! chat and keeps other local processes out. A deleted chat's tokens stop
+//! working ([`UiHost::revoke`], called by the hub that owns the chat).
+//!
+//! Local pages shown in `browser` are served per chat, each chat on a port
+//! (an origin) of its own, opened when the chat first previews a page and
+//! closed with the chat: pages previewed in different chats never share
+//! storage, cookies or service workers.
 
 use crate::agent_guide;
 use crate::session::{Entry, FormRef, Hub};
 use crate::ui_library::{Library, Prepared, SaveRequest};
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,6 +27,15 @@ pub const SERVER_NAME: &str = "yaah-ui";
 pub const ASK_TIMEOUT: std::time::Duration = std::time::Duration::from_hours(1);
 const PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
+/// Every tool the server has, by its own (bare) name.
+pub const TOOL_NAMES: &[&str] =
+    &["ui_catalog", "ui_guide", "ui_get_component", "ui_render", "source_read", "ui_ask", "ui_get_values", "ui_set_values", "ui_save_component"];
+
+/// A tool's name as agents that prefix MCP tools by server see it (Claude Code): `mcp__yaah-ui__ui_catalog`.
+pub fn full_tool_name(tool: &str) -> String {
+    format!("mcp__{SERVER_NAME}__{tool}")
+}
+
 const INSTRUCTIONS: &str = "\
 You are running inside yaah, a desktop app that renders UI inline in this chat. Whenever you would show, \
 compare, review, present, play, chart, tabulate, ask for structured input or build something interactive, \
@@ -28,6 +43,10 @@ answer with UI through these tools rather than prose, terminal output or files. 
 write a standalone HTML file just to show the user something: render it here. A local HTML page you built \
 goes in the `browser` primitive (its absolute path), a screenshot in `image`. If these tools are deferred or \
 loaded on demand, load them first (with ToolSearch, search for \"yaah-ui\"). Keep prose short when UI carries the content.
+
+Tool names: where MCP tools are prefixed by server (Claude Code) they are mcp__yaah-ui__ui_catalog, \
+mcp__yaah-ui__ui_render, mcp__yaah-ui__ui_ask and so on; where they aren't, the bare ui_catalog, ui_render, ui_ask. \
+Call them by the exact name your tool list shows.
 
 The full how-to (patterns, forms, live data, fixing errors, saving components) is the ui_guide tool, \
 also served as the resources yaah://skills/yaah-ui and yaah://skills/yaah-components and as prompts of the same names.
@@ -73,7 +92,7 @@ const NO_PROMPT_TOOLS: &[&str] =
 /// Claude Code's `allowedTools` for this server: each tool by its full name,
 /// never the whole server (`mcp__yaah-ui`), so a tool added later asks first.
 pub fn allowed_tools() -> Vec<String> {
-    NO_PROMPT_TOOLS.iter().map(|t| format!("mcp__{SERVER_NAME}__{t}")).collect()
+    NO_PROMPT_TOOLS.iter().map(|t| full_tool_name(t)).collect()
 }
 
 /// The largest request body read: a render's tree and props. Files never come
@@ -87,12 +106,48 @@ pub struct UiHost {
     pub hub: Arc<Hub>,
     pub library: Arc<Library>,
     pub sources: Arc<crate::sources::Sources>,
-    /// Folders served for `browser` previews: random id → folder.
-    previews: Mutex<HashMap<String, PathBuf>>,
+    /// Each chat's preview origin, by session id.
+    previews: Mutex<HashMap<String, PreviewSite>>,
+    /// Deleted chats: their URL tokens are refused even if something still holds them.
+    revoked: Mutex<HashSet<String>>,
     port: OnceLock<u16>,
     /// Chats tests register directly (the app's come from the hub): token → session id.
     #[cfg(test)]
     test_tokens: Mutex<HashMap<String, String>>,
+}
+
+/// One chat's preview origin: a listener on 127.0.0.1 of its own, serving the
+/// folders of the pages that chat previewed (random id → folder).
+struct PreviewSite {
+    port: u16,
+    server: Arc<Server>,
+    folders: Arc<Mutex<HashMap<String, PathBuf>>>,
+}
+
+impl PreviewSite {
+    fn open() -> Result<Self, String> {
+        let server = Arc::new(Server::http("127.0.0.1:0").map_err(|e| format!("preview server: {e}"))?);
+        let port = server.server_addr().to_ip().map(|a| a.port()).ok_or("preview server has no TCP port")?;
+        let folders: Arc<Mutex<HashMap<String, PathBuf>>> = Arc::default();
+        let (srv, dirs) = (server.clone(), folders.clone());
+        std::thread::Builder::new()
+            .name("yaah-ui-preview".into())
+            .spawn(move || {
+                // Ends when the site is closed (`unblock`); the listener goes with the last handle.
+                for req in srv.incoming_requests() {
+                    let dirs = dirs.clone();
+                    std::thread::spawn(move || serve_preview(&dirs, req));
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        Ok(Self { port, server, folders })
+    }
+}
+
+impl Drop for PreviewSite {
+    fn drop(&mut self) {
+        self.server.unblock();
+    }
 }
 
 impl UiHost {
@@ -102,6 +157,7 @@ impl UiHost {
             library,
             sources,
             previews: Mutex::default(),
+            revoked: Mutex::default(),
             port: OnceLock::new(),
             #[cfg(test)]
             test_tokens: Mutex::default(),
@@ -112,17 +168,21 @@ impl UiHost {
     #[allow(clippy::option_option, reason = "the hub's answer: unknown token, or known before its chat exists")]
     fn session_for(&self, token: &str) -> Option<Option<String>> {
         #[cfg(test)]
-        if let Some(s) = self.test_tokens.lock().unwrap_or_else(PoisonError::into_inner).get(token) {
-            return Some(Some(s.clone()));
+        let known = self.test_tokens.lock().unwrap_or_else(PoisonError::into_inner).get(token).map(|s| Some(s.clone()));
+        #[cfg(not(test))]
+        let known = None;
+        let session = known.or_else(|| self.hub.ui_session(token))?;
+        if session.as_ref().is_some_and(|id| self.revoked.lock().unwrap_or_else(PoisonError::into_inner).contains(id)) {
+            return None;
         }
-        self.hub.ui_session(token)
+        Some(session)
     }
 
     /// A URL serving `file`'s folder, so the page's own CSS/JS/images load.
-    /// It is a different origin from the app, so the page can't reach it. A
-    /// page directly in a shared temp folder is refused: that would serve
-    /// everything other programs leave there.
-    fn preview_url(&self, file: &Path) -> Result<String, String> {
+    /// It is on the chat's own preview origin, never the app's or another
+    /// chat's, so the page can't reach either. A page directly in a shared temp
+    /// folder is refused: that would serve everything other programs leave there.
+    fn preview_url(&self, session_id: &str, file: &Path) -> Result<String, String> {
         let dir = file.parent().unwrap_or(Path::new("/")).to_path_buf();
         if crate::ui_files::shared_temp_dir(&dir) {
             return Err(format!(
@@ -130,16 +190,39 @@ impl UiHost {
                 dir.display()
             ));
         }
+        if self.revoked.lock().unwrap_or_else(PoisonError::into_inner).contains(session_id) {
+            return Err("this chat was deleted".into());
+        }
         let mut previews = self.previews.lock().unwrap_or_else(PoisonError::into_inner);
-        let id = if let Some((id, _)) = previews.iter().find(|(_, d)| **d == dir) {
+        let site = match previews.entry(session_id.to_owned()) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(PreviewSite::open()?),
+        };
+        let mut folders = site.folders.lock().unwrap_or_else(PoisonError::into_inner);
+        let id = if let Some((id, _)) = folders.iter().find(|(_, d)| **d == dir) {
             id.clone()
         } else {
             let id = crate::session::random_token();
-            previews.insert(id.clone(), dir);
+            folders.insert(id.clone(), dir);
             id
         };
         let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        Ok(format!("http://127.0.0.1:{}/preview/{id}/{}", self.port.get().copied().unwrap_or(0), encode_path(&name)))
+        Ok(format!("http://127.0.0.1:{}/preview/{id}/{}", site.port, encode_path(&name)))
+    }
+
+    /// Stop serving a chat's previews: its origin's listener is closed. The
+    /// next preview in that chat opens a new one.
+    pub fn close_previews(&self, session_id: &str) {
+        let site = self.previews.lock().unwrap_or_else(PoisonError::into_inner).remove(session_id);
+        drop(site);
+    }
+
+    /// A deleted chat: its UI MCP tokens are refused from now on (even ones an
+    /// agent process still holds) and its preview origin closes. Only this
+    /// server's chats: the hub that owns the chat calls it (`Hub::delete_session`).
+    pub fn revoke(&self, session_id: &str) {
+        self.revoked.lock().unwrap_or_else(PoisonError::into_inner).insert(session_id.to_owned());
+        self.close_previews(session_id);
     }
 }
 
@@ -147,6 +230,7 @@ pub fn start(host: Arc<UiHost>) -> Result<u16, String> {
     let server = Server::http("127.0.0.1:0").map_err(|e| format!("ui server: {e}"))?;
     let port = server.server_addr().to_ip().map(|a| a.port()).ok_or("ui server has no TCP port")?;
     let _ = host.port.set(port);
+    host.hub.set_ui_host(Arc::downgrade(&host));
     std::thread::Builder::new()
         .name("yaah-ui-mcp".into())
         .spawn(move || {
@@ -177,10 +261,6 @@ fn loopback_host(req: &Request) -> bool {
 }
 
 fn handle(host: &UiHost, mut req: Request) {
-    if req.url().starts_with("/preview/") {
-        serve_preview(host, req);
-        return;
-    }
     // Browsers send Origin and MCP clients don't: no web page (a preview served
     // here, or a site rebinding its name to 127.0.0.1) gets to call tools.
     if header_value(&req, "origin").is_some() {
@@ -254,7 +334,7 @@ fn dispatch(host: &UiHost, session_id: Option<&str>, msg: &Value) -> Option<Valu
             let uri = params["uri"].as_str().unwrap_or_default();
             match uri.strip_prefix(SKILL_URI).and_then(agent_guide::skill) {
                 Some(skill) => Ok(json!({ "contents": [{
-                    "uri": uri, "mimeType": "text/markdown", "text": agent_guide::skill_text(skill, &agent_guide::component_names(&host.library)),
+                    "uri": uri, "mimeType": "text/markdown", "text": agent_guide::skill_text_cached(skill, &host.library.component_names()).as_str(),
                 }] })),
                 None => Err((-32002, format!("resource not found: {uri}"))),
             }
@@ -267,7 +347,7 @@ fn dispatch(host: &UiHost, session_id: Option<&str>, msg: &Value) -> Option<Valu
             match agent_guide::skill(name) {
                 Some(skill) => Ok(json!({
                     "description": agent_guide::skill_description(skill),
-                    "messages": [{ "role": "user", "content": { "type": "text", "text": agent_guide::skill_text(skill, &agent_guide::component_names(&host.library)) } }],
+                    "messages": [{ "role": "user", "content": { "type": "text", "text": agent_guide::skill_text_cached(skill, &host.library.component_names()).as_str() } }],
                 })),
                 None => Err((-32602, format!("no prompt named {name}"))),
             }
@@ -292,11 +372,11 @@ fn skill_resources() -> Vec<Value> {
 
 /// `ui_guide`: one of yaah's skills, or the short guide, with the components available now.
 fn guide_topic(lib: &Library, topic: &str) -> Result<String, Vec<String>> {
-    let names = agent_guide::component_names(lib);
+    let names = lib.component_names();
     if topic == "guide" {
         return Ok(agent_guide::guide_text(&names));
     }
-    agent_guide::skill(topic).map(|s| agent_guide::skill_text(s, &names)).ok_or_else(|| {
+    agent_guide::skill(topic).map(|s| agent_guide::skill_text_cached(s, &names).as_str().to_owned()).ok_or_else(|| {
         let topics = agent_guide::SKILLS.iter().map(|s| s.topic).collect::<Vec<_>>().join(", ");
         vec![format!("no topic `{topic}`; topics are {topics}, and guide (the short version)")]
     })
@@ -306,9 +386,153 @@ fn guide_topic(lib: &Library, topic: &str) -> Result<String, Vec<String>> {
 fn tree_arg(v: &Value) -> Option<Value> {
     match v {
         Value::Null => None,
-        Value::String(s) => serde_json::from_str(s).ok().or_else(|| Some(v.clone())),
-        t => Some(t.clone()),
+        t => Some(decoded(t)),
     }
+}
+
+/// A value some clients send JSON-encoded (`"{\"type\":…}"`): decoded when it is
+/// a JSON object or array, else as sent.
+fn decoded(v: &Value) -> Value {
+    match v {
+        Value::String(s) if s.trim_start().starts_with(['{', '[']) => serde_json::from_str(s).unwrap_or_else(|_| v.clone()),
+        other => other.clone(),
+    }
+}
+
+/// A required string argument, or what's wrong with it.
+fn text_field(obj: &serde_json::Map<String, Value>, k: &str, hint: &str, errs: &mut Vec<String>) -> String {
+    match obj.get(k) {
+        None | Some(Value::Null) => {
+            errs.push(format!("{k} is required: {hint}"));
+            String::new()
+        }
+        Some(Value::String(s)) => s.clone(),
+        Some(v) => {
+            errs.push(format!("{k} must be a string, got {}", crate::ui_library::shown(v)));
+            String::new()
+        }
+    }
+}
+
+/// One of `ui_save_component`'s examples, or what's wrong with it.
+fn example_arg(at: &str, ex: &Value, errs: &mut Vec<String>) -> Option<crate::ui_library::Example> {
+    use crate::ui_library::shown;
+    let Some(ex) = ex.as_object() else {
+        errs.push(format!("{at} must be an object {{ title, props }}, got {}", shown(ex)));
+        return None;
+    };
+    let title = match ex.get("title") {
+        None | Some(Value::Null) => {
+            errs.push(format!("{at}.title is required: a short name for the example"));
+            String::new()
+        }
+        Some(Value::String(t)) => t.clone(),
+        Some(t) => {
+            errs.push(format!("{at}.title must be a string, got {}", shown(t)));
+            String::new()
+        }
+    };
+    let props = match ex.get("props").map(decoded) {
+        None | Some(Value::Null) => {
+            errs.push(format!("{at}.props is required: the props to render the example with (an object)"));
+            Value::Null
+        }
+        Some(p @ Value::Object(_)) => p,
+        Some(p) => {
+            errs.push(format!("{at}.props must be an object, got {}", shown(&p)));
+            Value::Null
+        }
+    };
+    Some(crate::ui_library::Example { title, props })
+}
+
+/// `ui_save_component`'s arguments, checked field by field so every problem
+/// comes back with its path and in plain words (`examples[0].title is required`),
+/// not as a serde message. `tree`, `props` and `examples` may come JSON-encoded.
+fn save_request(args: &Value) -> Result<SaveRequest, Vec<String>> {
+    use crate::ui_library::shown;
+    let Some(obj) = args.as_object() else {
+        return Err(vec![format!("the arguments must be an object {{ name, description, props, tree, examples }}, got {}", shown(args))]);
+    };
+    let field = |k: &str| obj.get(k).filter(|v| !v.is_null());
+    // Saving into an installed library is refused first, whatever else is wrong.
+    if let Some(e) = obj.get("name").and_then(Value::as_str).and_then(crate::ui_library::qualified_save_error) {
+        return Err(vec![e]);
+    }
+    let mut errs = vec![];
+    let name = text_field(obj, "name", "a kebab-case name like `deploy-status`", &mut errs);
+    let description = text_field(obj, "description", "what the component shows and when to use it", &mut errs);
+    let props = match field("props").map(decoded) {
+        None => json!({ "type": "object", "properties": {} }),
+        Some(p @ Value::Object(_)) => p,
+        Some(p) => {
+            errs.push(format!("props must be a JSON Schema object like {{ \"type\": \"object\", \"properties\": {{…}} }}, got {}", shown(&p)));
+            Value::Null
+        }
+    };
+    let tree = match field("tree").map(decoded) {
+        None => {
+            errs.push("tree is required: the component's node tree, like { \"type\": \"card\", \"children\": [...] }".into());
+            Value::Null
+        }
+        Some(Value::String(_)) => {
+            errs.push(
+                "tree must be a node object like { \"type\": \"card\", \"children\": [...] }, not a string: a component's tree can't be \
+                 plain text, and a tree sent as a string must be valid JSON"
+                    .into(),
+            );
+            Value::Null
+        }
+        Some(t) => t,
+    };
+    let examples = match field("examples").map(decoded) {
+        None => vec![],
+        Some(Value::Array(items)) => items.iter().enumerate().filter_map(|(i, ex)| example_arg(&format!("examples[{i}]"), ex, &mut errs)).collect(),
+        Some(other) => {
+            errs.push(format!("examples must be an array of {{ title, props }}, got {}", shown(&other)));
+            vec![]
+        }
+    };
+    let change_note = match field("changeNote") {
+        None => None,
+        Some(Value::String(n)) => Some(n.clone()),
+        Some(v) => {
+            errs.push(format!("changeNote must be a string, got {}", shown(v)));
+            None
+        }
+    };
+    let expected_version = field("expectedVersion").and_then(|v| {
+        let n = v.as_u64().or_else(|| v.as_str().and_then(|s| s.trim().trim_start_matches('v').parse().ok())).and_then(|n| u32::try_from(n).ok());
+        if n.is_none() {
+            errs.push(format!("expectedVersion must be the version number you read (an integer), got {}", shown(v)));
+        }
+        n
+    });
+    if !errs.is_empty() {
+        return Err(errs);
+    }
+    Ok(SaveRequest { name, description, props, tree, examples, change_note, expected_version })
+}
+
+/// An error as `{ path, message }`: the path is the leading `tree.children[0]`
+/// (or the field an error starts with), empty when it is about the whole call.
+fn error_parts(err: &str) -> Value {
+    const FIELDS: &[&str] = &["name", "description", "props", "tree", "examples", "changeNote", "expectedVersion", "component", "id", "title"];
+    let path_like = |p: &str| {
+        let head = p.split(['.', '[']).next().unwrap_or_default();
+        FIELDS.contains(&head) && p.chars().all(|c| c.is_ascii_alphanumeric() || "_.[]-".contains(c))
+    };
+    if let Some((path, message)) = err.split_once(": ")
+        && path_like(path)
+    {
+        return json!({ "path": path, "message": message });
+    }
+    if let Some((path, _)) = err.split_once(' ')
+        && path_like(path)
+    {
+        return json!({ "path": path, "message": err });
+    }
+    json!({ "path": "", "message": err })
 }
 
 /// A UI transcript entry for a prepared render.
@@ -342,10 +566,12 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
     let str_arg = |k: &str| args[k].as_str().map(str::to_owned);
     let outcome: Result<String, Vec<String>> = match name {
         "ui_catalog" => lib
-            .catalog()
-            .map(|mut c| {
-                c["connections"] = serde_json::to_value(host.sources.connections()).unwrap_or_default();
-                c.to_string()
+            .catalog_json()
+            .map(|c| {
+                // The library's part is built once per change; this app's connections (by name only) go on the end.
+                let connections = serde_json::to_string(&host.sources.connections()).unwrap_or_else(|_| "[]".into());
+                let library = c.trim_end().strip_suffix('}').unwrap_or("{");
+                format!("{library},\"connections\":{connections}}}")
             })
             .map_err(|e| vec![e]),
         // This runs on the request's own thread (not an async worker), so blocking on it is fine.
@@ -359,7 +585,7 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
             Ok(None) => Err(vec![format!("no component named `{}`; call ui_catalog", args["name"])]),
             Err(e) => Err(vec![e]),
         },
-        "ui_render" => lib.prepare(args["component"].as_str(), args["props"].clone(), tree_arg(&args["tree"])).map(|mut p| {
+        "ui_render" => lib.prepare(args["component"].as_str(), decoded(&args["props"]), tree_arg(&args["tree"])).map(|mut p| {
             let what = p.component.clone().map_or("ad-hoc UI".to_owned(), |c| format!("`{c}` v{}", p.version.unwrap_or(0)));
             let refused = inline_files(host, session_id, &mut p.tree, &mut p.props);
             let updated = host.hub.push_ui(session_id, ui_entry(p, str_arg("id"), None, str_arg("title")));
@@ -373,7 +599,7 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
             }
             msg
         }),
-        "ui_ask" => match lib.prepare(args["component"].as_str(), args["props"].clone(), tree_arg(&args["tree"])) {
+        "ui_ask" => match lib.prepare(args["component"].as_str(), decoded(&args["props"]), tree_arg(&args["tree"])) {
             Err(e) => Err(e),
             Ok(p) if !p.tree.to_string().contains(r#""type":"form""#) => {
                 Err(vec!["ui_ask needs a `form` (with inputs) in the UI; use ui_render to only show something".into()])
@@ -403,8 +629,8 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
             .edit_form(session_id, FormRef::UiId(args["id"].as_str().unwrap_or_default()), &args["values"], "agent")
             .map(|s| format!("Set. The user sees your values in the form, marked as yours, and can change them.\n{s}"))
             .map_err(|e| vec![e]),
-        "ui_save_component" => match serde_json::from_value::<SaveRequest>(args.clone()) {
-            Err(e) => Err(vec![format!("arguments: {e}")]),
+        "ui_save_component" => match save_request(args) {
+            Err(errs) => Err(errs),
             Ok(req) => {
                 let preview = args["preview"].as_bool().unwrap_or(true);
                 lib.save(req).map(|c| {
@@ -435,6 +661,8 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
         Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
         Err(errs) => json!({
             "content": [{ "type": "text", "text": format!("Fix these and call again:\n- {}", errs.join("\n- ")) }],
+            // The same, for clients that read structured results: where, and what to fix.
+            "structuredContent": { "errors": errs.iter().map(|e| error_parts(e)).collect::<Vec<_>>() },
             "isError": true,
         }),
     }
@@ -555,7 +783,7 @@ fn header(k: &str, v: &str) -> Header {
 /// into data URLs and preview URLs, limited to the chat's folders.
 fn inline_files(host: &UiHost, session_id: &str, tree: &mut Value, props: &mut Value) -> Vec<String> {
     let roots = host.hub.session_roots(session_id);
-    crate::ui_files::inline(tree, props, &roots, &|p: &Path| host.preview_url(p))
+    crate::ui_files::inline(tree, props, &roots, &|p: &Path| host.preview_url(session_id, p))
 }
 
 /// A previewed page may load what it likes from the web (CDN scripts, styles,
@@ -578,8 +806,8 @@ fn preview_file(dir: &Path, rest: &str) -> Option<PathBuf> {
     (!hidden && path.is_file() && web_asset(&path)).then_some(path)
 }
 
-/// GET /preview/<id>/<path>: a file from a registered preview folder.
-fn serve_preview(host: &UiHost, req: Request) {
+/// GET /preview/<id>/<path>: a file from one of the chat's preview folders.
+fn serve_preview(folders: &Mutex<HashMap<String, PathBuf>>, req: Request) {
     if *req.method() != Method::Get {
         let _ = req.respond(Response::empty(405).with_header(header("Allow", "GET")));
         return;
@@ -591,7 +819,7 @@ fn serve_preview(host: &UiHost, req: Request) {
     let url = req.url().split(['?', '#']).next().unwrap_or_default().to_owned();
     let mut parts = url.trim_start_matches("/preview/").splitn(2, '/');
     let (id, rest) = (parts.next().unwrap_or_default(), decode_path(parts.next().unwrap_or_default()));
-    let dir = host.previews.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned();
+    let dir = url.starts_with("/preview/").then(|| folders.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned()).flatten();
     let file = dir.and_then(|dir| preview_file(&dir, &rest)).and_then(|path| std::fs::File::open(&path).ok().map(|f| (path, f)));
     let _ = match file {
         // Streamed, not read whole.
@@ -681,9 +909,13 @@ mod tests {
     }
 
     /// One raw HTTP exchange; `head` is the request line and headers, without the blank line.
+    /// Status 0: nothing listens there any more.
     fn exchange(port: u16, head: &str, body: &str) -> (u16, String) {
-        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
-        write!(s, "{head}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+        let Ok(mut s) = std::net::TcpStream::connect(("127.0.0.1", port)) else { return (0, String::new()) };
+        let _ = s.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        if write!(s, "{head}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).is_err() {
+            return (0, String::new());
+        }
         let mut out = String::new();
         let _ = s.read_to_string(&mut out);
         let status = out.split_whitespace().nth(1).and_then(|c| c.parse().ok()).unwrap_or(0);
@@ -710,39 +942,55 @@ mod tests {
     }
 
     fn rpc(port: u16, msg: &Value) -> (u16, Value) {
-        let (status, body) = exchange(port, "POST /mcp/tok HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json", &msg.to_string());
+        rpc_as(port, "tok", msg)
+    }
+
+    fn rpc_as(port: u16, token: &str, msg: &Value) -> (u16, Value) {
+        let (status, body) =
+            exchange(port, &format!("POST /mcp/{token} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json"), &msg.to_string());
         (status, serde_json::from_str(&body).unwrap_or(Value::Null))
     }
 
     /// A tool's text, and whether it was an error.
     fn call(port: u16, name: &str, args: &Value) -> (String, bool) {
-        let (_, reply) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": name, "arguments": args } }));
-        let result = &reply["result"];
-        (result["content"][0]["text"].as_str().unwrap_or_default().to_owned(), result["isError"] == true)
+        let (text, err, _) = call_full(port, "tok", name, args);
+        (text, err)
     }
 
-    /// The UI server with one chat in `cwd` (restored from disk, as at startup), at `/mcp/tok`.
+    /// A tool's text, whether it was an error, and its structured content.
+    fn call_full(port: u16, token: &str, name: &str, args: &Value) -> (String, bool, Value) {
+        let (_, reply) =
+            rpc_as(port, token, &json!({ "jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": { "name": name, "arguments": args } }));
+        let result = &reply["result"];
+        (result["content"][0]["text"].as_str().unwrap_or_default().to_owned(), result["isError"] == true, result["structuredContent"].clone())
+    }
+
+    /// The UI server with two chats in `cwd` (restored from disk, as at startup):
+    /// `s1` at `/mcp/tok` and `s2` at `/mcp/tok2`.
     fn serve_chat(cwd: &Path) -> (Arc<Hub>, Arc<UiHost>, u16) {
         let dir = temp_dir("app");
-        let info = SessionInfo {
-            session_id: "s1".into(),
-            project_id: None,
-            created_at: 0,
-            account_id: "default".into(),
-            cwd: cwd.to_string_lossy().into_owned(),
-            additional_dirs: vec![],
-            title: "t".into(),
-            running: false,
-            stop_reason: None,
-            commands: vec![],
-        };
         std::fs::create_dir_all(dir.join("sessions")).unwrap();
-        std::fs::write(dir.join("sessions/s1.json"), json!({ "info": info, "entries": [] }).to_string()).unwrap();
+        for id in ["s1", "s2"] {
+            let info = SessionInfo {
+                session_id: id.into(),
+                project_id: None,
+                created_at: 0,
+                account_id: "default".into(),
+                cwd: cwd.to_string_lossy().into_owned(),
+                additional_dirs: vec![],
+                title: "t".into(),
+                running: false,
+                stop_reason: None,
+                commands: vec![],
+            };
+            std::fs::write(dir.join(format!("sessions/{id}.json")), json!({ "info": info, "entries": [] }).to_string()).unwrap();
+        }
         let hub = Arc::new(Hub::with_store(Arc::new(|_: &str, _: Value| {}), dir.join("sessions")));
         let library = Arc::new(Library::with_sources(vec![Box::new(Bundled::new()), Box::new(LocalDir::new(dir.join("components")))]));
         let sources = Arc::new(crate::sources::Sources::with_connections_file(dir.join("connections.json")));
         let host = Arc::new(UiHost::new(hub.clone(), library, sources));
         host.test_tokens.lock().unwrap().insert("tok".into(), "s1".into());
+        host.test_tokens.lock().unwrap().insert("tok2".into(), "s2".into());
         let port = start(host.clone()).unwrap();
         hub.set_ui_port(port);
         (hub, host, port)
@@ -926,7 +1174,8 @@ mod tests {
         let (text, err) = call(port, "ui_save_component", &save);
         assert!(!err && text.contains("Saved `env-badge` v1") && text.contains("preview"), "{text}");
         assert_eq!(entries(&hub)[0]["title"], "env-badge v1 · prod");
-        assert!(call(port, "ui_save_component", &json!({ "name": 3 })).0.contains("arguments:"));
+        let (text, err) = call(port, "ui_save_component", &json!({ "name": 3 }));
+        assert!(err && text.contains("name must be a string, got 3") && text.contains("tree is required"), "{text}");
         let (text, err) = call(port, "ui_save_component", &json!({ "name": "acme/env-badge", "description": "x", "tree": "x" }));
         assert!(err && text.contains("Copy it to the collection first"), "{text}");
 
@@ -958,12 +1207,12 @@ mod tests {
         let (_, host, _) = serve_chat(&temp_dir("cwd"));
         let loose = std::env::temp_dir().join(format!("yaah-loose-{}.html", crate::session::random_token()));
         std::fs::write(&loose, "<p>hi</p>").unwrap();
-        let e = host.preview_url(&loose).unwrap_err();
+        let e = host.preview_url("s1", &loose).unwrap_err();
         assert!(e.contains("can't be previewed") && e.contains("folder of its own"), "{e}");
-        assert!(host.preview_url(Path::new("/tmp/page.html")).is_err());
-        assert!(host.previews.lock().unwrap().is_empty(), "nothing registered");
+        assert!(host.preview_url("s1", Path::new("/tmp/page.html")).is_err());
+        assert!(host.previews.lock().unwrap().is_empty(), "nothing registered, no origin opened");
         let own = temp_dir("own-folder");
-        assert!(host.preview_url(&own.join("index.html")).is_ok(), "a folder of its own in temp is fine");
+        assert!(host.preview_url("s1", &own.join("index.html")).is_ok(), "a folder of its own in temp is fine");
         let _ = std::fs::remove_file(loose);
     }
 
@@ -1013,9 +1262,12 @@ mod tests {
         std::fs::write(site.join("id_rsa"), "private").unwrap();
         std::fs::write(site.join("main.rs"), "private").unwrap();
 
-        let (_, host, port) = serve_chat(&root);
-        let url = host.preview_url(&site.join("index.html")).unwrap();
+        let (_, host, mcp_port) = serve_chat(&root);
+        let url = host.preview_url("s1", &site.join("index.html")).unwrap();
+        let port = preview_port(&url);
+        assert_ne!(port, mcp_port, "previews are never on the MCP server's origin");
         let path = url.split_once(&format!("127.0.0.1:{port}")).unwrap().1.to_owned();
+        assert_eq!(get(mcp_port, &path, &format!("127.0.0.1:{mcp_port}")).0, 404, "the MCP port serves no previews");
         let base = path.trim_end_matches("index.html");
         let local = format!("127.0.0.1:{port}");
 
@@ -1051,5 +1303,229 @@ mod tests {
         assert!(csp.contains("sandbox ") && !csp.contains("allow-popups") && !csp.contains("allow-top-navigation"), "{csp}");
         assert_eq!(exchange(port, &format!("POST {path} HTTP/1.1\r\nHost: {local}"), "").0, 405);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn preview_port(url: &str) -> u16 {
+        url.strip_prefix("http://127.0.0.1:").and_then(|r| r.split('/').next()).and_then(|p| p.parse().ok()).unwrap()
+    }
+
+    /// The CSP header of a preview response.
+    fn preview_csp(port: u16, path: &str) -> String {
+        let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        write!(s, "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").unwrap();
+        let mut head = String::new();
+        let _ = s.read_to_string(&mut head);
+        head.lines().find_map(|l| l.strip_prefix("Content-Security-Policy: ")).unwrap_or_default().to_owned()
+    }
+
+    /// Pages previewed in two chats are on two origins (storage isn't shared);
+    /// a chat's origin is opened on its first preview and closed with the chat.
+    #[test]
+    fn each_chat_previews_on_its_own_origin_and_closing_it_stops_serving() {
+        let root = temp_dir("origins");
+        std::fs::create_dir_all(root.join("site")).unwrap();
+        std::fs::write(root.join("site/index.html"), "<h1>shared</h1>").unwrap();
+        std::fs::write(root.join("site/about.html"), "<h1>about</h1>").unwrap();
+        let (_, host, _) = serve_chat(&root);
+        assert!(host.previews.lock().unwrap().is_empty(), "no origin until a chat previews something");
+
+        let one = host.preview_url("s1", &root.join("site/index.html")).unwrap();
+        let two = host.preview_url("s2", &root.join("site/index.html")).unwrap();
+        let (p1, p2) = (preview_port(&one), preview_port(&two));
+        assert_ne!(p1, p2, "two chats, two origins: {one} {two}");
+        assert_eq!(preview_port(&host.preview_url("s1", &root.join("site/about.html")).unwrap()), p1, "one origin per chat, reused");
+        let path = |url: &str| url.strip_prefix("http://127.0.0.1:").and_then(|r| r.split_once('/')).map(|(_, p)| format!("/{p}")).unwrap();
+        assert_eq!(get(p1, &path(&one), "127.0.0.1").1, "<h1>shared</h1>");
+        assert_eq!(get(p2, &path(&two), "127.0.0.1").1, "<h1>shared</h1>");
+        // A chat's folders aren't served on another chat's origin.
+        assert_eq!(get(p2, &path(&one), "127.0.0.1").0, 404, "s1's preview id means nothing on s2's origin");
+        // The per-preview policy still comes with every file.
+        for csp in [preview_csp(p1, &path(&one)), preview_csp(p2, &path(&two))] {
+            assert!(csp.contains("connect-src 'self'") && csp.contains("sandbox ") && !csp.contains("allow-popups"), "{csp}");
+        }
+
+        // Closing s1 (the chat closed): its origin stops serving, s2's goes on.
+        host.close_previews("s1");
+        for _ in 0..50 {
+            if get(p1, &path(&one), "127.0.0.1").0 == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(get(p1, &path(&one), "127.0.0.1").0, 0, "nothing listens on a closed chat's origin");
+        assert_eq!(get(p2, &path(&two), "127.0.0.1").0, 200);
+        // Previewing again in s1 opens a new origin.
+        let again = host.preview_url("s1", &root.join("site/index.html")).unwrap();
+        assert_eq!(get(preview_port(&again), &path(&again), "127.0.0.1").0, 200);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Deleting a chat revokes its UI token (and closes its previews); other chats are untouched.
+    #[test]
+    fn a_deleted_chats_token_stops_working() {
+        let root = temp_dir("revoke");
+        std::fs::create_dir_all(root.join("site")).unwrap();
+        std::fs::write(root.join("site/index.html"), "<p>x</p>").unwrap();
+        let (hub, host, port) = serve_chat(&root);
+        let ping = json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
+        assert_eq!(rpc_as(port, "tok", &ping).0, 200);
+        let url = host.preview_url("s1", &root.join("site/index.html")).unwrap();
+        let p1 = preview_port(&url);
+
+        // Deleted through the hub that owns it, which reaches this server (and no other).
+        hub.delete_session("s1").unwrap();
+        assert_eq!(rpc_as(port, "tok", &ping).0, 404, "the deleted chat's token is refused");
+        assert_eq!(call_full(port, "tok", "ui_catalog", &json!({})).0, "", "no tools either");
+        assert_eq!(rpc_as(port, "tok2", &ping).0, 200, "another chat's token still works");
+        for _ in 0..50 {
+            if exchange(p1, "GET / HTTP/1.1\r\nHost: 127.0.0.1", "").0 == 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(exchange(p1, "GET / HTTP/1.1\r\nHost: 127.0.0.1", "").0, 0, "its previews are closed");
+        assert!(host.preview_url("s1", &root.join("site/index.html")).unwrap_err().contains("deleted"), "and none open again");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Save errors name the field and say what to do, whatever shape the agent sent.
+    #[test]
+    fn save_component_errors_name_the_path() {
+        let errs = |args: Value| save_request(&args).unwrap_err();
+        let base = json!({ "name": "env-badge", "description": "Shows which environment a deploy targets",
+            "tree": { "type": "badge", "props": { "text": "{{env}}" } } });
+        let with = |k: &str, v: Value| {
+            let mut a = base.clone();
+            a[k] = v;
+            a
+        };
+        assert_eq!(
+            errs(json!({})),
+            [
+                "name is required: a kebab-case name like `deploy-status`",
+                "description is required: what the component shows and when to use it",
+                "tree is required: the component's node tree, like { \"type\": \"card\", \"children\": [...] }",
+            ]
+        );
+        assert_eq!(errs(with("examples", json!([{ "props": {} }]))), ["examples[0].title is required: a short name for the example"]);
+        assert_eq!(
+            errs(with("examples", json!([{ "title": "x" }]))),
+            ["examples[0].props is required: the props to render the example with (an object)"]
+        );
+        assert_eq!(
+            errs(with("examples", json!([{ "title": "ok", "props": {} }, { "title": 4, "props": [1] }, "nope"]))),
+            [
+                "examples[1].title must be a string, got 4",
+                "examples[1].props must be an object, got [1]",
+                "examples[2] must be an object { title, props }, got \"nope\""
+            ]
+        );
+        assert_eq!(errs(with("examples", json!({ "title": "x" }))), ["examples must be an array of { title, props }, got {\"title\":\"x\"}"]);
+        assert!(errs(with("tree", json!("just text")))[0].starts_with("tree must be a node object"), "a string tree is refused for components");
+        assert!(errs(with("tree", json!("{ not json")))[0].contains("not a string"));
+        assert!(errs(with("props", json!([])))[0].starts_with("props must be a JSON Schema object"));
+        assert!(errs(with("expectedVersion", json!("two")))[0].starts_with("expectedVersion must be the version number"));
+        assert_eq!(errs(json!("x")).len(), 1);
+
+        // JSON-encoded tree, props and examples are accepted, as ui_render accepts an encoded tree.
+        let encoded = json!({ "name": "env-badge", "description": "Shows which environment a deploy targets",
+            "props": json!({ "type": "object", "properties": { "env": { "type": "string" } } }).to_string(),
+            "tree": json!({ "type": "badge", "props": { "text": "{{env}}" } }).to_string(),
+            "examples": json!([{ "title": "prod", "props": { "env": "prod" } }]).to_string(),
+            "expectedVersion": "3" });
+        let req = save_request(&encoded).unwrap();
+        assert_eq!((req.tree["type"].as_str(), req.examples[0].props["env"].as_str(), req.expected_version), (Some("badge"), Some("prod"), Some(3)));
+        assert_eq!(req.props["properties"]["env"]["type"], "string");
+    }
+
+    /// Over MCP: the text says what to fix, `structuredContent` has each `{ path, message }`.
+    #[test]
+    fn errors_come_back_as_text_and_as_paths() {
+        let (_, _, port) = serve_chat(&temp_dir("cwd"));
+        let (text, err, structured) = call_full(
+            port,
+            "tok",
+            "ui_save_component",
+            &json!({ "name": "env-badge", "description": "Shows which environment a deploy targets",
+            "tree": { "type": "badge" }, "examples": [{ "props": {} }] }),
+        );
+        assert!(err && text.contains("- examples[0].title is required"), "{text}");
+        assert_eq!(
+            structured["errors"][0],
+            json!({ "path": "examples[0].title", "message": "examples[0].title is required: a short name for the example" })
+        );
+
+        let (text, _, structured) = call_full(
+            port,
+            "tok",
+            "ui_render",
+            &json!({ "tree": { "type": "stack", "children": [{ "type": "badge", "props": { "variant": "loud" } }] } }),
+        );
+        assert!(text.contains("`badge` needs prop `text`"), "{text}");
+        let paths: Vec<&str> = structured["errors"].as_array().unwrap().iter().filter_map(|e| e["path"].as_str()).collect();
+        assert!(paths.contains(&"tree.children[0].props.variant") && paths.contains(&"tree.children[0]"), "{structured}");
+        assert_eq!(
+            error_parts("no component named `x`; call ui_catalog"),
+            json!({ "path": "", "message": "no component named `x`; call ui_catalog" })
+        );
+
+        // A component saved with an encoded tree works; a string tree doesn't.
+        let save = json!({ "name": "env-badge", "description": "Shows which environment a deploy targets",
+            "props": { "type": "object", "properties": { "env": { "type": "string" } }, "required": ["env"] },
+            "tree": json!({ "type": "badge", "props": { "text": "{{env}}" } }).to_string(),
+            "examples": [{ "title": "prod", "props": { "env": "prod" } }], "preview": false });
+        let (text, err) = call(port, "ui_save_component", &save);
+        assert!(!err && text.starts_with("Saved `env-badge` v1"), "{text}");
+        let (text, err) =
+            call(port, "ui_save_component", &json!({ "name": "plain", "description": "Some text only, for nothing at all", "tree": "hello" }));
+        assert!(err && text.contains("tree must be a node object"), "{text}");
+    }
+
+    /// Whether the CSP source list `sources` lets a frame load `url` (the forms
+    /// tauri.conf.json uses: `scheme://host:*` and a bare `scheme:`).
+    fn frame_allowed(sources: &str, url: &str) -> bool {
+        let (scheme, rest) = url.split_once("://").unwrap();
+        let host = rest.split(['/', '?']).next().unwrap().rsplit_once(':').map_or(rest.split('/').next().unwrap(), |(h, _)| h);
+        sources.split_whitespace().any(|src| match src.split_once("://") {
+            None => src == format!("{scheme}:"),
+            Some((s, h)) => s == scheme && h.strip_suffix(":*").is_some_and(|h| h == host),
+        })
+    }
+
+    /// The release CSP lets the chat frame every chat's preview origin and local
+    /// dev servers by either loopback name, and nothing else over plain http.
+    #[test]
+    fn the_release_csp_frames_previews_and_local_dev_servers() {
+        let conf: Value = serde_json::from_str(&std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json")).unwrap()).unwrap();
+        let frame_src = conf["app"]["security"]["csp"]["frame-src"].as_str().unwrap();
+        let root = temp_dir("csp");
+        std::fs::create_dir_all(root.join("site")).unwrap();
+        std::fs::write(root.join("site/index.html"), "<p>x</p>").unwrap();
+        let (_, host, _) = serve_chat(&root);
+        for chat in ["s1", "s2"] {
+            let url = host.preview_url(chat, &root.join("site/index.html")).unwrap();
+            assert!(frame_allowed(frame_src, &url), "{url} in {frame_src}");
+        }
+        for ok in ["http://localhost:5173/", "http://127.0.0.1:3000/app", "https://example.com/"] {
+            assert!(frame_allowed(frame_src, ok), "{ok}");
+        }
+        for no in ["http://example.com/", "http://192.168.1.2:8080/", "tauri://localhost/", "http://ipc.localhost/"] {
+            assert!(!frame_allowed(frame_src, no), "{no}");
+        }
+        // Tauri would add a nonce to style-src, and a nonce makes 'unsafe-inline' ignored:
+        // inline styles from the UI libraries would be blocked in release builds only.
+        assert_eq!(conf["app"]["security"]["dangerousDisableAssetCspModification"], json!(["style-src"]));
+        assert!(conf["app"]["security"]["csp"]["style-src"].as_str().unwrap().contains("'unsafe-inline'"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn every_tool_has_a_full_name() {
+        let names: Vec<String> = tools().as_array().unwrap().iter().filter_map(|t| t["name"].as_str().map(str::to_owned)).collect();
+        assert_eq!(names, TOOL_NAMES, "TOOL_NAMES lists every tool, in order");
+        assert_eq!(full_tool_name("ui_catalog"), "mcp__yaah-ui__ui_catalog");
+        for t in TOOL_NAMES {
+            assert!(INSTRUCTIONS.contains("mcp__yaah-ui__ui_catalog") && INSTRUCTIONS.contains("bare ui_catalog"), "{t}");
+        }
     }
 }

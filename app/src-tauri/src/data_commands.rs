@@ -119,9 +119,10 @@ pub async fn read_source(sources: State<'_, Arc<sources::Sources>>, source: serd
 
 // ── Settings → General ───────────────────────────────────────────────────────
 
+/// Reads settings files, so off the main thread.
 #[tauri::command]
-pub fn general_settings() -> serde_json::Value {
-    settings::general()
+pub async fn general_settings() -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(settings::general).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -319,6 +320,8 @@ pub fn set_mcp_server_enabled(name: String, enabled: bool) -> Result<mcp_servers
 /// Connect to a (possibly unsaved) server and list its tools.
 #[tauri::command]
 pub async fn test_mcp_server(draft: mcp_servers::Draft) -> Result<mcp_servers::TestReport, String> {
+    // Settings sends secrets back masked when they weren't edited: test with the stored ones.
+    let draft = mcp_servers::Store::user().unmask(&draft)?;
     mcp_servers::test(&draft.to_server()?).await
 }
 

@@ -21,7 +21,11 @@ Never `open` a file or URL, and never write a standalone HTML file just to show 
 
 ## Getting the tools
 
-The tools are `ui_catalog`, `ui_render`, `ui_ask`, `ui_get_values`, `ui_set_values`, `ui_get_component`, `ui_save_component`, `source_read` and `ui_guide` (this guide). If they are deferred or loaded on demand, load them first (with ToolSearch, search for "yaah-ui").
+The tools, by the name agents that prefix MCP tools by server see (Claude Code), and the bare name other agents see. Call them by the exact name your tool list shows; a bare `ui_catalog` where the list has `mcp__yaah-ui__ui_catalog` is "No such tool".
+
+{{tools}}
+
+`ui_guide` is this guide. If the tools are deferred or loaded on demand, load them first (with ToolSearch, search for "yaah-ui").
 
 ## The loop
 

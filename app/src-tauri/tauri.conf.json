@@ -25,12 +25,13 @@
         "img-src": "'self' data: blob: https:",
         "font-src": "'self' data:",
         "connect-src": "'self' ipc: http://ipc.localhost",
-        "frame-src": "http://127.0.0.1:* https:",
+        "frame-src": "http://127.0.0.1:* http://localhost:* https:",
         "object-src": "'none'",
         "base-uri": "'none'",
         "form-action": "'none'"
       },
-      "devCsp": null
+      "devCsp": null,
+      "dangerousDisableAssetCspModification": ["style-src"]
     }
   },
   "bundle": {

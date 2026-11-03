@@ -7,6 +7,10 @@ description: Build, save and improve reusable UI components in yaah's component 
 
 A component is data: a tree of yaah's primitives (and other components) with `{{bindings}}` to its props, a JSON Schema for those props, and examples. Saved components go into the user's own collection (`~/.yaah/components/`), are shared by every chat and every agent, keep their version history, and show on the Component library page.
 
+## The tools
+
+Where MCP tools are prefixed by server (Claude Code) they are `mcp__yaah-ui__ui_save_component`, `mcp__yaah-ui__ui_get_component`, `mcp__yaah-ui__ui_catalog` and `mcp__yaah-ui__ui_render`; elsewhere the bare `ui_save_component`, `ui_get_component`, `ui_catalog` and `ui_render`. Call the exact name your tool list shows.
+
 ## Before saving
 
 - Call `ui_catalog` and reuse what is there. Improve an existing component of the user's (`ui_get_component`, then save with `expectedVersion`) instead of making a near-duplicate.
@@ -72,4 +76,4 @@ Installed libraries add components named `library/name`, listed in `ui_catalog` 
 
 ## When a save is refused
 
-The errors name each problem, e.g. a missing `examples[0].title`, an unknown prop, a binding to a prop the schema doesn't declare, an example that doesn't fit the schema. Fix exactly those and save again. Don't resend the same arguments.
+The errors name each problem by its path, e.g. `examples[0].title is required`, an unknown prop at `tree.children[1]`, an example that doesn't fit the schema (`examples[0].props`). Clients that read structured results get them as `structuredContent.errors`, each `{ path, message }`. Fix exactly those and save again. Don't resend the same arguments. Send `tree`, `props` and `examples` as JSON objects (a JSON-encoded string is accepted, plain text is not).

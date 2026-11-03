@@ -17,16 +17,26 @@
 //! components are addressed by a qualified name, `<library>/<name>`.
 //! Unqualified names resolve as before: yaah's own first, then local. Inside an
 //! installed library's component, unqualified names are yaah's own only.
+//!
+//! The library is kept in memory ([`Snapshot`]): every component with its
+//! `uses` worked out once, the catalog agents read and the names the guide
+//! lists. yaah's own changes (a save, an install, update, enable or remove)
+//! replace it at once; changes made on disk by something else (an edited
+//! component file, a folder library's files) are noticed within [`RECHECK`].
 
 use crate::accounts::home;
 use crate::ui_libraries::{Pack, Staged, Store};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::hash::{DefaultHasher, Hash, Hasher};
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const PRIMITIVES_JSON: &str = include_str!("../../src/ui-primitives.json");
 const MAX_DEPTH: usize = 30;
@@ -36,6 +46,9 @@ const MAX_NESTING: usize = 8;
 /// Each use of a component copies its whole tree, so a few small components
 /// nested a few deep would otherwise expand exponentially.
 const MAX_EXPANDED: usize = 3000;
+/// How often the files behind the in-memory library are checked for changes
+/// made outside yaah. yaah's own changes replace it at once.
+pub(crate) const RECHECK: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,7 +88,7 @@ pub struct Component {
 /// What a component name in a tree refers to.
 #[derive(Clone)]
 pub(crate) enum Resolved {
-    Found(Rc<Component>),
+    Found(Arc<Component>),
     /// Unknown or unusable here; the message says why (without the node's path).
     Missing(String),
     /// Another installed library's component, checked when that library is used.
@@ -102,6 +115,10 @@ pub trait ComponentSource: Send + Sync {
     fn get(&self, name: &str) -> Result<Option<Component>, String>;
     /// Store `component`, keeping the version it replaces in history.
     fn save(&self, component: &Component) -> Result<(), String>;
+    /// Changes whenever what [`list`](Self::list) would return may have changed on disk.
+    fn fingerprint(&self) -> u64 {
+        0
+    }
 }
 
 /// The components yaah ships, embedded at build time (see `build.rs`) and
@@ -221,6 +238,22 @@ impl ComponentSource for LocalDir {
         std::fs::write(&tmp, json).map_err(|e| format!("write {}: {e}", tmp.display()))?;
         std::fs::rename(&tmp, &file).map_err(|e| format!("rename {}: {e}", file.display()))
     }
+
+    /// The names, sizes, times and inodes of every `component.json`: a stat each, no reads.
+    fn fingerprint(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        let Ok(entries) = std::fs::read_dir(&self.root) else { return 0 };
+        let mut names: Vec<_> = entries.filter_map(Result::ok).map(|e| e.file_name()).collect();
+        names.sort();
+        for n in names {
+            n.hash(&mut h);
+            match std::fs::metadata(self.root.join(&n).join("component.json")) {
+                Ok(m) => (m.len(), m.modified().ok(), m.ino()).hash(&mut h),
+                Err(_) => 0u8.hash(&mut h),
+            }
+        }
+        h.finish()
+    }
 }
 
 pub struct Library {
@@ -235,6 +268,106 @@ pub struct Library {
     pub(crate) staged: Mutex<HashMap<String, Staged>>,
     /// One install, update, enable or remove at a time.
     pub(crate) ops: Mutex<()>,
+    /// Bumped by every change yaah makes to the library; the snapshot of an older one is stale.
+    generation: AtomicU64,
+    /// The library in memory, as of a generation and the files' fingerprint.
+    cache: Mutex<Option<Arc<Snapshot>>>,
+    /// `false` while the installed libraries are first read (in the background, at startup).
+    loaded: Mutex<bool>,
+    loaded_cv: Condvar,
+}
+
+/// The library as last read: every component with its `uses`, and what agents
+/// are given from it (the catalog, the component names), built on first use.
+pub(crate) struct Snapshot {
+    generation: u64,
+    fingerprint: u64,
+    /// When the files were last checked against `fingerprint`.
+    checked: Mutex<Instant>,
+    /// Each source's components (yaah's own, then local) by name.
+    sources: Vec<HashMap<String, Arc<Component>>>,
+    packs: Vec<Arc<Pack>>,
+    /// What `list` returns: by name, with `uses`.
+    list: Vec<Component>,
+    catalog: OnceLock<Arc<String>>,
+    names: OnceLock<Arc<Vec<String>>>,
+}
+
+/// Resolves names against a snapshot, each name once per check or render.
+pub(crate) struct Resolver<'a> {
+    lib: &'a Library,
+    snap: &'a Snapshot,
+    memo: RefCell<HashMap<(bool, String), Resolved>>,
+}
+
+impl<'a> Resolver<'a> {
+    fn new(lib: &'a Library, snap: &'a Snapshot) -> Self {
+        Self { lib, snap, memo: RefCell::default() }
+    }
+
+    /// A component by name, as [`Library::raw_get`] finds it.
+    fn get(&self, name: &str) -> Result<Option<Component>, String> {
+        if let Some((lib, short)) = qualified(name) {
+            return Ok(self.snap.packs.iter().find(|p| p.id() == lib && p.record.enabled).and_then(|p| p.loaded.components.get(short).cloned()));
+        }
+        for (s, known) in self.lib.sources.iter().zip(&self.snap.sources) {
+            if let Some(c) = known.get(name) {
+                return Ok(Some((**c).clone()));
+            }
+            // Not in memory: a file added since, or one that doesn't parse (and says why).
+            if let Some(c) = s.get(name)? {
+                return Ok(Some(c));
+            }
+        }
+        Ok(None)
+    }
+
+    fn lookup(&self, name: &str, in_library: bool) -> Resolved {
+        if let Some((lib, short)) = qualified(name) {
+            let Some(p) = self.snap.packs.iter().find(|p| p.id() == lib) else {
+                return Resolved::Missing(format!("unknown type `{name}`: no component library `{lib}` is installed"));
+            };
+            if !p.record.enabled {
+                return Resolved::Missing(format!("`{name}` is in the component library `{lib}`, which is turned off"));
+            }
+            return match p.loaded.components.get(short) {
+                Some(c) => Resolved::Found(Arc::new(c.clone())),
+                None => Resolved::Missing(match p.loaded.entries.iter().find(|e| e.name == name).and_then(|e| e.error.as_deref()) {
+                    Some(why) => format!("`{name}` isn't loaded, its library has a problem with it: {why}"),
+                    None => format!("unknown type `{name}`: the component library `{lib}` has no component `{short}`"),
+                }),
+            };
+        }
+        // Inside a library only yaah's own: the user's local components differ from user to user.
+        let sources = || self.lib.sources.iter().zip(&self.snap.sources).filter(|(s, _)| !in_library || s.id() == "yaah");
+        if let Some(c) = sources().find_map(|(_, known)| known.get(name)) {
+            return Resolved::Found(c.clone());
+        }
+        for (s, _) in sources() {
+            match s.get(name) {
+                Ok(Some(c)) => return Resolved::Found(Arc::new(c)),
+                Ok(None) => {}
+                Err(e) => return Resolved::Missing(e),
+            }
+        }
+        Resolved::Missing(format!("unknown type `{name}`; use a primitive from ui_catalog or an existing component"))
+    }
+}
+
+impl Resolve for Resolver<'_> {
+    fn resolve(&self, name: &str, in_library: bool) -> Resolved {
+        let key = (in_library && qualified(name).is_none(), name.to_owned());
+        if let Some(r) = self.memo.borrow().get(&key) {
+            return r.clone();
+        }
+        let r = self.lookup(name, in_library);
+        self.memo.borrow_mut().insert(key, r.clone());
+        r
+    }
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// What the agent sends to create or update a component.
@@ -272,16 +405,129 @@ pub struct Prepared {
 
 impl Library {
     /// The app's library: yaah's own, the user's, and the libraries they installed.
-    pub fn local() -> Self {
+    /// Returns at once: the installed libraries are read on a thread of their own,
+    /// and anything that needs them waits until they are.
+    pub fn local() -> Arc<Self> {
         // yaah's own first: its names are reserved, so they always resolve to the shipped one.
-        let lib = Self::new(vec![Box::new(Bundled::new()), Box::new(LocalDir::new(home().join(".yaah/components")))], Some(Store::user()));
-        lib.clean_staging();
-        lib.reload();
+        let lib = Arc::new(Self::new(vec![Box::new(Bundled::new()), Box::new(LocalDir::new(home().join(".yaah/components")))], Some(Store::user())));
+        *lock(&lib.loaded) = false;
+        let load = {
+            let lib = lib.clone();
+            move || {
+                lib.clean_staging();
+                lib.reload();
+                *lock(&lib.loaded) = true;
+                lib.loaded_cv.notify_all();
+            }
+        };
+        if let Err(e) = std::thread::Builder::new().name("yaah-library-load".into()).spawn(load) {
+            eprintln!("[library] loading in the foreground: {e}");
+            lib.clean_staging();
+            lib.reload();
+            *lock(&lib.loaded) = true;
+        }
         lib
     }
 
     pub(crate) fn new(sources: Vec<Box<dyn ComponentSource>>, store: Option<Store>) -> Self {
-        Self { sources, packs: RwLock::default(), store, staged: Mutex::default(), ops: Mutex::default() }
+        Self {
+            sources,
+            packs: RwLock::default(),
+            store,
+            staged: Mutex::default(),
+            ops: Mutex::default(),
+            generation: AtomicU64::new(0),
+            cache: Mutex::default(),
+            loaded: Mutex::new(true),
+            loaded_cv: Condvar::new(),
+        }
+    }
+
+    /// Wait for the first read of the installed libraries.
+    fn wait_loaded(&self) {
+        let loaded = lock(&self.loaded);
+        drop(self.loaded_cv.wait_while(loaded, |l| !*l).unwrap_or_else(PoisonError::into_inner));
+    }
+
+    /// The library changed: what's in memory is stale.
+    pub(crate) fn changed(&self) {
+        self.generation.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    fn fingerprint(&self) -> u64 {
+        let mut h = DefaultHasher::new();
+        for s in &self.sources {
+            s.fingerprint().hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// The library in memory: the last snapshot while it is current, else a new one.
+    /// The files are looked at no more than every [`RECHECK`].
+    pub(crate) fn snapshot(&self) -> Result<Arc<Snapshot>, String> {
+        self.wait_loaded();
+        // Held while a snapshot is built, so concurrent callers share one build.
+        let mut cache = lock(&self.cache);
+        if let Some(snap) = cache.as_ref()
+            && snap.generation == self.generation()
+        {
+            if lock(&snap.checked).elapsed() < RECHECK {
+                return Ok(snap.clone());
+            }
+            self.refresh_folders();
+            if snap.generation == self.generation() && snap.fingerprint == self.fingerprint() {
+                *lock(&snap.checked) = Instant::now();
+                return Ok(snap.clone());
+            }
+        } else if cache.is_none() {
+            self.refresh_folders();
+        }
+        // Taken before the files are read: a change while reading is caught at the next check.
+        let (generation, fingerprint) = (self.generation(), self.fingerprint());
+        let snap = Arc::new(self.build(generation, fingerprint)?);
+        *cache = Some(snap.clone());
+        Ok(snap)
+    }
+
+    fn build(&self, generation: u64, fingerprint: u64) -> Result<Snapshot, String> {
+        let mut sources = vec![];
+        for s in &self.sources {
+            sources.push(s.list()?.into_iter().map(|c| (c.name.clone(), Arc::new(c))).collect::<HashMap<_, _>>());
+        }
+        let mut snap = Snapshot {
+            generation,
+            fingerprint,
+            checked: Mutex::new(Instant::now()),
+            sources,
+            packs: self.packs(),
+            list: vec![],
+            catalog: OnceLock::new(),
+            names: OnceLock::new(),
+        };
+        // First source wins on a name clash, then every enabled library's valid components by qualified name.
+        let mut by_name: BTreeMap<String, Component> = BTreeMap::new();
+        for known in &snap.sources {
+            for c in known.values() {
+                by_name.entry(c.name.clone()).or_insert_with(|| (**c).clone());
+            }
+        }
+        for p in snap.packs.iter().filter(|p| p.record.enabled) {
+            for c in p.loaded.components.values() {
+                by_name.insert(c.name.clone(), c.clone());
+            }
+        }
+        // One memo for the whole list: each component's libraries are worked out once.
+        let list = {
+            let resolver = Resolver::new(self, &snap);
+            let mut memo = HashMap::new();
+            by_name.into_values().map(|c| with_uses(&resolver, c, &mut memo)).collect()
+        };
+        snap.list = list;
+        Ok(snap)
     }
 
     #[cfg(test)]
@@ -295,126 +541,79 @@ impl Library {
 
     /// The installed libraries as they are now.
     pub(crate) fn packs(&self) -> Vec<Arc<Pack>> {
-        self.packs.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+        self.wait_loaded();
+        self.packs.read().unwrap_or_else(PoisonError::into_inner).clone()
     }
 
     /// All components, first source wins on a name clash, then every enabled
     /// library's valid components by qualified name.
     pub fn list(&self) -> Result<Vec<Component>, String> {
-        self.refresh_folders();
-        let mut by_name: BTreeMap<String, Component> = BTreeMap::new();
-        for s in &self.sources {
-            for c in s.list()? {
-                by_name.entry(c.name.clone()).or_insert(c);
-            }
-        }
-        for p in self.packs().iter().filter(|p| p.record.enabled) {
-            for c in p.loaded.components.values() {
-                by_name.insert(c.name.clone(), c.clone());
-            }
-        }
-        // One memo for the whole list: each component's libraries are worked out once.
-        let mut memo = HashMap::new();
-        Ok(by_name.into_values().map(|c| self.with_uses(c, &mut memo)).collect())
+        Ok(self.snapshot()?.list.clone())
     }
 
     pub fn get(&self, name: &str) -> Result<Option<Component>, String> {
-        self.refresh_folders();
-        Ok(self.raw_get(name)?.map(|c| self.with_uses(c, &mut HashMap::new())))
+        let snap = self.snapshot()?;
+        if let Ok(i) = snap.list.binary_search_by(|c| c.name.as_str().cmp(name)) {
+            return Ok(Some(snap.list[i].clone()));
+        }
+        let resolver = Resolver::new(self, &snap);
+        Ok(resolver.get(name)?.map(|c| with_uses(&resolver, c, &mut HashMap::new())))
     }
 
     /// A component by name: qualified from an enabled library, else yaah's own, then local.
     pub(crate) fn raw_get(&self, name: &str) -> Result<Option<Component>, String> {
-        if let Some((lib, short)) = qualified(name) {
-            return Ok(self.packs().iter().find(|p| p.id() == lib && p.record.enabled).and_then(|p| p.loaded.components.get(short).cloned()));
-        }
-        for s in &self.sources {
-            if let Some(c) = s.get(name)? {
-                return Ok(Some(c));
-            }
-        }
-        Ok(None)
-    }
-
-    /// `c` with its `uses` filled in. `memo` holds each nested component's
-    /// libraries once worked out, so a component used many times is walked once.
-    fn with_uses(&self, mut c: Component, memo: &mut Uses) -> Component {
-        let mut uses = BTreeSet::new();
-        let in_library = qualified(&c.name).is_some();
-        self.collect_uses(&c.tree, &mut vec![c.name.clone()], in_library, memo, &mut 0, &mut uses);
-        c.uses = uses.into_iter().collect();
-        c
-    }
-
-    /// The libraries component `name` is built on, worked out once per `memo`.
-    fn uses_of(&self, name: &str, stack: &mut Vec<String>, in_library: bool, memo: &mut Uses) -> Rc<BTreeSet<String>> {
-        // Inside a library an unqualified name may resolve differently (yaah's own only).
-        let key = if in_library && qualified(name).is_none() { format!("\0{name}") } else { name.to_owned() };
-        if let Some(u) = memo.get(&key) {
-            return u.clone();
-        }
-        let mut out = BTreeSet::new();
-        if let Resolved::Found(c) = self.resolve(name, in_library) {
-            stack.push(name.to_owned());
-            self.collect_uses(&c.tree, stack, in_library || qualified(name).is_some(), memo, &mut 0, &mut out);
-            stack.pop();
-        }
-        let out = Rc::new(out);
-        memo.insert(key, out.clone());
-        out
-    }
-
-    /// Libraries a tree is built on, following nested components (cycle-safe).
-    /// At most [`MAX_NODES`] nodes of one tree are walked (`walked` counts them):
-    /// the save checks keep trees under that, but a file on disk may not be.
-    fn collect_uses(&self, node: &Value, stack: &mut Vec<String>, in_library: bool, memo: &mut Uses, walked: &mut usize, out: &mut BTreeSet<String>) {
-        *walked += 1;
-        if *walked > MAX_NODES {
-            return;
-        }
-        let Some(obj) = node.as_object() else { return };
-        for key in ["children", "else"] {
-            for kid in obj.get(key).and_then(Value::as_array).into_iter().flatten() {
-                self.collect_uses(kid, stack, in_library, memo, walked, out);
-            }
-        }
-        let Some(t) = obj.get("type").and_then(Value::as_str) else { return };
-        if let Some(p) = primitive(t) {
-            out.extend(p.get("uses").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned));
-        } else if !stack.iter().any(|s| s == t) && stack.len() < MAX_NESTING {
-            out.extend(self.uses_of(t, stack, in_library, memo).iter().cloned());
-        }
+        let snap = self.snapshot()?;
+        Resolver::new(self, &snap).get(name)
     }
 
     /// Everything an agent needs to choose or build a component.
+    #[cfg(test)]
     pub fn catalog(&self) -> Result<Value, String> {
-        let p = primitives();
-        let components: Vec<Value> = self
-            .list()?
-            .into_iter()
-            .map(|c| {
-                let mut v = json!({ "name": c.name, "version": c.version, "source": c.source, "description": c.description, "props": c.props, "uses": c.uses });
-                if let Some(title) = c.library {
-                    v["library"] = title.into();
-                }
-                v
+        serde_json::from_str(&self.catalog_json()?).map_err(|e| e.to_string())
+    }
+
+    /// [`catalog`](Self::catalog) as JSON text, built once per snapshot (`ui_catalog` sends it as is).
+    pub fn catalog_json(&self) -> Result<Arc<String>, String> {
+        let snap = self.snapshot()?;
+        Ok(snap
+            .catalog
+            .get_or_init(|| {
+                let p = primitives();
+                let components: Vec<Value> = snap
+                    .list
+                    .iter()
+                    .map(|c| {
+                        let mut v = json!({ "name": c.name, "version": c.version, "source": c.source, "description": c.description, "props": c.props, "uses": c.uses });
+                        if let Some(title) = &c.library {
+                            v["library"] = title.clone().into();
+                        }
+                        v
+                    })
+                    .collect();
+                Arc::new(json!({ "primitives": p["primitives"], "syntax": p["syntax"], "sources": p["sources"], "components": components }).to_string())
             })
-            .collect();
-        Ok(json!({ "primitives": p["primitives"], "syntax": p["syntax"], "sources": p["sources"], "components": components }))
+            .clone())
+    }
+
+    /// Component names, yaah's own first, then the user's, then installed libraries' (what the guide lists).
+    pub fn component_names(&self) -> Arc<Vec<String>> {
+        let Ok(snap) = self.snapshot() else { return Arc::default() };
+        snap.names
+            .get_or_init(|| {
+                let mut all: Vec<&Component> = snap.list.iter().collect();
+                all.sort_by_key(|c| (u8::from(c.source != "yaah") + u8::from(c.source != "yaah" && c.source != "local"), c.name.as_str()));
+                Arc::new(all.into_iter().map(|c| c.name.clone()).collect())
+            })
+            .clone()
     }
 
     /// Validate and store a component in the local collection. Errors are written for the agent to fix.
     pub fn save(&self, req: SaveRequest) -> Result<Component, Vec<String>> {
-        if let Some((lib, short)) = qualified(&req.name) {
-            return Err(vec![format!(
-                "`{}` is a qualified name: components named `library/name` belong to an installed library and are read-only, and \
-                 ui_save_component only writes the user's own collection. Copy it to the collection first: read it with ui_get_component \
-                 and save it under an unqualified name such as `{short}` (pick another if that's taken), then change the copy. \
-                 It can keep using `{lib}/…` components",
-                req.name
-            )]);
+        if let Some(e) = qualified_save_error(&req.name) {
+            return Err(vec![e]);
         }
-        self.refresh_folders();
+        let snap = self.snapshot().map_err(|e| vec![e])?;
+        let resolver = Resolver::new(self, &snap);
         let mut errs = vec![];
         if !valid_name(&req.name) {
             errs.push("name must be kebab-case: lowercase letters, digits and -, starting with a letter, 2-48 chars".into());
@@ -422,7 +621,7 @@ impl Library {
         if is_primitive(&req.name) {
             errs.push(format!("`{}` is a primitive; pick another name", req.name));
         }
-        let existing = self.raw_get(&req.name).map_err(|e| vec![e])?;
+        let existing = resolver.get(&req.name).map_err(|e| vec![e])?;
         if let Some(c) = &existing
             && self.sources.iter().any(|s| !s.writable() && s.id() == c.source)
         {
@@ -444,7 +643,7 @@ impl Library {
         }
 
         // The tree may use other library components, but never itself.
-        check_contents(&req.name, &req.description, &req.props, &req.tree, &req.examples, self, false, &mut errs);
+        check_contents(&req.name, &req.description, &req.props, &req.tree, &req.examples, &resolver, false, &mut errs);
         if !errs.is_empty() {
             return Err(errs);
         }
@@ -464,17 +663,19 @@ impl Library {
         };
         let target = self.sources.iter().find(|s| s.writable()).ok_or_else(|| vec!["no writable component source".to_owned()])?;
         target.save(&component).map_err(|e| vec![e])?;
-        Ok(self.with_uses(Component { source: target.id().to_owned(), ..component }, &mut HashMap::new()))
+        self.changed();
+        Ok(with_uses(&resolver, Component { source: target.id().to_owned(), ..component }, &mut HashMap::new()))
     }
 
     /// Validate a render request and expand library references.
     pub fn prepare(&self, component: Option<&str>, props: Value, tree: Option<Value>) -> Result<Prepared, Vec<String>> {
-        self.refresh_folders();
+        let snap = self.snapshot().map_err(|e| vec![e])?;
+        let resolver = Resolver::new(self, &snap);
         let mut errs = vec![];
         let props = if props.is_null() { json!({}) } else { props };
         let (root, name, version) = match (component, tree) {
             (Some(name), None) => {
-                let c = match self.resolve(name, false) {
+                let c = match resolver.resolve(name, false) {
                     Resolved::Found(c) => c,
                     Resolved::Missing(why) if qualified(name).is_some() => return Err(vec![why]),
                     _ => return Err(vec![format!("no component named `{name}`; call ui_catalog to see what exists")]),
@@ -483,7 +684,7 @@ impl Library {
                 (json!({ "type": name, "props": props }), Some(name.to_owned()), Some(c.version))
             }
             (None, Some(tree)) => {
-                validate(&tree, "tree", self, &mut Ctx::default(), 0, &mut errs);
+                validate(&tree, "tree", &resolver, &mut Ctx::default(), 0, &mut errs);
                 (tree, None, None)
             }
             _ => return Err(vec!["give either `component` (with `props`) or an ad-hoc `tree`, not both".into()]),
@@ -491,7 +692,7 @@ impl Library {
         if !errs.is_empty() {
             return Err(errs);
         }
-        let tree = Expansion::new(self).expand(&root, &mut vec![], false, &mut errs);
+        let tree = Expansion::new(&resolver).expand(&root, &mut vec![], false, &mut errs);
         if !errs.is_empty() {
             return Err(errs);
         }
@@ -501,32 +702,80 @@ impl Library {
 
 impl Resolve for Library {
     fn resolve(&self, name: &str, in_library: bool) -> Resolved {
-        if let Some((lib, short)) = qualified(name) {
-            let packs = self.packs();
-            let Some(p) = packs.iter().find(|p| p.id() == lib) else {
-                return Resolved::Missing(format!("unknown type `{name}`: no component library `{lib}` is installed"));
-            };
-            if !p.record.enabled {
-                return Resolved::Missing(format!("`{name}` is in the component library `{lib}`, which is turned off"));
-            }
-            return match p.loaded.components.get(short) {
-                Some(c) => Resolved::Found(Rc::new(c.clone())),
-                None => Resolved::Missing(match p.loaded.entries.iter().find(|e| e.name == name).and_then(|e| e.error.as_deref()) {
-                    Some(why) => format!("`{name}` isn't loaded, its library has a problem with it: {why}"),
-                    None => format!("unknown type `{name}`: the component library `{lib}` has no component `{short}`"),
-                }),
-            };
+        match self.snapshot() {
+            Ok(snap) => Resolver::new(self, &snap).lookup(name, in_library),
+            Err(e) => Resolved::Missing(e),
         }
-        // Inside a library only yaah's own: the user's local components differ from user to user.
-        for s in self.sources.iter().filter(|s| !in_library || s.id() == "yaah") {
-            match s.get(name) {
-                Ok(Some(c)) => return Resolved::Found(Rc::new(c)),
-                Ok(None) => {}
-                Err(e) => return Resolved::Missing(e),
-            }
-        }
-        Resolved::Missing(format!("unknown type `{name}`; use a primitive from ui_catalog or an existing component"))
     }
+}
+
+/// `c` with its `uses` filled in. `memo` holds each nested component's
+/// libraries once worked out, so a component used many times is walked once.
+fn with_uses(lib: &dyn Resolve, mut c: Component, memo: &mut Uses) -> Component {
+    let mut uses = BTreeSet::new();
+    let in_library = qualified(&c.name).is_some();
+    collect_uses(lib, &c.tree, &mut vec![c.name.clone()], in_library, memo, &mut 0, &mut uses);
+    c.uses = uses.into_iter().collect();
+    c
+}
+
+/// The libraries component `name` is built on, worked out once per `memo`.
+fn uses_of(lib: &dyn Resolve, name: &str, stack: &mut Vec<String>, in_library: bool, memo: &mut Uses) -> Rc<BTreeSet<String>> {
+    // Inside a library an unqualified name may resolve differently (yaah's own only).
+    let key = if in_library && qualified(name).is_none() { format!("\0{name}") } else { name.to_owned() };
+    if let Some(u) = memo.get(&key) {
+        return u.clone();
+    }
+    let mut out = BTreeSet::new();
+    if let Resolved::Found(c) = lib.resolve(name, in_library) {
+        stack.push(name.to_owned());
+        collect_uses(lib, &c.tree, stack, in_library || qualified(name).is_some(), memo, &mut 0, &mut out);
+        stack.pop();
+    }
+    let out = Rc::new(out);
+    memo.insert(key, out.clone());
+    out
+}
+
+/// Libraries a tree is built on, following nested components (cycle-safe).
+/// At most [`MAX_NODES`] nodes of one tree are walked (`walked` counts them):
+/// the save checks keep trees under that, but a file on disk may not be.
+fn collect_uses(
+    lib: &dyn Resolve,
+    node: &Value,
+    stack: &mut Vec<String>,
+    in_library: bool,
+    memo: &mut Uses,
+    walked: &mut usize,
+    out: &mut BTreeSet<String>,
+) {
+    *walked += 1;
+    if *walked > MAX_NODES {
+        return;
+    }
+    let Some(obj) = node.as_object() else { return };
+    for key in ["children", "else"] {
+        for kid in obj.get(key).and_then(Value::as_array).into_iter().flatten() {
+            collect_uses(lib, kid, stack, in_library, memo, walked, out);
+        }
+    }
+    let Some(t) = obj.get("type").and_then(Value::as_str) else { return };
+    if let Some(p) = primitive(t) {
+        out.extend(p.get("uses").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned));
+    } else if !stack.iter().any(|s| s == t) && stack.len() < MAX_NESTING {
+        out.extend(uses_of(lib, t, stack, in_library, memo).iter().cloned());
+    }
+}
+
+/// Why `name` can't be saved, when it is a library's qualified name.
+pub(crate) fn qualified_save_error(name: &str) -> Option<String> {
+    let (lib, short) = qualified(name)?;
+    Some(format!(
+        "`{name}` is a qualified name: components named `library/name` belong to an installed library and are read-only, and \
+         ui_save_component only writes the user's own collection. Copy it to the collection first: read it with ui_get_component \
+         and save it under an unqualified name such as `{short}` (pick another if that's taken), then change the copy. \
+         It can keep using `{lib}/…` components"
+    ))
 }
 
 /// The checks every stored component passes, whoever wrote it: a description,
@@ -777,7 +1026,7 @@ fn validate(node: &Value, path: &str, lib: &dyn Resolve, ctx: &mut Ctx, depth: u
 }
 
 /// A value as it goes into an error: short, whatever the agent sent.
-fn shown(v: &Value) -> String {
+pub(crate) fn shown(v: &Value) -> String {
     let text = v.to_string();
     if text.chars().count() > 80 { format!("{}…", text.chars().take(80).collect::<String>()) } else { text }
 }
@@ -1052,6 +1301,81 @@ mod tests {
             })
             .unwrap_err();
         assert!(errs[0].contains("is at v2 but you expected v1"), "{errs:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    fn description_of(lib: &Library, name: &str) -> Option<String> {
+        let catalog: Value = serde_json::from_str(&lib.catalog_json().unwrap()).unwrap();
+        catalog["components"].as_array().unwrap().iter().find(|c| c["name"] == name).map(|c| c["description"].as_str().unwrap().to_owned())
+    }
+
+    /// The library is kept in memory: yaah's own saves show at once, an edit on
+    /// disk within the recheck window, and the catalog and names are built once per change.
+    #[test]
+    fn the_library_in_memory_follows_saves_and_edits() {
+        let (lib, dir) = lib();
+        save(&lib, "env-badge", json!({ "type": "badge", "props": { "text": "{{env}}" } })).unwrap();
+        assert_eq!(description_of(&lib, "env-badge").as_deref(), Some("A test component used in unit tests"));
+        let (catalog, names) = (lib.catalog_json().unwrap(), lib.component_names());
+        assert!(Arc::ptr_eq(&catalog, &lib.catalog_json().unwrap()), "the catalog JSON is built once");
+        assert!(Arc::ptr_eq(&names, &lib.component_names()), "and the names");
+
+        // Someone edits the file: memory serves the old one for now, then the edit within the window.
+        let file = dir.join("env-badge/component.json");
+        let mut c: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        c["description"] = json!("Edited in an editor, outside yaah");
+        std::fs::write(&file, c.to_string()).unwrap();
+        let edited = Instant::now();
+        assert_eq!(description_of(&lib, "env-badge").as_deref(), Some("A test component used in unit tests"), "from memory");
+        while description_of(&lib, "env-badge").as_deref() != Some("Edited in an editor, outside yaah") {
+            assert!(edited.elapsed() < RECHECK + Duration::from_secs(1), "the edit didn't show within {RECHECK:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!Arc::ptr_eq(&catalog, &lib.catalog_json().unwrap()), "a new catalog for the new library");
+
+        // A save shows at once, in the catalog, the names and to renders.
+        save(&lib, "env-card", json!({ "type": "card", "children": [{ "type": "env-badge", "props": { "env": "{{env}}" } }] })).unwrap();
+        assert!(description_of(&lib, "env-card").is_some());
+        assert!(lib.component_names().contains(&"env-card".to_owned()));
+        assert_eq!(lib.get("env-card").unwrap().unwrap().version, 1);
+        // A file added by hand renders at once (looked up on a miss), and lists within the window.
+        let mut copy = c.clone();
+        copy["name"] = json!("env-copy");
+        std::fs::create_dir_all(dir.join("env-copy")).unwrap();
+        std::fs::write(dir.join("env-copy/component.json"), copy.to_string()).unwrap();
+        assert!(lib.prepare(Some("env-copy"), json!({ "env": "x" }), None).is_ok());
+        // Removed by hand: gone within the window.
+        std::fs::remove_dir_all(dir.join("env-card")).unwrap();
+        let removed = Instant::now();
+        while description_of(&lib, "env-card").is_some() || description_of(&lib, "env-copy").is_none() {
+            assert!(removed.elapsed() < RECHECK + Duration::from_secs(1));
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// While checking one tree each name is looked up once, however often it is used.
+    #[test]
+    fn names_are_resolved_once_per_check() {
+        struct Counting<'a>(&'a Library, std::cell::Cell<usize>);
+        impl Resolve for Counting<'_> {
+            fn resolve(&self, name: &str, in_library: bool) -> Resolved {
+                self.1.set(self.1.get() + 1);
+                self.0.resolve(name, in_library)
+            }
+        }
+        let (lib, dir) = lib();
+        save(&lib, "env-badge", json!({ "type": "badge", "props": { "text": "{{env}}" } })).unwrap();
+        let snap = lib.snapshot().unwrap();
+        let counting = Counting(&lib, std::cell::Cell::new(0));
+        let memo = Resolver { lib: &lib, snap: &snap, memo: RefCell::default() };
+        let tree = json!({ "type": "stack", "children": vec![json!({ "type": "env-badge", "props": { "env": "x" } }); 200] });
+        let mut errs = vec![];
+        validate(&tree, "tree", &counting, &mut Ctx::default(), 0, &mut errs);
+        assert_eq!(counting.1.get(), 200, "without a memo: once per node");
+        validate(&tree, "tree", &memo, &mut Ctx::default(), 0, &mut errs);
+        assert_eq!(memo.memo.borrow().len(), 1, "with it: once per name");
+        assert!(errs.is_empty(), "{errs:?}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

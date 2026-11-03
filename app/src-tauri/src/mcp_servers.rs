@@ -13,7 +13,9 @@
 //!
 //! Also here: a minimal MCP client behind "Test" (initialize, then tools/list)
 //! and import from Claude Code, Claude Desktop and Cursor configs. Secret values
-//! (env, headers) are never logged.
+//! (env, headers) are never logged, and never sent to the interface: Settings
+//! gets them masked (`••••1234`, see [`mask`]) and sends a masked value back
+//! unchanged when it wasn't edited, which keeps the stored one ([`Store::unmask`]).
 
 use crate::json_file::JsonFile;
 use crate::{accounts, agents};
@@ -55,6 +57,96 @@ impl Transport {
 
 fn yes() -> bool {
     true
+}
+
+// ── Secrets ─────────────────────────────────────────────────────────────────
+
+/// How a hidden value starts. The interface shows it as is and sends it back unchanged when not edited.
+pub const MASK: &str = "••••";
+
+/// A secret as the interface sees it: `••••` and, for a long one, its last 4
+/// characters (enough to tell two keys apart, too few to matter).
+pub fn mask(value: &str) -> String {
+    let n = value.chars().count();
+    if n >= 12 { format!("{MASK}{}", value.chars().skip(n - 4).collect::<String>()) } else { MASK.to_owned() }
+}
+
+/// Headers whose values aren't credentials, shown as they are. Every other header is masked.
+const PLAIN_HEADERS: &[&str] = &["accept", "accept-language", "content-type", "user-agent", "mcp-protocol-version", "x-request-id"];
+
+/// Whether an env var's value is masked: by its name (`*_KEY`, `*TOKEN*`, a
+/// password…), or because the value looks like a credential (a long token, a
+/// URL with a password in it).
+pub fn secret_env(name: &str, value: &str) -> bool {
+    const WORDS: &[&str] = &[
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "PASS",
+        "PWD",
+        "AUTH",
+        "CREDENTIAL",
+        "CREDENTIALS",
+        "COOKIE",
+        "SESSION",
+        "PRIVATE",
+        "BEARER",
+        "DSN",
+    ];
+    let upper = name.to_ascii_uppercase();
+    // `GITHUB_TOKEN`, `APIKEY`, `DB-PASSWORD`, `X_AUTH`: a part that is, or ends in, one of the words.
+    let by_name = upper.split(['_', '-']).any(|part| WORDS.iter().any(|w| part.ends_with(w)));
+    let url_with_password =
+        value.split_once("://").is_some_and(|(_, rest)| rest.split('/').next().is_some_and(|auth| auth.contains(':') && auth.contains('@')));
+    // A long run of letters and digits with no spaces, no path and no URL: shaped like a key.
+    let tokenish = value.len() >= 20
+        && !value.contains("://")
+        && !value.starts_with(['/', '~', '.', '@'])
+        && !value.contains(char::is_whitespace)
+        && value.chars().any(|c| c.is_ascii_digit())
+        && value.chars().any(|c| c.is_ascii_alphabetic());
+    by_name || url_with_password || tokenish
+}
+
+pub fn secret_header(name: &str) -> bool {
+    !PLAIN_HEADERS.contains(&name.to_ascii_lowercase().as_str())
+}
+
+/// `server` as the interface may see it: secret env and header values masked.
+/// Returns the masked keys.
+fn masked(server: &mut Server) -> (Vec<String>, Vec<String>) {
+    let mut env_keys = vec![];
+    for (k, v) in &mut server.env {
+        if secret_env(k, v) {
+            *v = mask(v);
+            env_keys.push(k.clone());
+        }
+    }
+    let mut header_keys = vec![];
+    for (k, v) in &mut server.headers {
+        if secret_header(k) {
+            *v = mask(v);
+            header_keys.push(k.clone());
+        }
+    }
+    (env_keys, header_keys)
+}
+
+/// Put back the stored values the interface sent masked and unchanged. A
+/// masked value with nothing stored behind it (a renamed key, say) is refused.
+fn unmask_values(sent: &mut BTreeMap<String, String>, stored: Option<&BTreeMap<String, String>>, what: &str) -> Result<(), String> {
+    for (k, v) in sent.iter_mut() {
+        if !v.starts_with(MASK) {
+            continue;
+        }
+        match stored.and_then(|s| s.get(k.trim())).filter(|old| mask(old) == *v) {
+            Some(old) => old.clone_into(v),
+            None => return Err(format!("the {what} `{}` was hidden; type its value again", k.trim())),
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -271,10 +363,28 @@ impl Store {
         servers
     }
 
-    /// Create, replace, or rename (with `draft.original`) a server.
+    /// `draft` with the masked values Settings sent back unchanged replaced by the
+    /// stored ones (from the server it edits: `original`, else its name).
+    pub fn unmask(&self, draft: &Draft) -> Result<Draft, String> {
+        let servers = self.list();
+        Self::unmask_in(&servers, draft)
+    }
+
+    fn unmask_in(servers: &[Server], draft: &Draft) -> Result<Draft, String> {
+        let name = draft.original.as_deref().unwrap_or(draft.name.trim());
+        let stored = servers.iter().find(|s| s.name == name);
+        let mut out = draft.clone();
+        unmask_values(&mut out.env, stored.map(|s| &s.env), "environment variable")?;
+        unmask_values(&mut out.headers, stored.map(|s| &s.headers), "header")?;
+        Ok(out)
+    }
+
+    /// Create, replace, or rename (with `draft.original`) a server. Masked values
+    /// sent back unchanged keep what is stored.
     pub fn save(&self, draft: &Draft) -> Result<Server, String> {
-        let server = draft.to_server()?;
         self.update(|file| {
+            let draft = &Self::unmask_in(&file.servers, draft)?;
+            let server = draft.to_server()?;
             let original = draft.original.as_deref();
             if file.servers.iter().any(|s| s.name == server.name && Some(s.name.as_str()) != original) {
                 return Err(format!("there's already a server named `{}`", server.name));
@@ -396,6 +506,10 @@ pub struct ServerInfo {
     pub problem: Option<String>,
     /// Saved agents whose last `initialize` said they can't use this transport.
     pub unsupported_by: Vec<String>,
+    /// Env vars and headers whose value is masked (`••••1234`): send it back
+    /// unchanged to keep the stored value, or a new one to replace it.
+    pub secret_env: Vec<String>,
+    pub secret_headers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -415,7 +529,7 @@ pub struct McpList {
     pub path: String,
 }
 
-pub fn info(server: Server, profiles: &[agents::Profile]) -> ServerInfo {
+pub fn info(mut server: Server, profiles: &[agents::Profile]) -> ServerInfo {
     let problem = (server.transport == Transport::Stdio && agents::which(&server.command).is_none())
         .then(|| format!("`{}` isn't on your PATH, so agents won't get this server", server.command));
     let unsupported_by = profiles
@@ -429,7 +543,8 @@ pub fn info(server: Server, profiles: &[agents::Profile]) -> ServerInfo {
         })
         .map(|p| p.label.clone())
         .collect();
-    ServerInfo { command_line: server.command_line(), problem, unsupported_by, server }
+    let (secret_env, secret_headers) = masked(&mut server);
+    ServerInfo { command_line: server.command_line(), problem, unsupported_by, secret_env, secret_headers, server }
 }
 
 pub fn list() -> McpList {
@@ -974,7 +1089,25 @@ fn parse_entry(name: &str, v: &Value) -> Option<Server> {
 }
 
 /// (original name, server) for each server in a config file.
-fn read_source(path: &Path) -> Vec<(String, Server)> {
+/// The servers in another tool's config file. Kept in memory while the file is
+/// unchanged on disk: `~/.claude.json` (often megabytes of history) is read on
+/// every Claude `session/new` and `session/load`.
+pub(crate) fn read_source(path: &Path) -> Vec<(String, Server)> {
+    type Parsed = std::collections::HashMap<PathBuf, (crate::json_file::Stamp, Vec<(String, Server)>)>;
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<Parsed>> = std::sync::LazyLock::new(Default::default);
+    let Some(stamp) = crate::json_file::Stamp::of(path) else { return vec![] };
+    if let Some((s, servers)) = CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(path)
+        && *s == stamp
+    {
+        return servers.clone();
+    }
+    let servers = parse_source(path);
+    // The stamp from before the read: a write during it is seen next time.
+    CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(path.to_path_buf(), (stamp, servers.clone()));
+    servers
+}
+
+fn parse_source(path: &Path) -> Vec<(String, Server)> {
     let Ok(raw) = std::fs::read_to_string(path) else { return vec![] };
     let Ok(json) = serde_json::from_str::<Value>(&raw) else {
         eprintln!("[mcp] {} isn't valid JSON; nothing imported from it", path.display());
@@ -1211,6 +1344,99 @@ mod tests {
             assert_eq!(mode, 0o600, "env and headers may hold secrets");
         }
         assert!(!dir.join("mcp.json.tmp").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Settings gets secrets masked; saving with the masked value unchanged keeps
+    /// the stored secret, a new value replaces it, and a masked value with nothing
+    /// behind it is refused.
+    #[test]
+    fn secrets_go_to_settings_masked_and_come_back_unchanged() {
+        let dir = temp_dir();
+        let store = Store::at(dir.join("mcp.json"));
+        let mut web = http_draft("web", "https://x.example/mcp");
+        web.headers =
+            BTreeMap::from([("Authorization".into(), "Bearer sk-live-0123456789abcd".into()), ("Accept".into(), "application/json".into())]);
+        store.save(&web).unwrap();
+        let mut fs = stdio_draft("fs", "mcp-fs");
+        fs.env = BTreeMap::from([
+            ("GITHUB_TOKEN".into(), "ghp_abcdefghijklmnop1234".into()),
+            ("DB_PASSWORD".into(), "short".into()),
+            ("DATABASE_URL".into(), "postgres://app:hunter2@db:5432/app".into()),
+            ("LOG_LEVEL".into(), "debug".into()),
+            ("ROOT".into(), "/Users/ada/projects/some-long-folder-1".into()),
+        ]);
+        store.save(&fs).unwrap();
+
+        let shown: Vec<ServerInfo> = store.list().into_iter().map(|s| info(s, &[])).collect();
+        let json = serde_json::to_string(&shown).unwrap();
+        for secret in ["sk-live-0123456789abcd", "ghp_abcdefghijklmnop1234", "short", "hunter2"] {
+            assert!(!json.contains(secret), "{secret} never reaches the interface");
+        }
+        let (web_info, fs_info) = (&shown[0], &shown[1]);
+        assert_eq!(web_info.server.headers["Authorization"], "••••abcd", "the last 4 tell keys apart");
+        assert_eq!(web_info.server.headers["Accept"], "application/json", "plain headers stay plain");
+        assert_eq!(web_info.secret_headers, ["Authorization"]);
+        assert_eq!(fs_info.server.env["DB_PASSWORD"], "••••", "a short secret shows nothing of itself");
+        assert_eq!(fs_info.server.env["LOG_LEVEL"], "debug");
+        assert_eq!(fs_info.server.env["ROOT"], "/Users/ada/projects/some-long-folder-1", "a path isn't a secret");
+        assert_eq!(fs_info.secret_env, ["DATABASE_URL", "DB_PASSWORD", "GITHUB_TOKEN"]);
+        assert_eq!(serde_json::to_value(web_info).unwrap()["secretHeaders"], json!(["Authorization"]));
+
+        // Round trip: Settings sends back what it was shown, with one value edited.
+        let edit = |i: &ServerInfo, transport| Draft {
+            original: Some(i.server.name.clone()),
+            name: i.server.name.clone(),
+            transport,
+            command_line: i.command_line.clone(),
+            env: i.server.env.clone(),
+            url: i.server.url.clone(),
+            headers: i.server.headers.clone(),
+            enabled: true,
+            agents: vec![],
+        };
+        let mut back = edit(fs_info, Transport::Stdio);
+        back.env.insert("LOG_LEVEL".into(), "info".into());
+        back.env.insert("DB_PASSWORD".into(), "a-new-password".into());
+        store.save(&back).unwrap();
+        let saved = store.list().into_iter().find(|s| s.name == "fs").unwrap();
+        assert_eq!(saved.env["GITHUB_TOKEN"], "ghp_abcdefghijklmnop1234", "unchanged mask: the stored secret is kept");
+        assert_eq!(saved.env["DATABASE_URL"], "postgres://app:hunter2@db:5432/app");
+        assert_eq!((saved.env["DB_PASSWORD"].as_str(), saved.env["LOG_LEVEL"].as_str()), ("a-new-password", "info"));
+        // Headers too (masked values aren't valid header characters, so this must happen before checking them).
+        store.save(&edit(web_info, Transport::Http)).unwrap();
+        assert_eq!(store.list()[0].headers["Authorization"], "Bearer sk-live-0123456789abcd");
+        // Renaming the server keeps its secrets (it's found by `original`).
+        let mut renamed = edit(web_info, Transport::Http);
+        renamed.name = "web-2".into();
+        store.save(&renamed).unwrap();
+        assert_eq!(store.list()[0].headers["Authorization"], "Bearer sk-live-0123456789abcd");
+        // A masked value under a new key has nothing behind it.
+        let mut moved = edit(&info(store.list()[0].clone(), &[]), Transport::Http);
+        let token = moved.headers.remove("Authorization").unwrap();
+        moved.headers.insert("X-Api-Key".into(), token);
+        assert_eq!(store.save(&moved).unwrap_err(), "the header `X-Api-Key` was hidden; type its value again");
+        // Testing an unsaved edit uses the stored secret too.
+        let tested = store.unmask(&edit(&info(store.list()[0].clone(), &[]), Transport::Http)).unwrap();
+        assert_eq!(tested.headers["Authorization"], "Bearer sk-live-0123456789abcd");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// `~/.claude.json` is parsed once while it is unchanged on disk.
+    #[test]
+    fn other_tools_configs_are_read_again_only_when_they_change() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        let path = dir.join(".claude.json");
+        std::fs::write(&path, json!({ "mcpServers": { "a": { "command": "x" } } }).to_string()).unwrap();
+        assert_eq!(read_source(&path).len(), 1);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+        assert_eq!(read_source(&path).len(), 1, "unchanged: from memory");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&path, json!({ "mcpServers": { "a": { "command": "x" }, "b": { "command": "y" } } }).to_string()).unwrap();
+        assert_eq!(read_source(&path).len(), 2, "changed: read again");
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(read_source(&path), vec![]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
