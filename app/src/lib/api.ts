@@ -64,15 +64,60 @@ export type AgentDraft = {
   configDir: string | null;
 };
 
+/** What yaah knows about one version of an npm-based agent (`agent_versions.rs`). */
+export type AgentVersionStatus = "installed" | "verifying" | "verified" | "failed";
+export type AgentAdvisory = { id: string; severity: string; title: string; url: string };
+/** One run of the adapter conformance suite on a version (`agent_conformance.rs`). */
+export type ConformanceCheck = { name: string; ok: boolean; detail: string };
+export type ConformanceReport = {
+  version: string;
+  /** Empty when the report only holds a daily audit. */
+  checks: ConformanceCheck[];
+  advisories: AgentAdvisory[];
+  /** How the last `npm audit` went: "unavailable" (offline) and "error" keep the last answer. */
+  audit: "none" | "ok" | "unavailable" | "error";
+  auditDetail?: string;
+  auditedAt?: number;
+  checkedAt: number;
+  seconds: number;
+  promoted: boolean;
+};
+
 export type AgentPreset = {
   id: string;
   label: string;
   blurb: string;
   docs: string;
   install: string;
-  via: "binary" | "npx" | "missing" | "custom";
+  /** "installed": yaah installed its npm package and runs it with Node; "npx": not yet, so the first start goes through npx. */
+  via: "binary" | "installed" | "npx" | "missing" | "custom";
   path: string | null;
   draft: AgentDraft;
+  // npm-based presets only (null/false/[] otherwise).
+  package: string | null;
+  /** The version yaah was tested with. */
+  pinned: string | null;
+  /** The version that runs: the hold, else the newest verified one, else the pin. */
+  active: string | null;
+  /** "tested" for the pin, else the active version's status. */
+  activeStatus: "tested" | AgentVersionStatus | null;
+  advisories: AgentAdvisory[];
+  /** The conformance suite's last report on the active version (or only its daily audit). */
+  report: ConformanceReport | null;
+  /** The user holds the agent at the active version. */
+  held: boolean;
+  /** yaah's copy of the active version is installed. */
+  installed: boolean;
+  latest: { latest: string; checkedAt: number } | null;
+  /** The newest version above the active one that yaah has installed or checked. */
+  candidate: {
+    version: string;
+    status: AgentVersionStatus;
+    checkedAt: number;
+    failures: string[];
+    advisories: AgentAdvisory[];
+    report: ConformanceReport | null;
+  } | null;
 };
 
 /** Chats can start unless the agent is known to need a login. */
@@ -383,6 +428,16 @@ export const api = {
   // agents & login
   listAgents: () => invoke<{ profiles: AgentProfile[]; defaultId: string | null }>("list_agents"),
   listAgentPresets: () => invoke<AgentPreset[]>("list_agent_presets"),
+  /** Hold an npm-based agent at `version`, or release the hold (null). `running`: profiles still on the old version. */
+  holdAgentVersion: (preset: string, version: string | null) =>
+    invoke<{ presets: AgentPreset[]; running: string[] }>("hold_agent_version", { preset, version }),
+  /** Read the latest versions now; newer ones are installed and checked before they run. */
+  checkAgentUpdates: () => invoke<AgentPreset[]>("check_agent_updates"),
+  /** "Verify now": run the conformance suite (tier A and npm audit) on a version; a passing candidate is promoted. */
+  verifyAgentVersion: (preset: string, version: string) =>
+    invoke<{ report: ConformanceReport; presets: AgentPreset[] }>("verify_agent_version", { preset, version }),
+  /** Stop these profiles' agents so the next chat starts the version that should run. */
+  restartAgents: (ids: string[]) => invoke<void>("restart_agents", { ids }),
   saveAgent: (draft: AgentDraft) => invoke<AgentProfile>("save_agent", { draft }),
   removeAgent: (id: string) => invoke<void>("remove_agent", { id }),
   setDefaultAgent: (id: string) => invoke<void>("set_default_agent", { id }),

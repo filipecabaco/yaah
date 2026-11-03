@@ -13,9 +13,10 @@ use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 
 pub const PROTOCOL_VERSION: u64 = 1;
 
@@ -79,8 +80,10 @@ pub struct Connection {
     pending: Arc<Mutex<PendingMap>>,
     responder: Responder,
     stderr_tail: StderrTail,
-    // Held so the agent is killed when the connection is dropped.
-    _child: Child,
+    /// Tells the writer to close the agent's stdin ([`Connection::shutdown`]).
+    close_stdin: Arc<Notify>,
+    /// Held so the agent is killed when the connection is dropped; taken by [`Connection::shutdown`].
+    child: Mutex<Option<Child>>,
 }
 
 impl Connection {
@@ -106,15 +109,26 @@ impl Connection {
         let pending: Arc<Mutex<PendingMap>> = Arc::default();
         let stderr_tail = StderrTail::default();
         let alive = Arc::new(AtomicBool::new(true));
+        let close_stdin = Arc::new(Notify::new());
 
-        // Writer: one JSON message per line.
+        // Writer: one JSON message per line, until the agent stops reading or we close its stdin.
+        let closing = close_stdin.clone();
         tauri::async_runtime::spawn(async move {
-            while let Some(mut line) = rx.recv().await {
+            loop {
+                let mut line = tokio::select! {
+                    biased;
+                    () = closing.notified() => break,
+                    next = rx.recv() => match next {
+                        Some(line) => line,
+                        None => break,
+                    },
+                };
                 line.push('\n');
                 if stdin.write_all(line.as_bytes()).await.is_err() || stdin.flush().await.is_err() {
                     break;
                 }
             }
+            // `stdin` drops here: the agent reads end of input.
         });
 
         // Stderr: keep a tail for error messages, mirror to our stderr.
@@ -157,7 +171,29 @@ impl Connection {
             on_exit(reason);
         });
 
-        Ok(Arc::new(Self { next_id: AtomicU64::new(1), alive, pending, responder, stderr_tail, _child: child }))
+        Ok(Arc::new(Self { next_id: AtomicU64::new(1), alive, pending, responder, stderr_tail, close_stdin, child: Mutex::new(Some(child)) }))
+    }
+
+    /// The agent's process id, while yaah still holds it.
+    pub fn pid(&self) -> Option<u32> {
+        self.child.lock().unwrap().as_ref().and_then(Child::id)
+    }
+
+    /// Stop the agent the way ACP expects: close its stdin and wait up to
+    /// `timeout` for it to exit on its own. Returns its exit status; an agent
+    /// still running after that is killed and the error says so. Either way it
+    /// is reaped, so no zombie is left. Only the first call waits.
+    pub async fn shutdown(&self, timeout: Duration) -> Result<std::process::ExitStatus, String> {
+        self.close_stdin.notify_one();
+        let Some(mut child) = self.child.lock().unwrap().take() else { return Err("already shut down".into()) };
+        match tokio::time::timeout(timeout, child.wait()).await {
+            Ok(Ok(status)) => Ok(status),
+            Ok(Err(e)) => Err(format!("couldn't wait for the agent: {e}")),
+            Err(_) => {
+                let _ = child.kill().await;
+                Err(format!("still running {timeout:?} after its stdin closed; killed"))
+            }
+        }
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, RpcError> {

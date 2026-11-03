@@ -6,7 +6,7 @@ use crate::agents::{self, AgentsFile, Draft, PresetInfo, ProfileInfo, Report, St
 use crate::login::{self, Logins};
 use crate::projects::{Project, Projects, Status};
 use crate::session::{self, ChatTarget, Emit, Hub, SessionInfo, Transcript};
-use crate::{accounts, files, repos};
+use crate::{accounts, agent_conformance, agent_install, agent_versions, files, repos, settings};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -92,6 +92,71 @@ pub async fn test_agent(app: AppHandle, draft: Draft) -> Result<Report, String> 
         let _ = app.emit("accounts-changed", ());
     }
     Ok(report)
+}
+
+/// What changed when a hold was set or released.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VersionChange {
+    presets: Vec<PresetInfo>,
+    /// Profiles whose running agent still runs the old version: the UI offers to restart them.
+    running: Vec<String>,
+}
+
+/// "Hold at this version" (`version`) or "Release hold" (`None`) for an npm-based
+/// preset. A change of what runs installs it in the background; running agents
+/// keep their version until they restart.
+#[tauri::command]
+pub fn hold_agent_version(hub: State<'_, Arc<Hub>>, preset: String, version: Option<String>) -> Result<VersionChange, String> {
+    let p = agents::preset(&preset).ok_or_else(|| format!("unknown agent preset {preset}"))?;
+    let versions = agent_versions::Versions::user();
+    let before = versions.active(p, &settings::agent_versions());
+    settings::set_agent_version(&preset, version.as_deref())?;
+    let after = versions.active(p, &settings::agent_versions());
+    let mut running = vec![];
+    if let Some(spec) = after.filter(|a| Some(a) != before.as_ref()) {
+        if agent_install::installed(versions.root(), &spec).is_none() {
+            agent_install::ensure_in_background(spec);
+        }
+        running = hub.running_with_preset(&preset);
+    }
+    Ok(VersionChange { presets: agents::presets(), running })
+}
+
+/// "Check for updates": read the latest versions now and install newer ones of
+/// the agents in use as candidates (they run once verified).
+#[tauri::command]
+pub async fn check_agent_updates() -> Result<Vec<PresetInfo>, String> {
+    let in_use = agents::presets_in_use(&Store::user().load());
+    agent_versions::Versions::user().check(agent_versions::REGISTRY, true, &in_use).await?;
+    Ok(agents::presets())
+}
+
+/// What "Verify now" found, and the presets as they stand after it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Verification {
+    report: agent_conformance::SuiteReport,
+    presets: Vec<PresetInfo>,
+}
+
+/// "Verify now": the conformance suite (tier A and `npm audit`) on `version` of
+/// an npm-based preset, installing it first if needed. A candidate that passes
+/// is promoted; a tracked version that fails is marked failed.
+#[tauri::command]
+pub async fn verify_agent_version(preset: String, version: String) -> Result<Verification, String> {
+    let report = agent_conformance::verify(agent_versions::Versions::user(), &preset, &version).await?;
+    Ok(Verification { report, presets: agents::presets() })
+}
+
+/// Restart these profiles' agents: the next chat starts a fresh process (with the version that should run now).
+#[tauri::command]
+pub async fn restart_agents(app: AppHandle, hub: State<'_, Arc<Hub>>, ids: Vec<String>) -> Result<(), String> {
+    for id in ids {
+        hub.drop_agent(&id).await;
+    }
+    let _ = app.emit("accounts-changed", ());
+    Ok(())
 }
 
 #[tauri::command]

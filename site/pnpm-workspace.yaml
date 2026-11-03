@@ -1,0 +1,3 @@
+# Only resolve package versions published at least two weeks ago (in minutes),
+# so transitive dependencies of the pinned packages follow the same rule.
+minimumReleaseAge: 20160

@@ -145,7 +145,62 @@ yaah is fast at rest (0 % CPU idle, first paint about 20 ms, smooth scrolling, n
 - [ ] **9.11 Smaller items:** palette search per keystroke, theme flash at startup, transcripts never evicted, bundle trims. (S each)
 - [ ] **Bug:** "stay at bottom" is shared across chats (`chat.tsx:77-79`). Fix: key `Transcript` by session. (S)
 
-## 10. Housekeeping
+## 10. Agent adapters: installs, versions and conformance
+
+Sources:
+- `app/src-tauri/src/agent_install.rs`, `agent_versions.rs`, `agent_conformance.rs`
+- [agent-install numbers](docs/experiments/2026-11-03-performance/backend/agent-install.md)
+- [CI in Docker](docs/experiments/2026-11-03-ci-docker/)
+
+**Built:**
+- npm-based adapters are installed once into `~/.yaah/agents/` and run with `node`: start to ready went from 808 ms to 129 ms, memory from 313 MB to 128 MB.
+- A daily registry check installs newer versions as candidates.
+- **Tier A conformance** (no sign-in) plus `npm audit` must pass before a candidate is promoted.
+- "Hold at this version" and "Verify now" are in Settings → Agents.
+
+Tier A results (pinned and latest):
+
+| Adapter | Pinned | Latest | Note |
+|---|---|---|---|
+| claude | 0.99.1 ✓ | 0.100.0 ✓ | 0.100.0 will be promoted |
+| codex, gemini, copilot, auggie | ✓ | same | No advisories |
+| qwen | 0.26.5 blocked | 0.26.6 blocked | High advisory: GHSA-wq5f-xc86-pv6w (sharp/librsvg) |
+| cline | 3.0.74 blocked | same | 2 critical (simple-git), 9 high (undici, zod, busboy) |
+
+- [ ] **qwen and cline** are blocked by advisories in both their pinned and latest versions. Keep offering them with a warning, or hide them until fixed upstream?
+- [ ] **Tier B (live prompts)** is defined as 7 checks wired as ignored tests, plus a disabled setting. To enable it: run it against real accounts, tune the prompts, flip `live::ENABLED`, and decide what happens with no signed-in profile (currently: promote with a note).
+- [ ] **Keychain access:** conformance runs in throwaway homes, but on macOS an adapter could still read the login keychain. None did. Accept, or sandbox further?
+
+## 11. CI, releases and installer
+
+Sources: [CI in Docker](docs/experiments/2026-11-03-ci-docker/), `ci/`, `app/mise.toml`.
+
+- [x] **Local CI:** `mise run ci` (rust, web, conformance), the same commands in an Ubuntu 24.04 container (`mise run ci:docker`). Green; 65 s warm, about 3 min cold.
+- [ ] **Turn on GitHub CI** once the repo exists: move `.github/workflows/ci.yml` into `.github/workflows/`. Its actions are verified on node24: checkout v7, mise-action v5 (mise pinned), rust-cache v2, upload-artifact v7. It includes a nightly conformance run against the latest adapters.
+- [ ] **Docker/Postgres tests are skipped** in the container (no daemon or database there). Add service containers in GitHub CI?
+- [ ] **The container is arm64 on this Mac,** while GitHub's `ubuntu-latest` is x86_64; x86_64 has only been checked on GitHub's side in theory.
+- [x] **Installer built and tested locally** ([results](docs/experiments/2026-11-03-installer/)):
+  - `install.sh` with checksum verification, macOS arm64 (ad-hoc signed, quarantine removed after verification), Linux AppImage or `--deb`, and `--uninstall`/`--purge`/`--dry-run`;
+  - the release workflow draft `.github/workflows/release.yml` (node24 verified);
+  - mise tasks `release:build`/`release:checksums`/`release:linux:docker`.
+- [ ] **Cut the first release** (needs your OK at each step):
+  1. create `filipecabaco/yaah` and push `main`;
+  2. move the release draft to `.github/workflows/release.yml`;
+  3. tag `v0.1.0`;
+  4. check the one-liner with `--dry-run`.
+- [ ] **The AppImage on a bare server** needs the usual desktop libraries (X11, GL, fontconfig). The installer explains this; it's fine on a desktop.
+- [ ] **The `ubuntu-24.04-arm` runner** is free for public repos only. Should the repo be public?
+- [ ] **Later:** Apple Developer ID signing and notarisation; in-app updates; Homebrew.
+
+## 12. Website
+
+Source: `site/` (Astro; `pnpm dev`); screenshots in [2026-11-03-website](docs/experiments/2026-11-03-website/).
+
+- [ ] **Review the site:** one page with the opening, 12 features with real screenshots, 4 "you ask, the agent renders" examples with real JSON, how it works, build from source, and not there yet. It matches the app's look.
+- [ ] **Update it once a release exists:** the install one-liner, the GitHub link, adapter version management.
+- [ ] **Hosting** is not decided (static output; GitHub Pages fits once the repo exists).
+
+## 13. Housekeeping
 
 - [x] **Committed** as `4a14b72`; the performance review and these doc updates are not committed yet.
 - [ ] **`src-tauri/src/live_ui_review.rs`** (the live UI test, `#[ignore]`) is now in the repo. Keep it?

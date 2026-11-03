@@ -1,0 +1,4 @@
+# Toolchain for the yaah website (mise). Matches app/mise.toml; `mise install` sets it up.
+[tools]
+node = "26.11.1"
+pnpm = "12.9.1"

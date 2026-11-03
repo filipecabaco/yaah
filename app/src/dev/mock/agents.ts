@@ -1,8 +1,8 @@
 // Agent profiles, presets, test connection and login (agents.rs, login.rs).
 // Reports are what each agent answered to `initialize` (OpenCode's is a real one
 // from `cargo run --example agent_probe -- opencode`; the others are illustrative).
-import type { AgentDraft, AgentPreset, AgentProfile, AgentReport, AuthMethod } from "@/lib/api";
-import { home, now, type Mock, type Replies } from "./context";
+import type { AgentDraft, AgentPreset, AgentProfile, AgentReport, AuthMethod, ConformanceCheck, ConformanceReport } from "@/lib/api";
+import { home, need, now, type Mock, type Replies } from "./context";
 
 const claudeAdapter = "npx -y @agentclientprotocol/claude-agent-acp@0.99.1";
 
@@ -135,16 +135,91 @@ const presetRows: [string, string, string, AgentPreset["via"], string | null, st
   ["kimi", "Kimi CLI", "Moonshot's Kimi CLI in ACP mode.", "binary", `${home}/.local/bin/kimi`, "kimi acp", "https://github.com/MoonshotAI/kimi-cli"],
   ["custom", "Custom command", "Any agent that speaks ACP on stdio.", "custom", null, "", "https://agentclientprotocol.com/overview/agents"],
 ];
-const presets: AgentPreset[] = presetRows.map(([id, label, blurb, via, path, commandLine, docs]) => ({
-  id,
-  label,
-  blurb,
-  docs,
-  via,
-  path,
-  install: via === "missing" ? `See the ${label} docs for install options.` : "",
-  draft: { id: null, label: id === "custom" ? "My agent" : label, preset: id, commandLine, env: {}, configDir: null },
-}));
+const noVersions = {
+  package: null,
+  pinned: null,
+  active: null,
+  activeStatus: null,
+  advisories: [],
+  report: null,
+  held: false,
+  installed: false,
+  latest: null,
+  candidate: null,
+} satisfies Partial<AgentPreset>;
+
+/** Tier A as it ran on claude-agent-acp 0.99.1 (`cargo run --example conformance`); `broken` replaces one check. */
+function tierA(version: string, at: number, broken?: ConformanceCheck): ConformanceReport {
+  const checks: ConformanceCheck[] = (
+    [
+      ["initialize", "answered in 0.2s; advertises loadSession, mcp.http, mcp.sse, systemPrompt, additionalDirectories, embeddedContext, image"],
+      ["protocolVersion", `1 (@agentclientprotocol/claude-agent-acp ${version})`],
+      ["capability loadSession", "advertised (reopening chats)"],
+      ["capability mcpCapabilities.http", "advertised (yaah's UI tools)"],
+      ["capability sessionCapabilities.systemPrompt", "advertised (the guide in the system prompt)"],
+      ["capability sessionCapabilities.additionalDirectories", "advertised (projects with several folders)"],
+      ["capability promptCapabilities.embeddedContext", "advertised (the project brief)"],
+      ["authMethods", "claude-ai-login (terminal), console-login (terminal)"],
+      ["authMethods terminal args", 'claude-ai-login → ["--cli","auth","login","--claudeai"]'],
+      ["unknown method", "method not found (-32601)"],
+      ["session/new signed out", "works without a login (session 64fd0ced-8aed-43a4-958c-c4b56c023821)"],
+      ["shutdown", "exited (exit status: 0) after stdin closed"],
+    ] as const
+  ).map(([name, detail]) => (broken?.name === name ? broken : { name, ok: true, detail }));
+  return { version, checks, advisories: [], audit: "ok", auditedAt: at, checkedAt: at, seconds: 5.2, promoted: false };
+}
+
+const codexRegression: ConformanceCheck = {
+  name: "session/new signed out",
+  ok: false,
+  detail: "expected a session or auth-required (-32000), got unknown field `systemPrompt` (code -32602)",
+};
+
+/** npm-based presets (agent_versions.rs): Claude has a newer version being checked, Codex one that failed. */
+function versionsOf(id: string, commandLine: string): Partial<AgentPreset> {
+  const spec = commandLine.match(/^npx -y (@?[^@\s]+)@(\S+)/);
+  if (!spec) return noVersions;
+  const [, pkg, pinned] = spec;
+  const checkedAt = now() - 3 * 3600;
+  const base = { ...noVersions, package: pkg, pinned, active: pinned, activeStatus: "tested" as const, latest: { latest: pinned, checkedAt } };
+  if (id === "claude")
+    return {
+      ...base,
+      report: tierA(pinned, checkedAt),
+      latest: { latest: "0.100.0", checkedAt },
+      candidate: { version: "0.100.0", status: "verifying", checkedAt, failures: [], advisories: [], report: null },
+    };
+  if (id === "codex")
+    return {
+      ...base,
+      latest: { latest: "2.6.0", checkedAt },
+      candidate: {
+        version: "2.6.0",
+        status: "failed",
+        checkedAt,
+        failures: [`session/new signed out: ${codexRegression.detail}`],
+        advisories: [],
+        report: tierA("2.6.0", checkedAt, codexRegression),
+      },
+    };
+  return base;
+}
+
+/** A fresh copy per mock install: holds and checks change it. */
+function seedPresets(): AgentPreset[] {
+  return presetRows.map(([id, label, blurb, via, path, commandLine, docs]) => ({
+    id,
+    label,
+    blurb,
+    docs,
+    via,
+    path,
+    install: via === "missing" ? `See the ${label} docs for install options.` : "",
+    draft: { id: null, label: id === "custom" ? "My agent" : label, preset: id, commandLine, env: {}, configDir: null },
+    ...noVersions,
+    ...versionsOf(id, commandLine),
+  }));
+}
 
 const claudeProfile = (id: string, label: string, configDir: string | null, email: string | null): AgentProfile => ({
   id,
@@ -171,10 +246,10 @@ export function seedAgents(firstRun: boolean) {
         claudeProfile("work", "Claude (work)", `${home}/.claude-work`, "dev@work.example"),
         claudeProfile("personal", "Claude (personal)", `${home}/.claude-personal`, null),
       ];
-  return { profiles, defaultAgent: firstRun ? null : ("default" as string | null) };
+  return { profiles, defaultAgent: firstRun ? null : ("default" as string | null), presets: seedPresets() };
 }
 
-function fromDraft(d: AgentDraft, id: string): AgentProfile {
+function fromDraft(d: AgentDraft, id: string, presets: AgentPreset[]): AgentProfile {
   const [command = "", ...args] = d.commandLine.trim().split(/\s+/);
   const preset = presets.find((p) => p.id === d.preset);
   return {
@@ -201,7 +276,64 @@ export function agentReplies(m: Mock): Replies {
     list_agents: () => ({ profiles: state.profiles, defaultId: state.defaultAgent ?? state.profiles[0]?.id ?? null }),
     list_agent_presets: async (): Promise<AgentPreset[]> => {
       await m.wait(400);
-      return presets;
+      return state.presets;
+    },
+    // A hold freezes the active version; releasing it goes back to the pin (nothing newer is verified here).
+    hold_agent_version: ({ preset, version }: { preset: string; version: string | null }) => {
+      const p = need(
+        state.presets.find((x) => x.id === preset && x.pinned),
+        `unknown agent preset ${preset}`,
+      );
+      if (version !== null && !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version))
+        throw new Error(`\`${version}\` isn't an exact version such as 1.2.3`);
+      const before = p.active;
+      const next = {
+        ...p,
+        held: version !== null,
+        active: version ?? p.pinned,
+        activeStatus: version && version !== p.pinned ? ("installed" as const) : ("tested" as const),
+      };
+      state.presets = state.presets.map((x) => (x.id === preset ? next : x));
+      // Claude's default profile is "running" in the mock.
+      const running = next.active !== before && preset === "claude" && state.profiles.some((x) => x.id === "default") ? ["default"] : [];
+      return { presets: state.presets, running };
+    },
+    check_agent_updates: async () => {
+      await m.wait(300);
+      state.presets = state.presets.map((p) => (p.latest ? { ...p, latest: { ...p.latest, checkedAt: now() } } : p));
+      return state.presets;
+    },
+    // Claude's candidate passes and is promoted; Codex's fails the same way again; anything else passes.
+    verify_agent_version: async ({ preset, version }: { preset: string; version: string }) => {
+      await m.wait(600);
+      const p = need(
+        state.presets.find((x) => x.id === preset && x.pinned),
+        `unknown agent preset ${preset}`,
+      );
+      const isCandidate = p.candidate?.version === version;
+      const report = { ...tierA(version, now(), preset === "codex" && isCandidate ? codexRegression : undefined), seconds: 4.8 };
+      const passed = report.checks.every((c) => c.ok);
+      report.promoted = isCandidate && passed;
+      const next: AgentPreset = report.promoted
+        ? { ...p, active: version, activeStatus: "verified", report, candidate: null }
+        : isCandidate && p.candidate
+          ? {
+              ...p,
+              candidate: {
+                ...p.candidate,
+                status: passed ? "verifying" : "failed",
+                checkedAt: now(),
+                failures: report.checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`),
+                report,
+              },
+            }
+          : { ...p, report };
+      state.presets = state.presets.map((x) => (x.id === preset ? next : x));
+      return { report, presets: state.presets };
+    },
+    restart_agents: async () => {
+      await changed();
+      return null;
     },
     save_agent: async ({ draft: d }: { draft: AgentDraft }): Promise<AgentProfile> => {
       if (!d.label.trim()) throw new Error("give the agent a name");
@@ -215,7 +347,7 @@ export function agentReplies(m: Mock): Replies {
       for (let n = 2; !d.id && state.profiles.some((p) => p.id === id); n++) id = `${base}-${n}`;
       const old = state.profiles.find((p) => p.id === id);
       // A test result stays valid while the command doesn't change.
-      const p = { ...fromDraft(d, id), report: old && old.commandLine === d.commandLine.trim() ? old.report : null };
+      const p = { ...fromDraft(d, id, state.presets), report: old && old.commandLine === d.commandLine.trim() ? old.report : null };
       state.profiles = old ? state.profiles.map((x) => (x.id === id ? p : x)) : [...state.profiles, p];
       state.defaultAgent ??= id;
       await changed();
@@ -235,7 +367,7 @@ export function agentReplies(m: Mock): Replies {
     test_agent: async ({ draft: d }: { draft: AgentDraft }): Promise<AgentReport> => {
       await m.wait(1200);
       const command = d.commandLine.trim().split(/\s+/)[0];
-      if (presets.find((p) => p.id === d.preset)?.via === "missing" && command !== "npx")
+      if (state.presets.find((p) => p.id === d.preset)?.via === "missing" && command !== "npx")
         throw new Error(`failed to start \`${command}\`: No such file or directory (os error 2). Is it installed and on your PATH?`);
       const known = reports[d.preset];
       if (!known) throw new Error("initialize failed: agent process exited:\nerror: unknown flag --acp");

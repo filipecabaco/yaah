@@ -1,0 +1,30 @@
+---
+// The yaah mark: four rounded UI tiles locking together into a "y". Geometry
+// copied from app/src/components/brand/mark.tsx. The middle tile is the agent's
+// piece, in the one brand colour; the rest follow the text colour.
+interface Props {
+  class?: string;
+  loading?: boolean;
+  title?: string;
+}
+const { class: className = "", loading = false, title } = Astro.props;
+/** [x, y, width, height] in a 50×60 box: top-left arm, right stem, middle bar, foot. */
+const TILES = [
+  [0, 0, 16, 22],
+  [34, 0, 16, 60],
+  [0, 25, 31, 16],
+  [8, 44, 23, 16],
+] as const;
+---
+<svg
+  viewBox="-10 -5 70 70"
+  class:list={["yaah-mark shrink-0", className]}
+  data-loading={loading || undefined}
+  role={title ? "img" : undefined}
+  aria-hidden={title ? undefined : "true"}
+  aria-label={title}
+>
+  {TILES.map(([x, y, w, h], i) => (
+    <rect x={x} y={y} width={w} height={h} rx="5" data-tile={i} class={i === 2 ? "fill-brand" : "fill-current"} />
+  ))}
+</svg>

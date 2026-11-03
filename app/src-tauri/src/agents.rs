@@ -12,6 +12,9 @@
 
 use crate::accounts;
 use crate::acp::{self, Connection};
+use crate::agent_conformance::{Results, SuiteReport};
+use crate::agent_install::{self, Spec};
+use crate::agent_versions::{self, Advisory, Latest, Record, Status, Versions};
 use crate::session::INITIALIZE_TIMEOUT;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -65,15 +68,54 @@ impl Profile {
         (self.is_claude() && !self.env.contains_key("ANTHROPIC_API_KEY")).then_some("ANTHROPIC_API_KEY")
     }
 
-    /// The agent's command line with its environment, ready to start (no shell involved).
+    /// The agent's command line with its environment, ready to start (no shell
+    /// involved). Agent starts and terminal logins both come through here.
     pub fn process(&self) -> tokio::process::Command {
-        let mut cmd = crate::path_env::tokio_command(&self.command);
-        cmd.args(&self.args);
+        let (program, args) = self.launch();
+        let mut cmd = crate::path_env::tokio_command(&program);
+        cmd.args(&args);
         if let Some(k) = self.env_remove() {
             cmd.env_remove(k);
         }
         cmd.envs(self.spawn_env());
         cmd
+    }
+
+    /// The preset whose npm package this profile runs through npx
+    /// (`npx -y <its package>@<exact version> …`), and the args after the package.
+    fn preset_package(&self) -> Option<(&'static Preset, &[String])> {
+        let preset = preset(&self.preset)?;
+        let pinned = preset.spec()?;
+        let [flag, spec, rest @ ..] = self.args.as_slice() else { return None };
+        let npx = Path::new(&self.command).file_name().is_some_and(|n| n == "npx");
+        (npx && matches!(flag.as_str(), "-y" | "--yes") && Spec::parse(spec).is_ok_and(|s| s.name == pinned.name)).then_some((preset, rest))
+    }
+
+    /// What actually starts. The saved command, except when it runs its preset's
+    /// npm package through npx: then the version that should run (the pin, a
+    /// newer verified one, or the one the user holds; `agent_versions`) starts
+    /// from yaah's own install as `node <bin>` once there is one. Until then it
+    /// starts through npx, and the install runs in the background for next time.
+    pub fn launch(&self) -> (String, Vec<String>) {
+        let versions = crate::agent_versions::Versions::user();
+        let holds = crate::settings::agent_versions();
+        // Unit tests build commands with `process()`; they never install anything for real.
+        let install: fn(Spec) = if cfg!(test) { |_| {} } else { agent_install::ensure_in_background };
+        self.launch_in(versions.root(), |p| versions.active(p, &holds), install)
+    }
+
+    fn launch_in(&self, root: &Path, active: impl FnOnce(&Preset) -> Option<Spec>, install: impl FnOnce(Spec)) -> (String, Vec<String>) {
+        let saved = || (self.command.clone(), self.args.clone());
+        let Some((preset, rest)) = self.preset_package() else { return saved() };
+        let Some(spec) = active(preset) else { return saved() };
+        if let Some(installed) = agent_install::installed(root, &spec) {
+            let (program, mut args) = installed.command();
+            args.extend(rest.iter().cloned());
+            return (program, args);
+        }
+        let args = [self.args[0].clone(), spec.to_string()].into_iter().chain(rest.iter().cloned()).collect();
+        install(spec);
+        (self.command.clone(), args)
     }
 
     /// Whether `other` starts the same agent the same way (so what it reported still holds).
@@ -389,7 +431,9 @@ pub struct Preset {
     /// Executables that run the agent, in order of preference.
     pub bins: &'static [&'static str],
     pub args: &'static [&'static str],
-    /// npm package to run through `npx -y` when no binary is installed.
+    /// The npm package (pinned to the version yaah was tested with) to run when
+    /// no binary is installed: yaah installs it once and runs it with node
+    /// (`agent_install`), through `npx -y` until then.
     pub npx: Option<&'static str>,
     pub env: &'static [(&'static str, &'static str)],
     pub docs: &'static str,
@@ -407,7 +451,7 @@ pub const PRESETS: &[Preset] = &[
         npx: Some(crate::session::ADAPTER_PACKAGE),
         env: &[],
         docs: "https://github.com/agentclientprotocol/claude-agent-acp",
-        install: "Needs Node.js (npx); the adapter is downloaded on first run.",
+        install: "Needs Node.js; yaah installs the adapter on first run.",
     },
     Preset {
         id: "gemini",
@@ -548,8 +592,16 @@ pub fn preset(id: &str) -> Option<&'static Preset> {
 }
 
 impl Preset {
-    /// The command to run: an installed binary first, then npx, else the
-    /// binary name (so the user sees what to install).
+    /// The pinned npm package, for presets that have one.
+    pub fn spec(&self) -> Option<Spec> {
+        self.npx.and_then(|s| Spec::parse(s).ok())
+    }
+
+    /// The command a profile saves: an installed binary first, then npx, else
+    /// the binary name (so the user sees what to install). The npx form is
+    /// portable across version changes; [`Profile::launch`] runs it from yaah's
+    /// own install once there is one, so what starts is, in order: a binary on
+    /// PATH, the package yaah installed, npx.
     pub fn command(&self, found_bin: Option<&str>) -> (String, Vec<String>) {
         let args = self.args.iter().map(ToString::to_string);
         match (found_bin, self.npx) {
@@ -568,25 +620,124 @@ pub struct PresetInfo {
     pub blurb: &'static str,
     pub docs: &'static str,
     pub install: &'static str,
-    /// "binary" (found on PATH), "npx" (runs through npx), "missing", or "custom".
+    /// "binary" (found on PATH), "installed" (yaah installed its npm package),
+    /// "npx" (runs through npx until yaah has installed it), "missing", or "custom".
     pub via: &'static str,
-    /// Where the binary (or npx) was found.
+    /// Where the binary, yaah's install of the package, or npx is.
     pub path: Option<String>,
     /// A draft to start the setup form from.
     pub draft: Draft,
+    #[serde(flatten)]
+    pub versions: NpmVersions,
+}
+
+/// Which version of an npm-based preset runs, and what yaah knows about newer ones.
+/// All empty for other presets.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NpmVersions {
+    /// The package.
+    pub package: Option<String>,
+    /// The version yaah was tested with.
+    pub pinned: Option<String>,
+    /// The version that runs: the hold, else the newest verified one, else the pin.
+    pub active: Option<String>,
+    /// The active version's state: "tested" (the pin, not re-checked) or its [`Status`].
+    pub active_status: Option<String>,
+    /// Advisories for the active version: its last audit (daily), else what its check recorded.
+    pub advisories: Vec<Advisory>,
+    /// The conformance suite's last report on the active version (or only its audit).
+    pub report: Option<SuiteReport>,
+    /// The user holds the preset at the active version.
+    pub held: bool,
+    /// yaah's copy of the active version is installed.
+    pub installed: bool,
+    /// The registry's latest version, and when it was checked.
+    pub latest: Option<Latest>,
+    /// The newest version above the active one that yaah has installed or checked.
+    pub candidate: Option<Candidate>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Candidate {
+    pub version: String,
+    #[serde(flatten)]
+    pub record: Record,
+    /// The conformance suite's last report on it.
+    pub report: Option<SuiteReport>,
+}
+
+/// An npm-based preset's versions, and yaah's install of the active one if it's there.
+fn npm_versions(
+    p: &Preset,
+    root: &Path,
+    holds: &BTreeMap<String, String>,
+    records: &BTreeMap<String, BTreeMap<String, Record>>,
+    latest: &BTreeMap<String, Latest>,
+    reports: &BTreeMap<String, BTreeMap<String, SuiteReport>>,
+) -> Option<(NpmVersions, Option<agent_install::Installed>)> {
+    let pinned = p.spec()?;
+    let active = Versions::active_in(p, holds, records)?;
+    let mine = records.get(p.id);
+    let record = mine.and_then(|r| r.get(&active.version));
+    let candidate = mine
+        .into_iter()
+        .flatten()
+        .filter(|(v, _)| agent_versions::newer(v, &active.version))
+        .max_by(|a, b| agent_versions::Version::parse(a.0).cmp(&agent_versions::Version::parse(b.0)))
+        .map(|(v, r)| Candidate { version: v.clone(), record: r.clone(), report: reports.get(p.id).and_then(|m| m.get(v)).cloned() });
+    let report = reports.get(p.id).and_then(|m| m.get(&active.version)).cloned();
+    let status = match record {
+        Some(r) => r.status.as_str(),
+        None if active == pinned => "tested",
+        // Held at a version yaah never checked.
+        None => Status::Installed.as_str(),
+    };
+    let installed = agent_install::installed(root, &active);
+    let info = NpmVersions {
+        active_status: Some(status.to_owned()),
+        advisories: report
+            .as_ref()
+            .filter(|r| r.audited_at.is_some())
+            .map(|r| r.advisories.clone())
+            .or_else(|| record.map(|r| r.advisories.clone()))
+            .unwrap_or_default(),
+        report,
+        held: holds.contains_key(p.id),
+        installed: installed.is_some(),
+        latest: latest.get(&pinned.name).cloned(),
+        package: Some(pinned.name),
+        pinned: Some(pinned.version),
+        active: Some(active.version),
+        candidate,
+    };
+    Some((info, installed))
+}
+
+/// The presets a saved profile runs from their npm package: the ones worth
+/// installing newer versions of.
+pub fn presets_in_use(file: &AgentsFile) -> std::collections::BTreeSet<&'static str> {
+    file.profiles.iter().filter_map(|p| p.preset_package().map(|(preset, _)| preset.id)).collect()
 }
 
 /// Every preset plus "custom", with what's installed here.
 pub fn presets() -> Vec<PresetInfo> {
+    let user = Versions::user();
+    let (root, holds, records, latest) = (user.root(), crate::settings::agent_versions(), user.records(), user.latest());
+    let reports = Results::at(root).all();
     let mut out: Vec<PresetInfo> = PRESETS
         .iter()
         .map(|p| {
             let found = p.bins.iter().find_map(|b| which(b).map(|path| (*b, path)));
+            let (versions, ours) = npm_versions(p, root, &holds, &records, &latest, &reports).unwrap_or_default();
+            let ours = ours.map(|i| i.bin.to_string_lossy().into_owned());
             let npx = p.npx.and_then(|_| which("npx"));
-            let (via, path) = match (&found, npx) {
-                (Some((_, path)), _) => ("binary", Some(path.clone())),
-                (None, Some(npx)) => ("npx", Some(npx)),
-                (None, None) => ("missing", None),
+            let (via, path) = match (&found, ours, npx) {
+                (Some((_, path)), ..) => ("binary", Some(path.clone())),
+                (None, Some(ours), _) => ("installed", Some(ours)),
+                (None, None, Some(npx)) => ("npx", Some(npx)),
+                (None, None, None) => ("missing", None),
             };
             let (command, args) = p.command(found.as_ref().map(|(b, _)| *b));
             PresetInfo {
@@ -605,6 +756,7 @@ pub fn presets() -> Vec<PresetInfo> {
                     env: p.env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     config_dir: None,
                 },
+                versions,
             }
         })
         .collect();
@@ -617,6 +769,7 @@ pub fn presets() -> Vec<PresetInfo> {
         via: "custom",
         path: None,
         draft: Draft { label: "My agent".into(), preset: CUSTOM.into(), ..Draft::default() },
+        versions: NpmVersions::default(),
     });
     out
 }
@@ -980,6 +1133,72 @@ mod tests {
             }
         }
         assert!(presets().iter().any(|p| p.id == CUSTOM));
+        // npm-based presets say which version runs; the others carry no versions.
+        let all = serde_json::to_value(presets()).unwrap();
+        let by_id = |id: &str| all.as_array().unwrap().iter().find(|p| p["id"] == id).unwrap().clone();
+        let claude = by_id(CLAUDE);
+        let pinned = Spec::parse(crate::session::ADAPTER_PACKAGE).unwrap();
+        assert_eq!((claude["package"].as_str(), claude["pinned"].as_str()), (Some(pinned.name.as_str()), Some(pinned.version.as_str())));
+        assert!(claude["active"].is_string() && claude["activeStatus"].is_string() && claude["advisories"].is_array(), "{claude}");
+        let goose = by_id("goose");
+        assert!(goose["pinned"].is_null() && goose["active"].is_null() && goose["installed"] == false, "{goose}");
+    }
+
+    #[test]
+    fn starts_a_binary_then_yaahs_install_then_npx() {
+        let root = std::env::temp_dir().join(format!("yaah-launch-{}", crate::random::token()));
+        let gemini = preset("gemini").unwrap();
+        let pinned = gemini.spec().unwrap();
+        let from_draft = |found: Option<&str>| {
+            let (command, args) = gemini.command(found);
+            draft("Gemini", "gemini", &join_args(std::iter::once(&command).chain(&args))).to_profile(&[]).unwrap()
+        };
+        let pin = |_: &Preset| Some(pinned.clone());
+        let launch = |p: &Profile, active: &dyn Fn(&Preset) -> Option<Spec>| {
+            let mut asked = None;
+            let cmd = p.launch_in(&root, active, |s| asked = Some(s));
+            (cmd, asked)
+        };
+
+        // Not installed yet: npx, and the install starts in the background.
+        let npx = from_draft(None);
+        let ((program, args), asked) = launch(&npx, &pin);
+        assert_eq!((program.as_str(), args.as_slice()), ("npx", &["-y".to_owned(), pinned.to_string(), "--acp".into()][..]));
+        assert_eq!(asked, Some(pinned.clone()));
+
+        // Installed by yaah: node <bin> and the preset's args, no install.
+        crate::agent_install::tests::fake_install(&root, &pinned);
+        if crate::path_env::which("node").is_some() {
+            let ((program, args), asked) = launch(&npx, &pin);
+            assert!(program.ends_with("node"), "{program}");
+            assert!(args[0].ends_with("node_modules/@google/gemini-cli/dist/index.js") && args[1] == "--acp", "{args:?}");
+            assert_eq!(asked, None);
+        }
+
+        // A binary on PATH beats both: the saved command is the binary, untouched.
+        let (cmd, asked) = launch(&from_draft(Some("gemini")), &pin);
+        assert_eq!((cmd, asked), (("gemini".into(), vec!["--acp".into()]), None));
+
+        // What should run decides the version, whatever the saved command pinned.
+        let newer = pinned.at("999.0.0").unwrap();
+        let ((_, args), asked) = launch(&npx, &|_: &Preset| Some(newer.clone()));
+        assert_eq!((args[1].as_str(), asked), (newer.to_string().as_str(), Some(newer.clone())));
+
+        // Custom commands, other packages and floating versions are left alone.
+        for line in [
+            "npx -y @google/gemini-cli@latest --acp",
+            "npx -y some-other-agent@1.0.0",
+            "npx @google/gemini-cli@0.66.0",
+            "bunx @google/gemini-cli@0.66.0",
+        ] {
+            let p = draft("G", "gemini", line).to_profile(&[]).unwrap();
+            let (cmd, asked) = launch(&p, &pin);
+            assert_eq!((cmd, asked), ((p.command.clone(), p.args.clone()), None), "{line}");
+        }
+        let custom = draft("C", CUSTOM, &format!("npx -y {pinned} --acp")).to_profile(&[]).unwrap();
+        assert_eq!(launch(&custom, &pin).1, None, "custom agents are never touched");
+        assert_eq!(presets_in_use(&AgentsFile { default: None, profiles: vec![npx, custom] }), std::collections::BTreeSet::from(["gemini"]));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

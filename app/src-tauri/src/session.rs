@@ -823,6 +823,12 @@ impl Hub {
         }
     }
 
+    /// Profiles whose agent process is running and was started from `preset`.
+    pub fn running_with_preset(&self, preset: &str) -> Vec<String> {
+        let agents = self.agents.lock().unwrap();
+        agents.iter().filter(|(_, a)| a.preset == preset && a.conn.is_alive()).map(|(id, _)| id.clone()).collect()
+    }
+
     /// Forget the profile's agent so the next chat starts one that sees fresh
     /// credentials (or an edited command). Its chats reattach to the new one.
     /// A turn still running keeps the old process until it ends.
@@ -1516,11 +1522,40 @@ mod live_tests {
     /// prompt after the first, as the user acting in the UI between messages.
     fn run_turns(prompts: &[&str], ui: bool, dir: Option<PathBuf>, between: impl Fn(&Hub, &str, usize)) -> (Run, Arc<Library>) {
         let account = std::env::var("YAAH_LIVE_ACCOUNT").unwrap_or_else(|_| "default".into());
+        let ui = if ui { Ui::On } else { Ui::Off };
+        run_turns_as(Store::user(), &account, prompts, ui, dir, between, |_, _, _, _| {})
+    }
+
+    /// How a live chat gets yaah's UI server.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Ui {
+        Off,
+        On,
+        /// Advertised at a port nothing listens on: the MCP server can't start.
+        Dead,
+    }
+
+    /// [`run_turns`] as `account` from `profiles`, with `on_event(hub, session, event, payload)`
+    /// called on every event the UI would get (to act mid-turn, say).
+    fn run_turns_as(
+        profiles: &'static Store,
+        account: &str,
+        prompts: &[&str],
+        ui: Ui,
+        dir: Option<PathBuf>,
+        between: impl Fn(&Hub, &str, usize),
+        on_event: impl Fn(&Hub, &str, &str, &Value),
+    ) -> (Run, Arc<Library>) {
         let (tx, rx) = mpsc::channel::<(String, Value)>();
         let tx = Mutex::new(tx);
-        let hub = Arc::new(Hub::new(Arc::new(move |name: &str, payload: Value| {
-            let _ = tx.lock().unwrap().send((name.to_owned(), payload));
-        })));
+        let hub = Arc::new(Hub::open(
+            Arc::new(move |name: &str, payload: Value| {
+                let _ = tx.lock().unwrap().send((name.to_owned(), payload));
+            }),
+            None,
+            profiles,
+        ));
+        let ui_on = ui == Ui::On;
 
         let root = dir.unwrap_or_else(|| std::env::temp_dir().join(format!("yaah-live-{}-{}", std::process::id(), random_token())));
         let (repo, ctx) = (root.join("repo"), root.join("ctx"));
@@ -1528,7 +1563,12 @@ mod live_tests {
         std::fs::create_dir_all(&ctx).unwrap();
         // As in the app: the components yaah ships, then what agents build.
         let library = Arc::new(Library::with_sources(vec![Box::new(Bundled::new()), Box::new(LocalDir::new(root.join("components")))]));
-        if ui {
+        if ui == Ui::Dead {
+            // A port that was free a moment ago: the agent is told about a server that isn't there.
+            let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            hub.set_ui_port(free);
+        }
+        if ui_on {
             let host = Arc::new(ui_mcp::UiHost::new(hub.clone(), library.clone(), Arc::new(crate::sources::Sources::new())));
             hub.set_ui_port(ui_mcp::start(host).unwrap());
             // As in the app, the agent is told about the UI; its skills go in the test folder, not ~/.yaah.
@@ -1547,12 +1587,13 @@ mod live_tests {
 
         let mut events = vec![];
         let sid = tauri::async_runtime::block_on(async {
-            let info = hub.new_session(ChatTarget::Project(&project), &account).await.expect("new_session");
+            let info = hub.new_session(ChatTarget::Project(&project), account).await.expect("new_session");
             hub.prompt(&info.session_id, prompts[0].to_string(), vec![]).await.unwrap();
             let mut started = false;
             let mut turn = 0;
             loop {
                 let (name, payload) = rx.recv_timeout(Duration::from_secs(300)).expect("agent went quiet");
+                on_event(&hub, &info.session_id, &name, &payload);
                 events.push(json!({ "event": name, "payload": payload }));
                 let entry = &payload["entry"];
                 // Answer forms the agent is waiting on (ui_ask) the way a person would.
@@ -1885,6 +1926,7 @@ mod live_tests {
     }
 
     include!("live_ui_review.rs");
+    include!("live_adapter_tests.rs");
 }
 
 #[cfg(test)]

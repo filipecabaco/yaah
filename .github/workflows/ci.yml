@@ -1,0 +1,108 @@
+# The same checks as the local Docker flow (ci/Dockerfile, `mise run ci:docker` in app/).
+#
+# Every job runs the same mise tasks as the container (app/mise.toml), so a
+# green `mise run ci:docker` should mean a green run here.
+#
+# Actions, each checked with
+#   gh api "repos/<owner>/<repo>/contents/action.yml?ref=<tag>" -q .content | base64 -d | grep -E '^\s*using:'
+# on 2026-11-03; all run on node24 at the newest major:
+#   actions/checkout@v7         (v7.0.1)  node24
+#   jdx/mise-action@v5          (v5.2.6)  node24
+#   Swatinem/rust-cache@v2      (v2.9.3)  node24
+#   actions/upload-artifact@v7  (v7.0.2)  node24
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly: tier A conformance against the registry's latest adapter versions.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # mise's own version, the same as ci/Dockerfile.
+  MISE_VERSION: "2026.10.21"
+
+jobs:
+  rust:
+    name: Rust (fmt, clippy, tests, deny)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tauri's Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          working_directory: app
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      # The runner has Docker but no Postgres on 127.0.0.1:54329: data_postgres skips, data_docker runs.
+      - run: mise run ci:rust
+        working-directory: app
+
+  web:
+    name: Frontend (check, build)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          working_directory: app
+      - run: mise run ci:web
+        working-directory: app
+
+  conformance:
+    name: Adapter conformance (tier A, pinned and latest)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tauri's Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          working_directory: app
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+      # On pushes and PRs only the pinned versions decide the result; nightly, a latest
+      # version that wouldn't be promoted (a failed check, a high or critical advisory) fails it too.
+      - run: >-
+          mise run ci:conformance
+          --json "$RUNNER_TEMP/conformance.json" --markdown "$RUNNER_TEMP/conformance.md"
+          ${{ github.event_name == 'schedule' && '--fail-on-latest' || '' }}
+        working-directory: app
+        env:
+          YAAH_CONFORMANCE_ROOT: ${{ runner.temp }}/conformance-installs
+      - name: Summary
+        if: always()
+        run: cat "$RUNNER_TEMP/conformance.md" >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: conformance
+          path: |
+            ${{ runner.temp }}/conformance.json
+            ${{ runner.temp }}/conformance.md
+          if-no-files-found: ignore

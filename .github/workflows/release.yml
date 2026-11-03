@@ -1,0 +1,172 @@
+# Pushing a tag vX.Y.Z builds the release bundles on each platform through the
+# same mise tasks used locally (app/mise.toml: release:build, release:checksums),
+# then one job writes SHA256SUMS and publishes the GitHub release with `gh`.
+# Asset names are stable, so install.sh can use
+# https://github.com/<repo>/releases/latest/download/<asset> without the API:
+#   yaah-macos-arm64.tar.gz  yaah-macos-arm64.dmg
+#   yaah-linux-x86_64.AppImage  yaah-linux-arm64.AppImage
+#   yaah-linux-x86_64.deb  yaah-linux-arm64.deb
+#   SHA256SUMS
+#
+# macOS signing: without secrets the app is ad-hoc signed (tauri.conf.json
+# bundle.macOS.signingIdentity "-") and not notarised; install.sh clears the
+# quarantine attribute after checking the SHA-256. With a Developer ID, add these
+# repository secrets and the same job signs and notarises (Tauri reads them):
+#   APPLE_CERTIFICATE           base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD  its password
+#   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Name (TEAMID)"
+#   and either APPLE_API_KEY, APPLE_API_ISSUER, APPLE_API_KEY_P8 (App Store Connect
+#   API key; the .p8 content, written to a file for APPLE_API_KEY_PATH)
+#   or APPLE_ID, APPLE_PASSWORD (an app-specific password), APPLE_TEAM_ID.
+# Only non-empty secrets are exported: an empty APPLE_SIGNING_IDENTITY would
+# override the ad-hoc identity.
+#
+# Actions, each checked with
+#   gh api "repos/<owner>/<repo>/contents/action.yml?ref=<tag>" -q .content | base64 -d | grep -E '^\s*using:'
+# on 2026-11-03, at the major tag and at the latest release; all run on node24:
+#   actions/checkout@v7            (v7.0.1)  node24
+#   jdx/mise-action@v5             (v5.2.6)  node24
+#   Swatinem/rust-cache@v2         (v2.9.3)  node24
+#   actions/upload-artifact@v7     (v7.0.2)  node24
+#   actions/download-artifact@v8   (v8.0.2)  node24
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # mise's own version, the same as ci/Dockerfile and the CI workflow.
+  MISE_VERSION: "2026.10.21"
+
+jobs:
+  version:
+    name: Tag matches the app version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: check
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          conf=$(jq -r .version app/src-tauri/tauri.conf.json)
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' app/src-tauri/Cargo.toml | head -n 1)
+          pkg=$(jq -r .version app/package.json)
+          echo "tag $tag; tauri.conf.json $conf; Cargo.toml $cargo; package.json $pkg"
+          for v in "$conf" "$cargo" "$pkg"; do
+            if [ "$v" != "$version" ]; then
+              echo "::error::tag $tag doesn't match the app version (tauri.conf.json $conf, Cargo.toml $cargo, package.json $pkg)"
+              exit 1
+            fi
+          done
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.platform }}
+    needs: version
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-14
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+          # GitHub's arm64 Linux runner; the same as the local CI container (`release:linux:docker`).
+          - platform: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tauri's Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev libxdo-dev file
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          working_directory: app
+          # A release build needs only these; cargo-deny and cargo-llvm-cov are for CI.
+          install_args: node pnpm rust
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          key: release
+      - name: Build the bundles (mise run release:build)
+        working-directory: app
+        env:
+          # Don't let `mise run` install the CI-only tools skipped above.
+          MISE_TASK_RUN_AUTO_INSTALL: "false"
+          SECRET_APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          SECRET_APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SECRET_APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SECRET_APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          SECRET_APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          SECRET_APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          SECRET_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SECRET_APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          SECRET_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_API_KEY APPLE_API_ISSUER APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              value=$(printenv "SECRET_$name" || true)
+              if [ -n "$value" ]; then export "$name=$value"; fi
+            done
+            if [ -n "$SECRET_APPLE_API_KEY_P8" ]; then
+              export APPLE_API_KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+              printf '%s' "$SECRET_APPLE_API_KEY_P8" > "$APPLE_API_KEY_PATH"
+            fi
+            echo "signing: ${APPLE_SIGNING_IDENTITY:-ad-hoc (no Developer ID secrets)}"
+          fi
+          mise run release:build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: dist-release/
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish the GitHub release
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: dist-release
+          merge-multiple: true
+      # The same as `mise run release:checksums`, without installing the toolchain.
+      - name: SHA256SUMS
+        working-directory: dist-release
+        run: |
+          sha256sum yaah-* > SHA256SUMS
+          cat SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 6
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          # Drafted first and published once every asset is up, so
+          # releases/latest/download/ never points at a half-uploaded release.
+          gh release create "$GITHUB_REF_NAME" dist-release/* \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft $prerelease \
+            --title "yaah $VERSION" --generate-notes
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false

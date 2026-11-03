@@ -1,0 +1,246 @@
+@import "tailwindcss";
+@import "@fontsource-variable/geist";
+
+/* The site follows the app: same tokens, same radius scale, same dark variant
+   (a `.dark` class on <html>), copied from app/src/index.css. */
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-brand: var(--brand);
+  --color-brand-line: var(--brand-line);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  /* The one brand colour: the agent's tile in the mark. */
+  --brand: oklch(0.72 0.17 55);
+  /* The brand colour where a line carries meaning (the diagram's MCP arrow):
+     darker in light mode so it keeps 3:1 against the background. */
+  --brand-line: oklch(0.64 0.17 52);
+  --chart-1: #2a78d6;
+  --chart-2: #eb6834;
+  --chart-3: #1baf7a;
+  --chart-4: #eda100;
+  --chart-5: #e87ba4;
+  --radius: 0.625rem;
+  color-scheme: light;
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --brand: oklch(0.76 0.16 58);
+  --brand-line: oklch(0.76 0.16 58);
+  --chart-1: #3987e5;
+  --chart-2: #d95926;
+  --chart-3: #199e70;
+  --chart-4: #c98500;
+  --chart-5: #d55181;
+  color-scheme: dark;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+    scroll-padding-top: 4.5rem;
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "ss01";
+  }
+  ::selection {
+    background: color-mix(in oklch, var(--brand) 28%, transparent);
+  }
+  /* muted-foreground rather than --ring: the light --ring is 2.6:1 on white, under
+     the 3:1 a focus indicator needs. */
+  :focus-visible {
+    outline: 2px solid var(--muted-foreground);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  a {
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+  code,
+  kbd,
+  pre {
+    font-variant-numeric: tabular-nums;
+  }
+  html {
+    scrollbar-color: color-mix(in oklch, var(--muted-foreground) 45%, transparent) transparent;
+  }
+}
+
+/* Screenshots come in a light and a dark capture; show the one for the theme. */
+.shot-light,
+.dark .shot-dark {
+  display: block;
+}
+.shot-dark,
+.dark .shot-light {
+  display: none;
+}
+
+/* JSON in examples: a few quiet token colours. */
+.tok-key {
+  color: var(--foreground);
+}
+.tok-str {
+  color: color-mix(in oklch, var(--chart-3) 75%, var(--foreground));
+}
+.tok-num {
+  color: color-mix(in oklch, var(--chart-1) 80%, var(--foreground));
+}
+.tok-lit {
+  color: color-mix(in oklch, var(--chart-2) 80%, var(--foreground));
+}
+.tok-punct {
+  color: var(--muted-foreground);
+}
+
+/* ── The yaah mark, reused from app/index.html (start-up indicator) ───────────
+   The tiles slide together, hold and slide on, exactly as the app's loader. Here
+   it plays twice and then settles, so nothing on the page moves for more than
+   five seconds. */
+.yaah-mark .fill-current {
+  fill: currentColor;
+}
+.yaah-mark .fill-brand {
+  fill: var(--brand);
+}
+.yaah-mark[data-loading] rect {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation:
+    yaah-slide 2100ms cubic-bezier(0.16, 1, 0.3, 1) 2 both,
+    yaah-settle 700ms cubic-bezier(0.16, 1, 0.3, 1) 4200ms forwards;
+}
+.yaah-mark[data-loading] rect[data-tile="1"] {
+  --from: translateY(-45%);
+}
+.yaah-mark[data-loading] rect[data-tile="0"] {
+  --from: translateX(-90%);
+  animation-delay: 90ms, 4290ms;
+}
+.yaah-mark[data-loading] rect[data-tile="3"] {
+  --from: translateX(-70%);
+  animation-delay: 180ms, 4380ms;
+}
+/* The agent's piece slides in last and locks the "y". */
+.yaah-mark[data-loading] rect[data-tile="2"] {
+  --from: translateX(-110%);
+  animation-delay: 300ms, 4500ms;
+}
+@keyframes yaah-slide {
+  0% {
+    transform: var(--from);
+    opacity: 0;
+  }
+  24% {
+    transform: none;
+    opacity: 1;
+  }
+  68% {
+    transform: none;
+    opacity: 1;
+  }
+  86%,
+  100% {
+    transform: translateX(35%);
+    opacity: 0;
+  }
+}
+@keyframes yaah-settle {
+  from {
+    transform: var(--from);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .yaah-mark[data-loading] rect {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}

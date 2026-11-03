@@ -1,0 +1,18 @@
+---
+import { highlightJson } from "../lib/json";
+// A tool call as the agent sends it: the tool's name, then its JSON arguments.
+interface Props {
+  tool: string;
+  value: unknown;
+  note?: string;
+}
+const { tool, value, note } = Astro.props;
+const html = highlightJson(value);
+---
+<div class="min-w-0 overflow-hidden rounded-lg border bg-muted/60">
+  <div class="flex items-baseline justify-between gap-3 border-b px-3.5 py-2 font-mono text-[12px] text-muted-foreground">
+    <span class="shrink-0"><span class="text-foreground">{tool}</span></span>
+    {note && <span class="min-w-0 text-right">{note}</span>}
+  </div>
+  <pre class="px-3.5 py-3 font-mono text-[12px] leading-[1.65] whitespace-pre-wrap [overflow-wrap:anywhere]"><code set:html={html} /></pre>
+</div>

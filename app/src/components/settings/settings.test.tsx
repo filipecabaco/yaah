@@ -89,6 +89,96 @@ describe("Settings → Chat", () => {
   });
 });
 
+describe("Settings → Agents", () => {
+  it("shows which version of an npm-based agent runs, holds it there, and offers to restart what still runs the old one", async () => {
+    const { user } = renderApp();
+    const dialog = await openSettings(user, "Agents (ACP)");
+
+    // The Claude adapter: tested pin, a newer version being checked, npx until yaah has installed it.
+    await user.click(await within(dialog).findByRole("button", { name: /^Claude Code/ }));
+    const version = await within(dialog).findByRole("region", { name: "Version" });
+    expect(within(version).getByText("v0.99.1 · tested")).toBeInTheDocument();
+    expect(within(version).getByText(/Checking v0\.100\.0/)).toBeInTheDocument();
+    expect(within(version).getByText(/moves to a newer one only after that version passes yaah's checks/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Its first start runs through npx while yaah installs it once/)).toBeInTheDocument();
+    expect(within(version).queryByRole("button", { name: /^Use v/ })).toBeNull();
+
+    // Hold: frozen at this version, stored by Rust.
+    await user.click(within(version).getByRole("button", { name: /hold at this version/i }));
+    expect(await within(version).findByRole("button", { name: /release hold/i })).toBeInTheDocument();
+    expect(within(version).getByText(/Held: yaah stays on v0\.99\.1/)).toBeInTheDocument();
+    expect((await api.listAgentPresets()).find((p) => p.id === "claude")).toMatchObject({ held: true, active: "0.99.1" });
+
+    // Holding at another version changes what runs: the running agent is restarted only if the user says so.
+    const change = await api.holdAgentVersion("claude", "0.98.0");
+    expect(change.running).toEqual(["default"]);
+    await expect(api.holdAgentVersion("claude", "latest")).rejects.toThrow(/isn't an exact version/);
+    await api.holdAgentVersion("claude", "0.99.1");
+
+    // Release: back to the tested version.
+    await user.click(within(version).getByRole("button", { name: /release hold/i }));
+    expect(await within(version).findByRole("button", { name: /hold at this version/i })).toBeInTheDocument();
+    expect((await api.listAgentPresets()).find((p) => p.id === "claude")).toMatchObject({ held: false, active: "0.99.1" });
+
+    // Check for updates now.
+    await user.click(within(version).getByRole("button", { name: /check for updates/i }));
+    expect(await within(version).findByText("Checked just now")).toBeInTheDocument();
+  });
+
+  it("asks before restarting an agent whose version changed, and says when a failed version won't run", async () => {
+    const { user } = renderApp();
+    await api.holdAgentVersion("claude", "0.98.0");
+    const dialog = await openSettings(user, "Agents (ACP)");
+    await user.click(await within(dialog).findByRole("button", { name: /^Claude Code/ }));
+    const version = await within(dialog).findByRole("region", { name: "Version" });
+    expect(await within(version).findByText("v0.98.0 · not checked")).toBeInTheDocument();
+
+    await user.click(within(version).getByRole("button", { name: /release hold/i }));
+    const ask = await within(version).findByRole("group", { name: "Restart running agents" });
+    expect(within(ask).getByText(/Claude still runs v0\.98\.0\. Restart now to use v0\.99\.1\?/)).toBeInTheDocument();
+    await user.click(within(ask).getByRole("button", { name: "Later" }));
+    expect(await within(version).findByText("v0.99.1 runs from the agent's next start.")).toBeInTheDocument();
+
+    // Codex: its newer version failed, so the tested one keeps running.
+    await user.click(within(dialog).getByRole("button", { name: /^Codex/ }));
+    const codex = await within(dialog).findByRole("region", { name: "Version" });
+    expect(within(codex).getByText("v2.5.0 · tested")).toBeInTheDocument();
+    expect(within(codex).getByText(/v2\.6\.0 failed: session\/new signed out: .*unknown field `systemPrompt`/)).toBeInTheDocument();
+  });
+
+  it("verifies a version now: every check shows, a passing candidate runs next, a failing one stays out", async () => {
+    const { user } = renderApp();
+    const dialog = await openSettings(user, "Agents (ACP)");
+    await user.click(await within(dialog).findByRole("button", { name: /^Claude Code/ }));
+    const version = await within(dialog).findByRole("region", { name: "Version" });
+
+    // The last run on what runs now, one line that opens to every check.
+    const summary = within(version).getByRole("button", { name: /v0\.99\.1: all 12 checks passed/ });
+    await user.click(summary);
+    const checks = within(version).getByRole("list", { name: "Checks on v0.99.1" });
+    expect(within(checks).getByText("session/new signed out")).toBeInTheDocument();
+    expect(within(checks).getByText(/method not found \(-32601\)/)).toBeInTheDocument();
+    expect(within(version).getByText(/npm audit .*: no advisories/)).toBeInTheDocument();
+    // Tier B is there, off and not yet available.
+    expect(within(version).getByRole("switch", { name: /live test/i })).toBeDisabled();
+    expect(within(version).getByText("coming soon")).toBeInTheDocument();
+
+    // The candidate passes and is promoted.
+    await user.click(within(version).getByRole("button", { name: "Verify v0.100.0 now" }));
+    expect(await within(version).findByText("v0.100.0 passed yaah's checks and runs from the agent's next start.")).toBeInTheDocument();
+    expect(within(version).getByText("v0.100.0 · verified")).toBeInTheDocument();
+    expect((await api.listAgentPresets()).find((p) => p.id === "claude")).toMatchObject({ active: "0.100.0", candidate: null });
+
+    // Codex's candidate fails again: it stays out, and the failing check is named.
+    await user.click(within(dialog).getByRole("button", { name: /^Codex/ }));
+    const codex = await within(dialog).findByRole("region", { name: "Version" });
+    await user.click(within(codex).getByRole("button", { name: "Verify v2.6.0 now" }));
+    await user.click(await within(codex).findByRole("button", { name: /v2\.6\.0: 1 of 12 checks failed/ }));
+    expect(within(codex).getByText(/got unknown field `systemPrompt`/, { selector: "span" })).toBeInTheDocument();
+    expect(within(codex).getByText("v2.5.0 · tested")).toBeInTheDocument();
+  });
+});
+
 describe("Settings → MCP servers", () => {
   it('limits a server to one agent with "Available to"', async () => {
     const { user } = renderApp();

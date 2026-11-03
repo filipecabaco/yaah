@@ -2,6 +2,33 @@
 
 A Tauri + React + shadcn proof of concept: group folders into projects, pick a Claude account, chat with Claude Code over ACP.
 
+## Install
+
+_Available after the first release._ macOS (Apple Silicon) and Linux (x86_64, arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/filipecabaco/yaah/main/install.sh | sh
+```
+
+Options go after `sh -s --`, e.g. `curl -fsSL …/install.sh | sh -s -- --version v0.1.0`. `install.sh --help` lists them.
+
+What [`install.sh`](../install.sh) does (POSIX `sh`; it runs nothing it downloads except the installed app):
+
+- Picks the asset for the OS and CPU and refuses anything else (Intel Macs, Windows, 32-bit or other Linux CPUs) with a clear message.
+- Downloads it and the release's `SHA256SUMS` with curl (or wget) from `https://github.com/filipecabaco/yaah/releases/latest/download/` (or `/download/<tag>/` with `--version`), checks the SHA-256 and stops on a mismatch.
+- **macOS**: puts `yaah.app` in `/Applications`, or `~/Applications` when that isn't writable (`--prefix DIR` for another folder). An existing install is replaced; a running yaah is asked to quit first. It then removes the `com.apple.quarantine` attribute (see below).
+- **Linux**: installs the AppImage as `~/.local/bin/yaah`, a menu entry in `~/.local/share/applications/yaah.desktop` and the icons in `~/.local/share/icons/hicolor/` (`--prefix DIR` for `DIR/bin` and `DIR/share`). It warns when `~/.local/bin` isn't on `PATH` and when FUSE isn't available: the AppImage mounts itself with FUSE (`/dev/fuse` and `fusermount`, from the `fuse3` package; libfuse2 isn't needed), and without it runs as `yaah --appimage-extract-and-run`. The AppImage uses the X11/Wayland, OpenGL and font libraries every desktop has; on a minimal system use `--deb`.
+- `--deb` (Debian, Ubuntu) installs the `.deb` with `sudo apt-get install` instead, which pulls in WebKitGTK.
+- `--dry-run` prints what it would do; `-q` prints only warnings and errors.
+
+`YAAH_REPO` (default `filipecabaco/yaah`), `YAAH_VERSION` and `YAAH_RELEASE_BASE` (a folder of release assets, used as is; for mirrors and tests) change where it downloads from.
+
+**Uninstall**: `curl -fsSL …/install.sh | sh -s -- --uninstall` (add the same `--prefix` if you used one, or `--deb` for the package). It removes only what it installed and keeps your data in `~/.yaah` and `~/.config/yaah`; `--purge` deletes those too, with the app's WebKit caches.
+
+**macOS signing.** Releases are ad-hoc signed, not signed with an Apple Developer ID or notarised yet. Gatekeeper only checks apps that carry the quarantine attribute, which browsers add to downloads and `curl` doesn't; the installer removes it anyway after checking the SHA-256, so yaah opens without a prompt. If you download the `.dmg` or `.tar.gz` with a browser instead, macOS will say it can't verify the developer: run `xattr -dr com.apple.quarantine /Applications/yaah.app`, or allow it in System Settings → Privacy & Security.
+
+Releases are built by `.github/workflows/release.yml` (not enabled yet) through `mise run release:build`; see [Releases](#releases).
+
 ## Run
 
 ```sh
@@ -9,16 +36,21 @@ pnpm install
 pnpm tauri dev
 ```
 
-Needs Rust, Node (for `npx`) and a logged-in Claude Code account. macOS and Linux only.
+Needs Rust, Node (npm and npx, for the npm-based agents) and a logged-in Claude Code account. macOS and Linux only.
 
 ## How it works
 
 ```
 React (src/)                 Rust (src-tauri/src/)                  agent process
 -------------                ---------------------                  -------------
-invoke(new_session) ───────► session.rs  Hub ─── acp.rs ── stdio ──► npx @agentclientprotocol/claude-agent-acp@0.99.1
+invoke(new_session) ───────► session.rs  Hub ─── acp.rs ── stdio ──► node ~/.yaah/agents/<claude-agent-acp@0.99.1>/…/index.js
 render entries     ◄──────── "session-entry" / "session-info" events     (env CLAUDE_CONFIG_DIR=<account>)
 ```
+
+- **Agents from npm** (`agent_install.rs`, `agent_versions.rs`) — presets that come as an npm package (Claude's adapter, Gemini CLI, codex-acp, Copilot, Qwen Code, Auggie, Cline) are pinned to the version yaah was tested with. Their profiles save `npx -y <package>@<version>`, but that is only how a version starts the first time: meanwhile yaah installs it once, in the background, with `npm install --prefix` (no shell) into `~/.yaah/agents/<package>@<version>/` (a temp folder renamed into place when complete, one install per version at a time), and from then on runs its program directly with `node`. That saves npm's ~280 ms per start and its ~115 MB parent process per running agent. A binary on PATH still comes first; custom commands are never touched. Logins rerun the same resolved command.
+  - **Versions.** What runs is the version the user holds the agent at (Settings → Agents → "Hold at this version", `agentVersions` in `settings.json`), else the newest _verified_ version at or above the pin, else the pin. Once a day (and on "Check for updates") yaah reads each package's `dist-tags.latest` from the npm registry (cached in `~/.yaah/agents/versions.json`); a newer version of an agent in use is installed as a candidate and runs only after it passes yaah's checks and is promoted. Each version's state (`installed`, `verifying`, `verified`, `failed`, failures, advisories) is in `~/.yaah/agents/verified.json`. Offline, the last known state stays.
+  - **Cleanup.** At startup, version folders nothing runs or waits on any more (old versions, failed candidates, installs that died half-way) are removed, only under `~/.yaah/agents/`.
+  - **Conformance** (`agent_conformance.rs`). Each candidate goes through the suite before it's promoted; Settings → Agents → "Verify now" runs it on the active version or the latest candidate. **Tier A** (on, no sign-in, no tokens): yaah's own ACP client starts the installed version in a throwaway home (its own `HOME`, XDG folders, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`; nothing inherited but `PATH`), so it never reads the user's agent config or credentials, and checks that it answers `initialize` within 90 s with protocol v1, still advertises what yaah uses with that preset (one table, `EXPECTATIONS`: `loadSession`, `mcpCapabilities.http`, `sessionCapabilities.systemPrompt`/`additionalDirectories`, `promptCapabilities.embeddedContext`), has `authMethods` that parse (and terminal-login args where yaah's login runs them), answers a signed-out `session/new` with a session or ACP's auth-required error, answers an unknown method with "method not found" and lives on, and exits within 15 s of its stdin closing without leaving a process behind. Then `npm audit --json --omit=dev` runs in the version's folder (no shell, 120 s): high and critical advisories block promotion, the rest are shown; offline, the last audit stands and nothing fails. The active version of each agent in use is audited daily too, so Settings shows advisories for what runs now. Per-check results are kept in `~/.yaah/agents/conformance.json`; the verdict goes to `verified.json`. A verified version that fails a re-check is marked failed, so what runs falls back. **Tier B** (`agent_conformance::live`, prepared, not active): live prompts with the user's account (a reply streams, a `ui_catalog` tool call, a permission round trip, cancel mid-turn, `session/load`, notices, `available_commands_update`), as `#[ignore]`d `live_adapter_*` tests; the setting is shown as "coming soon".
 
 - **acp.rs** — minimal ACP v1 client: newline-delimited JSON-RPC over the agent's stdio, request/response correlation, agent-initiated requests.
 - **session.rs** — one adapter process per account, many sessions per process. Merges `session/update` chunks into transcript entries (message, thought, tool call, plan, permission, error) and pushes each changed entry to the UI. Rust owns the transcript; React only renders it.
@@ -131,6 +163,18 @@ cargo test --lib --tests                     # unit, ACP end-to-end, Postgres an
 cargo deny check                             # advisories, licences, sources
 ```
 
+The same, as CI runs them (`mise.toml` tasks; plain commands, so they run the same here, in Docker and in GitHub Actions):
+
+```sh
+mise run ci:rust          # fmt check, clippy -D warnings, tests, cargo deny
+mise run ci:web           # pnpm install --frozen-lockfile, pnpm check, pnpm build
+mise run ci:conformance   # tier A for every npm preset, pinned and latest (args: --only, --pinned, --latest, --fail-on-latest, --json, --markdown)
+mise run ci               # all three, one after another
+mise run ci:docker        # build ci/Dockerfile (Ubuntu 24.04, like ubuntu-latest) and run `ci` in it; CI_TASK=ci:rust for one task
+```
+
+In the container the Docker and Postgres tests skip (no daemon or database to reach), and the repository is copied from a read-only mount into a volume, so the host's `target/` and `node_modules/` are never touched. `.github/workflows/ci.yml` is the GitHub Actions version, not enabled yet; see `docs/experiments/2026-11-03-ci-docker/`.
+
 - `pnpm format` and `cargo fmt` fix formatting.
 - `pnpm coverage` and `cargo llvm-cov --lib --tests --summary-only` report coverage.
 - Tests prefer real things to mocks:
@@ -139,6 +183,26 @@ cargo deny check                             # advisories, licences, sources
   - OAuth, the MCP client and yaah's UI server are tested against real local HTTP servers;
   - GitHub, GitLab and Linear reads (the queue, items, live sources) go to a local stand-in serving answers shaped like the real APIs, through a base URL only tests set, with real git repos for matching clones; no test calls a real tracker;
   - the frontend tests render the real `App` against the browser mock.
+
+## Releases
+
+Bundles for macOS arm64 (`.app`, `.dmg`), Linux x86_64 and arm64 (AppImage, `.deb`), under stable names so `releases/latest/download/<name>` always works:
+
+| asset                                                     | what                                      |
+| --------------------------------------------------------- | ----------------------------------------- |
+| `yaah-macos-arm64.tar.gz`                                 | `yaah.app`, what install.sh uses          |
+| `yaah-macos-arm64.dmg`                                    | for a manual install                      |
+| `yaah-linux-x86_64.AppImage`, `yaah-linux-arm64.AppImage` | install.sh's default on Linux             |
+| `yaah-linux-x86_64.deb`, `yaah-linux-arm64.deb`           | `install.sh --deb`                        |
+| `SHA256SUMS`                                              | `sha256sum` format, checked by install.sh |
+
+```sh
+mise run release:build          # this machine's bundles into ../dist-release/ (YAAH_DIST_DIR to change)
+mise run release:linux:docker   # both Linux arches in the CI container (arm64 native, x86_64 emulated; RELEASE_ARCHES=arm64 for one)
+mise run release:checksums      # dist-release/SHA256SUMS
+```
+
+`.github/workflows/release.yml` runs the same on a `vX.Y.Z` tag (macos-14, ubuntu-24.04, ubuntu-24.04-arm), checks the tag against the version in `tauri.conf.json`, `Cargo.toml` and `package.json`, and publishes the release with `gh release create`. To cut one: bump those three versions, commit, tag `vX.Y.Z` and push the tag. macOS builds are ad-hoc signed (`bundle.macOS.signingIdentity: "-"`); for Developer ID signing and notarisation, add the `APPLE_*` secrets listed at the top of the workflow. `yaah --version` prints the version without starting the UI. See `docs/experiments/2026-11-03-installer/`.
 
 ## Headless check
 
@@ -152,6 +216,8 @@ Live tests against a real account (opt-in; they use a little of its quota):
 ```sh
 YAAH_LIVE_ACCOUNT=default cargo test --lib live_ -- --ignored --nocapture
 ```
+
+Tier B of the adapter conformance suite is the same kind of test (`YAAH_LIVE_CANDIDATE=<version>` runs an installed newer version with the account's login): `cargo test --lib live_adapter -- --ignored --nocapture`.
 
 `live_chat_with_permission` drives a chat through a permission prompt; `live_ui_builds_and_renders_a_component` checks the agent finds the UI tools, saves a component and renders it. `YAAH_RECORD=<file>` saves the events for UI replays (see `src/dev/fixtures/`).
 

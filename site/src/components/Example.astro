@@ -1,0 +1,30 @@
+---
+// One exchange: what was asked, the tool call the agent made, what yaah drew.
+interface Props {
+  id: string;
+  title: string;
+  prompt: string;
+}
+const { id, title, prompt } = Astro.props;
+// `backticks` in a prompt are code, as the agent would read them.
+const parts = prompt.split("`");
+---
+<article id={id} aria-labelledby={`${id}-title`} class="border-t py-14 first:border-t-0 md:py-16">
+  <h3 id={`${id}-title`} class="text-xl font-semibold tracking-tight text-balance sm:text-2xl">{title}</h3>
+  <div class="mt-6 flex justify-end">
+    <p class="max-w-[46rem] rounded-2xl bg-muted px-4 py-3 text-[15px] leading-6">
+      <span class="sr-only">You ask: </span>{parts.map((p, i) => (i % 2 ? <code class="rounded-sm bg-background/70 px-1 font-mono text-[0.88em]">{p}</code> : p))}
+    </p>
+  </div>
+  <div class="mt-6 grid gap-6 md:grid-cols-12 md:gap-10">
+    <div class="min-w-0 space-y-4 md:col-span-5">
+      <slot name="code" />
+      <div class="text-[15px] leading-7 text-muted-foreground [&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.86em] [&_code]:text-foreground">
+        <slot />
+      </div>
+    </div>
+    <div class="min-w-0 max-md:order-first md:col-span-7 md:sticky md:top-20 md:self-start">
+      <slot name="media" />
+    </div>
+  </div>
+</article>

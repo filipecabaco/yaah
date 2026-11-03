@@ -1,6 +1,9 @@
 pub mod accounts;
 pub mod acp;
+pub mod agent_conformance;
 pub mod agent_guide;
+pub mod agent_install;
+pub mod agent_versions;
 pub mod agents;
 mod commands;
 mod data_commands;
@@ -52,6 +55,12 @@ pub fn run() {
             let guide = Arc::new(agent_guide::Guide::for_app(library.clone()));
             guide.sync_in_background();
             hub.set_guide(guide.clone());
+            // npm-based agents: drop version folders nothing runs any more, and check for newer versions daily.
+            agent_install::cleanup_in_background(agent_versions::Versions::user().keep(&settings::agent_versions()));
+            // The conformance suite checks each newer version before it runs (agent_conformance.rs), and audits what runs daily.
+            agent_versions::set_verifier(Box::new(agent_conformance::Suite));
+            agent_versions::watch();
+            agent_conformance::watch_advisories();
             app.manage(guide);
             app.manage(hub);
             app.manage(library);
@@ -65,6 +74,10 @@ pub fn run() {
             commands::remove_agent,
             commands::set_default_agent,
             commands::test_agent,
+            commands::hold_agent_version,
+            commands::check_agent_updates,
+            commands::verify_agent_version,
+            commands::restart_agents,
             commands::login_methods,
             commands::start_login,
             commands::submit_login_code,

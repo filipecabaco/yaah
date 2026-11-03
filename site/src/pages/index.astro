@@ -1,0 +1,633 @@
+---
+import Base from "../layouts/Base.astro";
+import Mark from "../components/Mark.astro";
+import Shot from "../components/Shot.astro";
+import Json from "../components/Json.astro";
+import Kbd from "../components/Kbd.astro";
+import Feature from "../components/Feature.astro";
+import Example from "../components/Example.astro";
+import Diagram from "../components/Diagram.astro";
+import { testReport, dbQuery, ask, bugForm, bugValues, saveMarkerMap, renderMarkerMap } from "../lib/examples";
+
+// The yaah pack: app/src-tauri/components/*.json, grouped by what they show.
+const pack: [string, string[]][] = [
+  ["Tests and files", ["test-report", "file-tree", "file-view", "json-view", "word-count"]],
+  ["Git", ["git-graph", "git-status", "diff-stat"]],
+  ["This machine and Docker", ["system-monitor", "docker-dashboard", "container-logs"]],
+  ["Databases", ["db-explorer", "db-query", "sql-editor"]],
+  ["GitHub and GitLab", ["pr-view", "pr-list", "github-issue", "gitlab-issue"]],
+  ["Linear", ["linear-issue", "linear-issues", "linear-board", "linear-cycle", "linear-project"]],
+];
+
+// Agent presets: app/src-tauri/src/agents.rs.
+const agents = [
+  "Claude Code",
+  "Codex",
+  "Gemini CLI",
+  "GitHub Copilot",
+  "Cursor",
+  "OpenCode",
+  "goose",
+  "Kiro CLI",
+  "Qwen Code",
+  "Auggie",
+  "Cline",
+  "Kimi CLI",
+  "Mistral Vibe",
+];
+
+// app/src/lib/shortcuts.ts (⌘ on macOS, Ctrl on Linux).
+const shortcuts: [string, string[]][] = [
+  ["Command palette", ["⌘", "K"]],
+  ["New chat in the current project", ["⌘", "N"]],
+  ["New project", ["⌘", "⇧", "N"]],
+  ["Focus the message box", ["⌘", "L"]],
+  ["Stop the running turn", ["⌘", "."]],
+  ["Previous and next chat", ["⌘", "[", "]"]],
+  ["Nth chat of the current project", ["⌘", "1–9"]],
+  ["Keyboard shortcuts", ["⌘", "/"]],
+  ["Settings", ["⌘", ","]],
+];
+const composerKeys: [string, string[]][] = [
+  ["Send", ["Enter"]],
+  ["New line", ["⇧", "Enter"]],
+  ["Slash commands, at the start", ["/"]],
+  ["Mention a file", ["@"]],
+];
+
+const principles: [string, string][] = [
+  ["Show, don't tell.", "The agent's answer is interface you can act on."],
+  ["You stay in control.", "Tool calls ask first, and data access is read-only."],
+  ["Calm for long sessions.", "The chrome recedes so the agent's work stands out."],
+  ["Open.", "Any ACP agent, any VS Code theme, anyone's component library."],
+];
+---
+<Base
+  title="yaah: agents answer with interface"
+  description="yaah is a desktop harness for coding agents. It runs any ACP agent and lets the agent answer with real, interactive UI: forms, tables, live pull requests, databases, diffs and charts."
+>
+  <!-- Hero -->
+  <section id="top" aria-labelledby="hero-title" class="mx-auto max-w-6xl px-5 pt-16 sm:px-8 sm:pt-24">
+    <div class="max-w-3xl">
+      <Mark loading class="size-14 sm:size-16" title="yaah" />
+      <h1 id="hero-title" class="mt-6 text-[2.6rem] leading-[1.04] font-semibold tracking-[-0.035em] text-balance sm:text-6xl">
+        Agents answer with interface.
+      </h1>
+      <p class="mt-6 max-w-[62ch] text-lg leading-8 text-muted-foreground">
+        yaah is a desktop harness for coding agents. It runs Claude Code, Codex, Gemini or any other ACP agent, and lets the agent
+        reply with real, interactive UI: forms you fill in together, tables, live pull requests, databases, diffs and charts. All of
+        it built from a component library that is data, not code.
+      </p>
+      <div class="mt-8 flex flex-wrap items-center gap-3">
+        <a
+          href="#get-started"
+          class="inline-flex h-10 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >Build from source</a
+        >
+        <a href="#examples" class="inline-flex h-10 items-center rounded-md border bg-background px-4 text-sm font-medium transition-colors hover:bg-accent"
+          >See examples</a
+        >
+      </div>
+      <p class="mt-5 text-sm text-muted-foreground">A proof of concept for macOS and Linux. There is no release yet.</p>
+    </div>
+    <Shot
+      class="mt-14 sm:mt-16"
+      name="pack-system-monitor"
+      width={1600}
+      height={1000}
+      eager
+      alt="A yaah chat in which the agent rendered system-monitor: CPU, memory, load and swap, a CPU and memory chart over time, disk usage and a sortable table of the busiest processes."
+      caption="A quick chat: the agent rendered system-monitor from the yaah pack, and yaah keeps it refreshing every 2 seconds without another agent turn. Every screen on this page is the app itself, replaying recorded agent sessions in its browser mock."
+    />
+  </section>
+
+  <!-- Thesis -->
+  <section id="why" aria-labelledby="why-title" class="mx-auto max-w-6xl px-5 py-20 sm:px-8 sm:py-28">
+    <div class="grid gap-10 md:grid-cols-12 md:gap-12">
+      <div class="md:col-span-5">
+        <h2 id="why-title" class="text-3xl font-semibold tracking-tight text-balance sm:text-4xl">Answers you can act on</h2>
+      </div>
+      <div class="space-y-5 text-[16px] leading-7 text-muted-foreground md:col-span-7">
+        <p>
+          A coding agent usually answers in text: a summary of the test run, a pasted diff, a query result in a code block. In yaah
+          the agent calls a tool and the answer is the thing itself. The test run in green and red with failures first. The diff in a
+          reviewer you can step through. The query as a sortable table and a chart. A form, when it needs something from you.
+        </p>
+        <p>
+          It's for developers who run coding agents on their own machine, across several repos and several chats at once, and spend
+          hours reading agent output, approving tool calls and reviewing changes.
+        </p>
+      </div>
+    </div>
+    <dl class="mt-14 grid gap-x-10 sm:grid-cols-2 lg:grid-cols-4">
+      {
+        principles.map(([term, detail]) => (
+          <div class="border-t py-5">
+            <dt class="font-medium">{term}</dt>
+            <dd class="mt-1.5 text-[15px] leading-6 text-muted-foreground">{detail}</dd>
+          </div>
+        ))
+      }
+    </dl>
+  </section>
+
+  <!-- Features -->
+  <section id="features" aria-labelledby="features-title" class="border-t bg-muted/30">
+    <div class="mx-auto max-w-6xl px-5 pt-20 sm:px-8 sm:pt-28">
+      <h2 id="features-title" class="text-3xl font-semibold tracking-tight sm:text-4xl">What's in it</h2>
+      <p class="mt-4 max-w-[62ch] text-[16px] leading-7 text-muted-foreground">
+        Everything below is built and running in the proof of concept. Screens are from yaah's browser mock, which answers the app's
+        commands with recorded fixtures.
+      </p>
+
+      <div class="mt-6">
+        <Feature id="agent-ui" title="UI built from data, not code">
+          <p>
+            Through yaah's MCP server the agent renders a component with its props, or an ad-hoc tree of yaah's 45 primitives: text,
+            tables, charts, forms, diffs, maps, Mermaid diagrams, a browser preview and more. A component is JSON: a tree with
+            <code>{"{{bindings}}"}</code> to its props, a JSON Schema and examples. yaah draws it with the same shadcn components as the rest of
+            the app, and no agent code runs.
+          </p>
+          <p>Rendering again with the same <code>id</code> updates the UI in place, which is how status panels and long jobs stay current.</p>
+          <p><strong>The yaah pack</strong> ships with the app: 23 read-only components that agents use and compose.</p>
+          <dl class="grid gap-x-6 gap-y-3 pt-1 text-[14px] leading-6 sm:grid-cols-2">
+            {
+              pack.map(([group, names]) => (
+                <div>
+                  <dt class="text-foreground">{group}</dt>
+                  <dd class="font-mono text-[12.5px]">
+                    {names.map((n, i) => (
+                      <>
+                        <span class="whitespace-nowrap">{n}{i < names.length - 1 ? "," : ""}</span>{" "}
+                      </>
+                    ))}
+                  </dd>
+                </div>
+              ))
+            }
+          </dl>
+          <Shot
+            slot="media"
+            name="library-pr-view"
+            width={1600}
+            height={1000}
+            alt="The Component library page: the yaah pack listed on the left, and pr-view selected, rendering a GitHub pull request with its checks, description and diff."
+            caption="The Component library page: pr-view, from the yaah pack, rendering its example pull request with the diff viewer."
+          />
+        </Feature>
+
+        <Feature id="forms" title="Forms you fill in together">
+          <p>
+            When the agent needs a choice, a number or a few short answers, it asks with a form. With <code>ui_ask</code> it waits and gets
+            your answer back as JSON in the same turn.
+          </p>
+          <p>
+            A form rendered with an <code>id</code> stays open as a shared draft. The agent fills fields with <code>ui_set_values</code>, you
+            change what you like, and it reads where things stand with <code>ui_get_values</code>. Fields the agent set are marked{" "}
+            <strong>agent</strong> and flash when it changes them; the last write to a field wins, and sending locks the form.
+          </p>
+          <p>Inputs: text fields, choices, selects, sliders, rankings and toggles.</p>
+          <Shot
+            slot="media"
+            name="ask-form"
+            width={1200}
+            height={1005}
+            alt="A form the agent asked with, waiting for an answer: preferred language, a slider for hours available, a grid of project kinds, and a ranked list of what matters most."
+            caption="ui_ask: the agent asks before recommending a weekend project, and waits for the answer."
+          />
+        </Feature>
+
+        <Feature id="live-sources" title="Live sources">
+          <p>
+            Some data yaah reads itself and keeps fresh, so the agent doesn't poll: <strong>this machine</strong> (CPU, memory, disks,
+            processes), <strong>Docker</strong> (containers, stats, logs), <strong>Postgres</strong>, <strong>GitHub</strong> (pull requests, diffs,
+            issues), <strong>Linear</strong> (issues, projects, boards, cycles) and <strong>GitLab</strong> (issues). A <code>live</code> node refreshes on an interval
+            and keeps going after the agent's turn ends.
+          </p>
+          <p>
+            Postgres queries run in a <code>READ ONLY</code> transaction with a 15-second timeout and a row limit, and only as a read-only role.
+            A superuser, or a role that can read server files or run programs, is refused.
+          </p>
+          <pre class="overflow-x-auto rounded-lg border bg-muted/60 px-3.5 py-3 font-mono text-[12.5px] leading-[1.6] text-foreground" tabindex="0"><code>CREATE ROLE yaah_ro LOGIN PASSWORD '…';
+GRANT pg_read_all_data TO yaah_ro;</code></pre>
+          <p>Agents see a connection's name, never its password or token.</p>
+          <Shot
+            slot="media"
+            name="pack-docker"
+            width={1200}
+            height={1125}
+            alt="docker-dashboard in a chat: a table of three running containers with state, image and ports, then a bar chart and table of CPU and memory per container."
+            caption="docker-dashboard: containers refreshed every 5 seconds, and CPU and memory per running container."
+          />
+        </Feature>
+
+        <Feature id="libraries" title="Component libraries">
+          <p>
+            Components are saved and versioned, by you or by the agent with <code>ui_save_component</code>, and every chat can use them. Beside
+            yaah's own and your collection, you can install libraries that other people and teams publish: a git repo or a folder with a
+            <code>yaah-library.json</code> manifest and one JSON file per component.
+          </p>
+          <p>
+            yaah clones it, checks every component and shows what's inside, including which live sources it reads, before you confirm.
+            Pin a tag to stay on a release. A folder is read in place, so your edits show up while you write a library.
+            <strong>Share as library…</strong> writes your own collection out, ready to push as a git repo, and a library component can be copied
+            into your collection to change it.
+          </p>
+          <p>Libraries are data too: they can only draw yaah's primitives and read the sources they name, through your own connections.</p>
+          <Shot
+            slot="media"
+            name="settings-components"
+            width={1400}
+            height={1007}
+            alt="Settings, Components tab: the built-in yaah library with 23 components, your own collection, an installed library from a git URL with Update and Remove, and a form to add a library from a git URL or a folder."
+            caption="Settings → Components, with a sample library from the browser mock installed from git."
+          />
+        </Feature>
+
+        <Feature id="agents" title="Any ACP agent">
+          <p>
+            yaah speaks the Agent Client Protocol, so it runs any agent that does. There are presets for
+            {agents.slice(0, -1).join(", ")} and {agents.at(-1)}; anything else is a custom command.
+          </p>
+          <p>
+            Presets that come from npm run the version yaah was tested with. For Claude Code, each Claude config folder is a separate
+            login, so a work and a personal account sit side by side.
+          </p>
+          <Shot
+            slot="media"
+            name="settings-agents"
+            width={1400}
+            height={1007}
+            alt="Settings, Agents (ACP) tab: your agents on the left with presets to add below, and the default Claude agent's command, version and config folder on the right."
+            caption="Settings → Agents (ACP): your agents, and presets to add."
+          />
+        </Feature>
+
+        <Feature id="projects" title="Projects and quick chats">
+          <p>
+            A <strong>quick chat</strong> starts in a scratch folder, no project needed: a bit of analysis, a side idea. Move it into a project, or turn
+            it into one, without losing its history.
+          </p>
+          <p>
+            A <strong>project</strong> is a name, a status (planning, ongoing, done, archived) and one or more repos. Chats run in the first repo and
+            can work across the rest, and the project's brief goes into each chat's first prompt.
+          </p>
+          <Shot
+            slot="media"
+            name="project-linked"
+            width={1600}
+            height={1000}
+            alt="A project page for ENG-142, linked to a Linear issue: the live linear-issue component with status, labels, sub-issues and comments, then the project's chats and repos."
+            caption="A project that follows a Linear issue: the live issue at the top, its chats and repos below."
+          />
+        </Feature>
+
+        <Feature id="from-issues" title="Start a project from an issue">
+          <p>
+            Pick from your open GitHub issues, Linear issues and projects, and GitLab issues, or paste a URL or an id such as
+            <code>owner/repo#12</code> or <code>ENG-142</code>. yaah names the project after it, writes the issue into the brief, adds your local clones of
+            the repo, opens a chat and drafts the first prompt for you to send.
+          </p>
+          <p>
+            The project keeps a live view of the issue, with Refresh and Unlink. yaah only reads the tracker: it never writes to it and
+            creates no branches. If one service fails, the others still load.
+          </p>
+          <Shot
+            slot="media"
+            name="project-from-issue"
+            width={1000}
+            height={1063}
+            alt="The New project dialog on its From an issue tab: a search box, All, Assigned and Created filters, a GitLab sign-in error with Reconnect, and a queue of Linear and GitHub issues to start from."
+            caption="⌘K → New project from an issue. In the mock, GitLab's token has been revoked, so it shows its error while the rest load."
+          />
+        </Feature>
+
+        <Feature id="integrations" title="Integrations">
+          <p>
+            GitHub, Linear and GitLab connect from <strong>Settings → Integrations</strong>, with no client secret and no <code>gh</code> CLI: GitHub
+            through its device flow, Linear and GitLab with PKCE. A personal access token works too, as do <code>GITHUB_TOKEN</code>,
+            <code>LINEAR_API_KEY</code> and <code>GITLAB_TOKEN</code>. GitLab can point at a self-managed instance.
+          </p>
+          <p>
+            Tokens are kept on your machine in <code>~/.config/yaah/integrations.json</code> (mode 0600) and refreshed before they expire. Database
+            connections are added from <kbd class="font-sans">⌘K</kbd> and tested before they're saved.
+          </p>
+          <Shot
+            slot="media"
+            name="settings-integrations"
+            width={1400}
+            height={1007}
+            alt="Settings, Integrations tab: GitHub connected through OAuth, a note about the repo scope and fine-grained tokens, Reconnect and Disconnect, and a field for a personal API key."
+            caption="Settings → Integrations: GitHub, Linear and GitLab, and database connections."
+          />
+        </Feature>
+
+        <Feature id="security" title="Permissions and the security model">
+          <ul class="space-y-3">
+            <li><strong>Tool calls ask first.</strong> A command or an edit waits for Yes, "don't ask again", or No. Only yaah's own <code>ui_*</code> tools run without asking; <code>source_read</code> asks like any other tool.</li>
+            <li><strong>No agent code runs in the app.</strong> Agent UI is JSON drawn by yaah's renderer, and libraries are data too.</li>
+            <li><strong>Data access is read-only.</strong> Postgres only as a read-only role, in a read-only transaction. GitHub, Linear and GitLab are read, never written.</li>
+            <li><strong>Credentials stay in yaah.</strong> Agents see connection names, not passwords or tokens.</li>
+            <li><strong>Web content loads on click.</strong> A web page in a browser frame waits for you to load it. Local previews are served from a separate origin with a strict Content-Security-Policy.</li>
+            <li><strong>Your agent's settings stay yours.</strong> yaah writes nothing into <code>~/.claude*</code>, <code>~/.codex</code> or any other agent config.</li>
+          </ul>
+          <Shot
+            slot="media"
+            name="permission"
+            width={1200}
+            height={585}
+            alt="A permission request in a chat: the agent wants to run node --test --test-reporter=spec, with Yes, Yes and don't ask again, and No."
+            caption="The agent wants to run the tests, and waits for your answer."
+          />
+        </Feature>
+
+        <Feature id="themes" title="Any VS Code theme">
+          <p>
+            Appearance is System, Light or Dark, in yaah's own colours. On top of that, pick one theme for light mode and one for dark from
+            the 65 VS Code themes that ship with yaah, or drop any theme's <code>.json</code> into <code>~/.config/yaah/themes/</code>.
+          </p>
+          <p>
+            Colours are corrected where a theme falls short, so text stays readable (4.5:1 for text, 3:1 for accents), and charts keep their
+            colour-blind-safe palette.
+          </p>
+          <Shot
+            slot="media"
+            name="theme-rose-pine-dawn"
+            single
+            width={1600}
+            height={1000}
+            alt="yaah in the Rosé Pine Dawn theme: warm off-white background and muted purple accents, showing a review panel with a summary, stats and a diff."
+            caption="A review panel the agent built, in Rosé Pine Dawn."
+          />
+        </Feature>
+
+        <Feature id="keyboard" title="Keyboard first">
+          <p>Everything has a key. <kbd class="font-sans">⌘</kbd> on macOS, <kbd class="font-sans">Ctrl</kbd> on Linux; global shortcuts always need the modifier, so typing in a field is never taken.</p>
+          <div class="overflow-x-auto">
+            <table class="w-full text-[14px] leading-6">
+              <caption class="sr-only">Keyboard shortcuts</caption>
+              <tbody>
+                {
+                  shortcuts.map(([label, keys]) => (
+                    <tr class="border-b last:border-b-0">
+                      <th scope="row" class="py-1.5 pr-4 text-left font-normal text-foreground">{label}</th>
+                      <td class="py-1.5 text-right whitespace-nowrap">
+                        <span class="inline-flex gap-1">{keys.map((k) => <Kbd>{k}</Kbd>)}</span>
+                      </td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+          <p>
+            In the message box: {
+              composerKeys.map(([label, keys], i) => (
+                <>
+                  <span class="inline-flex gap-1 align-middle">{keys.map((k) => <Kbd>{k}</Kbd>)}</span> {label.toLowerCase()}{i < composerKeys.length - 1 ? ", " : "."}
+                </>
+              ))
+            }
+          </p>
+          <Shot
+            slot="media"
+            name="palette"
+            width={900}
+            height={813}
+            alt="The command palette: a search box and actions such as New quick chat, New project from an issue, Switch agent, Database connections, Add agent and Settings, with their shortcuts."
+            caption="⌘K: chats, projects and actions in one place."
+          />
+        </Feature>
+
+        <Feature id="agent-skills" title="How agents learn yaah's UI">
+          <p>
+            An agent only answers with UI if it knows it can. yaah teaches each chat's agent with text it owns: a short guide and two skills
+            in the open Agent Skills format (<code>SKILL.md</code> with a name and a description), <code>yaah-ui</code> and <code>yaah-components</code>.
+          </p>
+          <p>
+            They reach every agent the same way: through yaah's MCP server (its instructions, a <code>ui_guide</code> tool, the skills as resources and
+            prompts), through ACP's system prompt when the agent supports it, and otherwise in the chat's first message. Claude Code also gets
+            them as a plugin. Settings → Chat shows exactly what each agent is told.
+          </p>
+          <p>
+            In yaah's own live test, Sonnet answered with yaah's UI in 5 of 6 prompts once taught, up from 2 of 6; Codex did in 3 of 3.
+          </p>
+          <Shot
+            slot="media"
+            name="settings-agents-told"
+            width={1400}
+            height={1007}
+            alt="Settings, Chat tab: the Teach agents about yaah's UI switch, and the routes each agent gets: the yaah-ui MCP server, the guide in the system prompt, and the skills as a Claude Code plugin."
+            caption="Settings → Chat → Show what agents are told."
+          />
+        </Feature>
+      </div>
+    </div>
+  </section>
+
+  <!-- Examples -->
+  <section id="examples" aria-labelledby="examples-title" class="border-t">
+    <div class="mx-auto max-w-6xl px-5 pt-20 sm:px-8 sm:pt-28">
+      <h2 id="examples-title" class="text-3xl font-semibold tracking-tight sm:text-4xl">You ask, the agent renders</h2>
+      <p class="mt-4 max-w-[62ch] text-[16px] leading-7 text-muted-foreground">
+        Four exchanges from recorded agent sessions. Each shows the prompt, the tool call the agent made (shortened where you see …),
+        and what yaah drew.
+      </p>
+
+      <div class="mt-6">
+        <Example id="example-tests" title="Test results, not a summary" prompt="Run the tests with `node --test --test-reporter=spec` and show the results.">
+          <Json slot="code" tool="ui_render" value={testReport} note="output shortened" />
+          <p>
+            <code>test-report</code> takes the output exactly as printed (cargo, pytest, go test, jest, vitest, node --test, mix test, rspec and more)
+            and shows failures first, passing tests folded away.
+          </p>
+          <Shot
+            slot="media"
+            name="pack-test-report"
+            width={1200}
+            height={780}
+            alt="test-report in a chat: 1 failed and 2 passed, a red and green bar, and the failing test refunds part of an order with its AssertionError, 4999 == 1499."
+          />
+        </Example>
+
+        <Example
+          id="example-database"
+          title="A chart from your database"
+          prompt="From the `shop` database connection, show revenue by product category as a chart (look at the schema first)."
+        >
+          <Json slot="code" tool="ui_render" value={dbQuery} />
+          <p>
+            The agent looked at the schema with <code>source_read</code>, then handed yaah the query. yaah runs it on its own read-only
+            connection; the agent never sees the credentials.
+          </p>
+          <Shot
+            slot="media"
+            name="pack-db-query"
+            width={1200}
+            height={863}
+            alt="db-query in a chat: a bar chart of revenue by product category, service, hardware and subscription, above a table with revenue and order counts."
+          />
+        </Example>
+
+        <Example
+          id="example-bug-report"
+          title="A bug report you finish together"
+          prompt="Let's write a bug report about the failing test together: render a form with id `bug`, fill in what you can from the failure with ui_set_values, and ask me to finish it."
+        >
+          <Fragment slot="code">
+            <Json tool="ui_render" value={bugForm} note="shortened" />
+            <Json tool="ui_set_values" value={bugValues} note="steps shortened" />
+          </Fragment>
+          <p>
+            Each field the agent filled is marked <strong class="font-medium text-foreground">agent</strong>. Edit any of them; when you ask, the agent reads the
+            form as it stands with <code>ui_get_values</code>.
+          </p>
+          <Shot
+            slot="media"
+            name="pack-form"
+            width={1200}
+            height={806}
+            alt="A bug report form in a chat, every field marked agent: a title, numbered steps to reproduce with the cause, severity Major, and area billing / refunds, with a File bug button."
+          />
+        </Example>
+
+        <Example
+          id="example-component"
+          title="A component the agent keeps for next time"
+          prompt="Map: the same 20 cities as map markers, labelled with name and population. Build reusable library components wherever the shape would come up again."
+        >
+          <Fragment slot="code">
+            <Json tool="ui_save_component" value={saveMarkerMap} note="schema and examples shortened" />
+            <Json tool="ui_render" value={renderMarkerMap} note="18 markers left out" />
+          </Fragment>
+          <p>The tree is the whole component: a card with a map, bound to its props. It's now in your collection, versioned, for every chat.</p>
+          <Shot
+            slot="media"
+            name="scenarios-map"
+            width={1200}
+            height={773}
+            alt="marker-map in a chat: a world map titled 20 most populous urban areas, with a marker on each city."
+          />
+        </Example>
+      </div>
+    </div>
+  </section>
+
+  <!-- How it works -->
+  <section id="how-it-works" aria-labelledby="how-title" class="border-t bg-muted/30">
+    <div class="mx-auto max-w-6xl px-5 py-20 sm:px-8 sm:py-28">
+      <h2 id="how-title" class="text-3xl font-semibold tracking-tight sm:text-4xl">How it works</h2>
+      <p class="mt-4 max-w-[62ch] text-[16px] leading-7 text-muted-foreground">
+        Two protocols, one in each direction. ACP is how yaah runs the agent; MCP is how the agent calls back into yaah.
+      </p>
+      <div class="mt-10 rounded-xl border bg-background p-4 sm:p-8">
+        <Diagram />
+      </div>
+      <div class="mt-12 grid gap-x-10 gap-y-8 text-[15px] leading-7 text-muted-foreground md:grid-cols-3 [&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:font-mono [&_code]:text-[0.86em] [&_code]:text-foreground">
+        <div>
+          <h3 class="font-medium text-foreground">ACP runs the agent</h3>
+          <p class="mt-2">
+            yaah starts the agent's process and speaks JSON-RPC to it over stdio: sessions, prompts, streamed replies, tool calls and
+            permission requests. One process per account, many chats per process.
+          </p>
+        </div>
+        <div>
+          <h3 class="font-medium text-foreground">MCP brings the agent back</h3>
+          <p class="mt-2">
+            Each chat gets an HTTP MCP server on <code>127.0.0.1</code> with its own secret token, handed to the agent when the session starts.
+            Its tools: <code>ui_catalog</code>, <code>ui_guide</code>, <code>ui_get_component</code>, <code>ui_render</code>, <code>ui_ask</code>, <code>ui_get_values</code>,
+            <code>ui_set_values</code>, <code>ui_save_component</code> and <code>source_read</code>.
+          </p>
+        </div>
+        <div>
+          <h3 class="font-medium text-foreground">Rust owns the logic</h3>
+          <p class="mt-2">
+            The Rust core keeps the transcripts and pushes each change to the interface, which only renders. Chats are saved to
+            <code>~/.yaah/sessions/</code> and picked up again when yaah restarts.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Get started -->
+  <section id="get-started" aria-labelledby="start-title" class="border-t">
+    <div class="mx-auto grid max-w-6xl gap-10 px-5 py-20 sm:px-8 sm:py-28 md:grid-cols-12 md:gap-12">
+      <div class="md:col-span-5">
+        <h2 id="start-title" class="text-3xl font-semibold tracking-tight sm:text-4xl">Build from source</h2>
+        <p class="mt-4 text-[16px] leading-7 text-muted-foreground">
+          There is no release or download yet. yaah builds and runs from source on macOS and Linux.
+        </p>
+        <h3 class="mt-8 font-medium">You need</h3>
+        <ul class="mt-3 list-disc space-y-1.5 pl-5 text-[15px] leading-7 text-muted-foreground marker:text-border">
+          <li>Rust</li>
+          <li>Node, with npm and npx, for the agents that come from npm</li>
+          <li>A logged-in Claude Code account, to chat with Claude Code</li>
+        </ul>
+        <p class="mt-4 text-[15px] leading-7 text-muted-foreground">
+          The versions are pinned in <code class="rounded-sm bg-muted px-1 font-mono text-[0.86em] text-foreground">app/mise.toml</code>, and
+          <code class="rounded-sm bg-muted px-1 font-mono text-[0.86em] text-foreground">mise install</code> sets them up.
+        </p>
+      </div>
+      <div class="min-w-0 space-y-6 md:col-span-7">
+        <div class="overflow-hidden rounded-lg border bg-muted/60">
+          <div class="border-b px-3.5 py-2 font-mono text-[12px] text-muted-foreground">Run the app</div>
+          <pre class="overflow-x-auto px-3.5 py-3 font-mono text-[13px] leading-[1.7] focus-visible:-outline-offset-2" tabindex="0"><code><span class="text-muted-foreground"># from the repository</span>
+cd app
+pnpm install
+pnpm tauri dev</code></pre>
+        </div>
+        <div class="overflow-hidden rounded-lg border bg-muted/60">
+          <div class="border-b px-3.5 py-2 font-mono text-[12px] text-muted-foreground">Or only the interface, in a browser</div>
+          <pre class="overflow-x-auto px-3.5 py-3 font-mono text-[13px] leading-[1.7] focus-visible:-outline-offset-2" tabindex="0"><code>cd app
+pnpm dev
+<span class="text-muted-foreground"># open http://localhost:1420</span></code></pre>
+        </div>
+        <p class="text-[15px] leading-7 text-muted-foreground">
+          The browser mock answers the app's commands with recorded fixtures, so you can try the interface without the native app or an
+          agent. It's what the screenshots on this page were taken from.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Read further -->
+  <section id="docs" aria-labelledby="docs-title" class="border-t bg-muted/30">
+    <div class="mx-auto grid max-w-6xl gap-12 px-5 py-20 sm:px-8 sm:py-24 md:grid-cols-2">
+      <div>
+        <h2 id="docs-title" class="text-2xl font-semibold tracking-tight sm:text-3xl">Read further</h2>
+        <p class="mt-3 text-[15px] leading-7 text-muted-foreground">The documentation lives in the repository.</p>
+        <dl class="mt-6 text-[15px] leading-6">
+          <div class="border-t py-3.5">
+            <dt class="font-mono text-[13px]">app/README.md</dt>
+            <dd class="mt-1 text-muted-foreground">How each part works: agents, sessions, the component model, libraries, sources, integrations, themes, and the checks to run.</dd>
+          </div>
+          <div class="border-t py-3.5">
+            <dt class="font-mono text-[13px]">app/PRODUCT.md</dt>
+            <dd class="mt-1 text-muted-foreground">Who yaah is for, and the principles behind it.</dd>
+          </div>
+          <div class="border-t py-3.5">
+            <dt class="font-mono text-[13px]">docs/research/</dt>
+            <dd class="mt-1 text-muted-foreground">Reviews of the component model, security, performance and integrations.</dd>
+          </div>
+          <div class="border-t py-3.5">
+            <dt class="font-mono text-[13px]">docs/experiments/</dt>
+            <dd class="mt-1 text-muted-foreground">Screenshots and notes from live tests and visual checks.</dd>
+          </div>
+        </dl>
+      </div>
+      <div>
+        <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">Not there yet</h2>
+        <p class="mt-3 text-[15px] leading-7 text-muted-foreground">Planned or still being decided, so not on this page as features.</p>
+        <ul class="mt-6 text-[15px] leading-6 text-muted-foreground">
+          <li class="border-t py-3.5"><span class="text-foreground">A packaged release.</span> For now, build from source.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">PDF, video, audio and slides.</span> Planned as primitives; today an agent says it can't show a PDF.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">Interactive widgets.</span> A sandboxed node that speaks the MCP Apps protocol is being considered.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">A public library index.</span> Libraries install from any git URL; there's no shared catalogue.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">More integrations.</span> Sentry and GitHub Actions are the next candidates.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">Windows.</span> yaah is macOS and Linux only.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+</Base>

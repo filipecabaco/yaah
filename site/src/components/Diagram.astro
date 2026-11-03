@@ -1,0 +1,136 @@
+---
+// How yaah, the agent and the live sources talk. Two drawings of the same thing:
+// wide from `lg` up, tall below (the wide one's text gets too small under ~1000px).
+// Colours come from the theme tokens; the agent's channel back into yaah is drawn
+// in the brand colour, like the agent's tile in the mark (`brand-line`: a shade
+// that keeps 3:1 against the light background). Boxes are `muted/50` so their
+// muted text keeps 4.5:1.
+---
+<figure class="min-w-0">
+  <!-- Wide -->
+  <svg
+    viewBox="0 0 960 470"
+    class="hidden h-auto w-full lg:block"
+    role="img"
+    aria-labelledby="dia-wide-title dia-wide-desc"
+    font-family="inherit"
+  >
+    <title id="dia-wide-title">How yaah works</title>
+    <desc id="dia-wide-desc">
+      yaah's Rust core starts the agent process and talks to it over ACP, JSON-RPC on stdio. The agent calls back into yaah through yaah's MCP server on 127.0.0.1 with a per-chat token, using tools such as ui_render and ui_ask. yaah's interface draws the UI from that JSON. yaah reads live sources itself; credentials never reach the agent.
+    </desc>
+    <defs>
+      <marker id="arrow-n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" class="fill-muted-foreground" />
+      </marker>
+      <marker id="arrow-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" class="fill-brand-line" />
+      </marker>
+    </defs>
+
+    <!-- yaah -->
+    <rect x="20" y="20" width="440" height="330" rx="14" class="fill-card stroke-border" stroke-width="1.5" />
+    <text x="44" y="56" class="fill-foreground" font-size="17" font-weight="600">yaah</text>
+    <text x="92" y="56" class="fill-muted-foreground" font-size="13">desktop app (Tauri), macOS and Linux</text>
+
+    <rect x="44" y="76" width="392" height="76" rx="10" class="fill-muted/50 stroke-border" />
+    <text x="62" y="104" class="fill-foreground" font-size="14" font-weight="600">Interface</text>
+    <text x="62" y="126" class="fill-muted-foreground" font-size="12.5">React and shadcn. Draws the agent's UI from JSON,</text>
+    <text x="62" y="143" class="fill-muted-foreground" font-size="12.5">with the same components as the app. No agent code runs.</text>
+
+    <rect x="44" y="166" width="392" height="76" rx="10" class="fill-muted/50 stroke-border" />
+    <text x="62" y="194" class="fill-foreground" font-size="14" font-weight="600">Core</text>
+    <text x="62" y="216" class="fill-muted-foreground" font-size="12.5">Rust. Runs agents, keeps every transcript,</text>
+    <text x="62" y="233" class="fill-muted-foreground" font-size="12.5">asks you before tools run, reads live sources.</text>
+
+    <rect x="44" y="256" width="392" height="70" rx="10" class="fill-muted/50 stroke-border" />
+    <text x="62" y="284" class="fill-foreground" font-size="14" font-weight="600">MCP server</text>
+    <text x="62" y="306" class="fill-muted-foreground" font-size="12.5">127.0.0.1, one secret token per chat.</text>
+
+    <!-- agent -->
+    <rect x="640" y="110" width="300" height="160" rx="14" class="fill-card stroke-border" stroke-width="1.5" />
+    <text x="664" y="146" class="fill-foreground" font-size="17" font-weight="600">Agent process</text>
+    <text x="664" y="174" class="fill-muted-foreground" font-size="12.5">Claude Code, Codex, Gemini CLI,</text>
+    <text x="664" y="192" class="fill-muted-foreground" font-size="12.5">OpenCode, goose… or any command</text>
+    <text x="664" y="210" class="fill-muted-foreground" font-size="12.5">that speaks ACP on stdio.</text>
+    <text x="664" y="246" class="fill-muted-foreground" font-size="12.5" font-family="ui-monospace, monospace">mcp__yaah-ui__ui_render</text>
+
+    <!-- ACP: core -> agent -->
+    <path d="M436 204 C 530 204, 560 176, 636 176" fill="none" class="stroke-muted-foreground" stroke-width="1.5" marker-end="url(#arrow-n)" />
+    <text x="478" y="128" class="fill-foreground" font-size="13" font-weight="600">ACP</text>
+    <text x="510" y="128" class="fill-muted-foreground" font-size="12">over stdio</text>
+    <text x="478" y="146" class="fill-muted-foreground" font-size="12">sessions, prompts,</text>
+    <text x="478" y="162" class="fill-muted-foreground" font-size="12">streaming, permissions</text>
+
+    <!-- MCP: agent -> mcp server -->
+    <path d="M640 236 C 560 236, 540 292, 440 292" fill="none" class="stroke-brand-line" stroke-width="2" marker-end="url(#arrow-b)" />
+    <text x="482" y="320" class="fill-foreground" font-size="13" font-weight="600">MCP</text>
+    <text x="516" y="320" class="fill-muted-foreground" font-size="12">ui_render, ui_ask, ui_set_values,</text>
+    <text x="516" y="336" class="fill-muted-foreground" font-size="12">ui_get_values, source_read…</text>
+
+    <!-- sources -->
+    <path d="M240 420 L240 354" fill="none" class="stroke-muted-foreground" stroke-width="1.5" marker-end="url(#arrow-n)" />
+    <text x="252" y="392" class="fill-muted-foreground" font-size="12">read by yaah; credentials stay in yaah</text>
+    <rect x="20" y="420" width="920" height="40" rx="10" class="fill-background stroke-border" stroke-dasharray="4 4" />
+    <text x="40" y="445" class="fill-foreground" font-size="13" font-weight="600">Live sources</text>
+    <text x="140" y="445" class="fill-muted-foreground" font-size="12.5">GitHub · Linear · GitLab · Postgres (read-only role) · Docker · this machine</text>
+  </svg>
+
+  <!-- Tall -->
+  <svg viewBox="0 0 360 700" class="mx-auto h-auto w-full max-w-md lg:hidden" role="img" aria-labelledby="dia-tall-title dia-tall-desc" font-family="inherit">
+    <title id="dia-tall-title">How yaah works</title>
+    <desc id="dia-tall-desc">
+      yaah's core starts the agent and talks to it over ACP on stdio. The agent calls back through yaah's MCP server with ui_render, ui_ask and other tools. yaah reads live sources itself; credentials never reach the agent.
+    </desc>
+    <defs>
+      <marker id="arrow-n2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" class="fill-muted-foreground" />
+      </marker>
+      <marker id="arrow-b2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" class="fill-brand-line" />
+      </marker>
+    </defs>
+
+    <rect x="2" y="2" width="356" height="112" rx="14" class="fill-card stroke-border" stroke-width="1.5" />
+    <text x="20" y="34" class="fill-foreground" font-size="16" font-weight="600">Agent process</text>
+    <text x="20" y="60" class="fill-muted-foreground" font-size="13">Claude Code, Codex, Gemini CLI…</text>
+    <text x="20" y="80" class="fill-muted-foreground" font-size="13">or any command that speaks ACP</text>
+    <text x="20" y="100" class="fill-muted-foreground" font-size="13">on stdio.</text>
+
+    <path d="M90 236 L90 120" fill="none" class="stroke-muted-foreground" stroke-width="1.5" marker-end="url(#arrow-n2)" />
+    <text x="20" y="150" class="fill-foreground" font-size="13" font-weight="600">ACP</text>
+    <text x="20" y="168" class="fill-muted-foreground" font-size="12">stdio:</text>
+    <text x="20" y="184" class="fill-muted-foreground" font-size="12">prompts,</text>
+    <text x="20" y="200" class="fill-muted-foreground" font-size="12">streaming,</text>
+    <text x="20" y="216" class="fill-muted-foreground" font-size="12">permissions</text>
+
+    <path d="M250 120 L250 236" fill="none" class="stroke-brand-line" stroke-width="2" marker-end="url(#arrow-b2)" />
+    <text x="262" y="150" class="fill-foreground" font-size="13" font-weight="600">MCP</text>
+    <text x="262" y="168" class="fill-muted-foreground" font-size="12">ui_render,</text>
+    <text x="262" y="184" class="fill-muted-foreground" font-size="12">ui_ask,</text>
+    <text x="262" y="200" class="fill-muted-foreground" font-size="12">source_read…</text>
+
+    <rect x="2" y="242" width="356" height="350" rx="14" class="fill-card stroke-border" stroke-width="1.5" />
+    <text x="20" y="274" class="fill-foreground" font-size="16" font-weight="600">yaah</text>
+    <rect x="18" y="290" width="324" height="84" rx="10" class="fill-muted/50 stroke-border" />
+    <text x="34" y="316" class="fill-foreground" font-size="13.5" font-weight="600">MCP server</text>
+    <text x="34" y="338" class="fill-muted-foreground" font-size="12.5">127.0.0.1, one secret token</text>
+    <text x="34" y="356" class="fill-muted-foreground" font-size="12.5">per chat.</text>
+    <rect x="18" y="384" width="324" height="84" rx="10" class="fill-muted/50 stroke-border" />
+    <text x="34" y="410" class="fill-foreground" font-size="13.5" font-weight="600">Core (Rust)</text>
+    <text x="34" y="432" class="fill-muted-foreground" font-size="12.5">Runs agents, keeps transcripts,</text>
+    <text x="34" y="450" class="fill-muted-foreground" font-size="12.5">asks before tools run.</text>
+    <rect x="18" y="478" width="324" height="98" rx="10" class="fill-muted/50 stroke-border" />
+    <text x="34" y="504" class="fill-foreground" font-size="13.5" font-weight="600">Interface (React)</text>
+    <text x="34" y="526" class="fill-muted-foreground" font-size="12.5">Draws the agent's UI from JSON</text>
+    <text x="34" y="544" class="fill-muted-foreground" font-size="12.5">with the app's own components.</text>
+    <text x="34" y="562" class="fill-muted-foreground" font-size="12.5">No agent code runs.</text>
+
+    <path d="M90 648 L90 598" fill="none" class="stroke-muted-foreground" stroke-width="1.5" marker-end="url(#arrow-n2)" />
+    <text x="102" y="618" class="fill-muted-foreground" font-size="12">read by yaah; credentials</text>
+    <text x="102" y="634" class="fill-muted-foreground" font-size="12">never reach the agent</text>
+    <rect x="2" y="652" width="356" height="46" rx="10" class="fill-background stroke-border" stroke-dasharray="4 4" />
+    <text x="20" y="672" class="fill-foreground" font-size="12.5" font-weight="600">Live sources</text>
+    <text x="20" y="689" class="fill-muted-foreground" font-size="11.5">GitHub · Linear · GitLab · Postgres · Docker · system</text>
+  </svg>
+</figure>

@@ -1,7 +1,106 @@
-# Toolchain for yaah (mise). `mise install` sets it up.
+# Toolchain for yaah (mise). `mise install` sets it up. Keep [tools] above the
+# tasks: ci/Dockerfile installs only what comes before the first [tasks.*].
 [tools]
 node = "26.11.1"
 pnpm = "12.9.1"
 rust = { version = "1.99.1", components = "clippy,rustfmt,llvm-tools-preview" }
 cargo-deny = "0.20.2"
 "cargo:cargo-llvm-cov" = "0.9.1"
+
+# CI, as plain commands, so the same ones run here, in the Docker image that
+# emulates GitHub's ubuntu runner (`ci:docker`, ci/Dockerfile) and later in
+# GitHub Actions (.github/workflows/ci.yml). See docs/experiments/2026-11-03-ci-docker/.
+
+[tasks."ci:rust"]
+description = "Rust: rustfmt check, clippy -D warnings, tests (unit, ACP end-to-end, Postgres/Docker when reachable), cargo deny"
+dir = "{{config_root}}/src-tauri"
+run = [
+  "cargo fmt --check",
+  "cargo clippy --locked --all-targets -- -D warnings",
+  "cargo test --locked --lib --tests",
+  "cargo deny check",
+]
+
+[tasks."ci:web"]
+description = "Frontend: install from the lockfile, then pnpm check (tsc, ESLint, Prettier, Vitest) and pnpm build"
+dir = "{{config_root}}"
+run = ["pnpm install --frozen-lockfile", "pnpm check", "pnpm build"]
+
+[tasks."ci:conformance"]
+description = "Tier A adapter conformance for every npm preset, pinned and latest versions (extra args go to examples/conformance.rs, e.g. --fail-on-latest)"
+dir = "{{config_root}}/src-tauri"
+run = "cargo run --locked --example conformance --"
+
+[tasks.ci]
+description = "All of CI, one after another"
+dir = "{{config_root}}"
+run = [{ task = "ci:rust" }, { task = "ci:web" }, { task = "ci:conformance" }]
+
+[tasks."ci:docker"]
+description = "Build the ubuntu-24.04 CI image and run CI in it (CI_TASK picks the task, default ci)"
+dir = "{{config_root}}/.."
+run = [
+  "docker build -t yaah-ci -f ci/Dockerfile .",
+  "docker run --rm --init -e CI_TASK=${CI_TASK:-ci} -v \"$PWD\":/src:ro -v yaah-ci-work:/home/runner/work -v yaah-ci-cargo:/home/runner/.cargo/registry -v yaah-ci-pnpm:/home/runner/.pnpm-store -v yaah-ci-agents:/home/runner/conformance yaah-ci",
+]
+
+# Release bundles, under the stable names install.sh downloads
+# (releases/latest/download/<name>). The same commands run here, in the CI
+# container (`release:linux:docker`) and in .github/workflows/release.yml.
+# Output goes to dist-release/ at the repository root, or YAAH_DIST_DIR.
+
+[tasks."release:build"]
+description = "Build this platform's release bundles (macOS arm64: app + dmg; Linux x86_64/arm64: AppImage + deb) and copy them to dist-release/ under stable names"
+dir = "{{config_root}}"
+run = '''
+set -eu
+out="${YAAH_DIST_DIR:-{{config_root}}/../dist-release}"
+version=$(node -p 'require("./src-tauri/tauri.conf.json").version')
+case "$(uname -s)/$(uname -m)" in
+  Darwin/arm64)   plat=macos-arm64;  bundles=app,dmg ;;
+  Linux/x86_64)   plat=linux-x86_64; bundles=appimage,deb; appimage_arch=amd64;   deb_arch=amd64 ;;
+  Linux/aarch64)  plat=linux-arm64;  bundles=appimage,deb; appimage_arch=aarch64; deb_arch=arm64 ;;
+  *) echo "release:build: $(uname -s)/$(uname -m) isn't a release platform" >&2; exit 1 ;;
+esac
+pnpm install --frozen-lockfile
+# linuxdeploy (AppImage bundling) is an AppImage itself: run it without FUSE, as containers and runners lack it.
+APPIMAGE_EXTRACT_AND_RUN=1 pnpm tauri build --ci --bundles "$bundles"
+b=src-tauri/target/release/bundle
+mkdir -p "$out"
+rm -f "$out/yaah-$plat".*
+case "$plat" in
+  macos-*)
+    COPYFILE_DISABLE=1 tar -C "$b/macos" -czf "$out/yaah-$plat.tar.gz" yaah.app
+    cp "$b/dmg/yaah_${version}_aarch64.dmg" "$out/yaah-$plat.dmg" ;;
+  linux-*)
+    cp "$b/appimage/yaah_${version}_${appimage_arch}.AppImage" "$out/yaah-$plat.AppImage"
+    cp "$b/deb/yaah_${version}_${deb_arch}.deb" "$out/yaah-$plat.deb" ;;
+esac
+ls -l "$out"/yaah-"$plat".*
+'''
+
+[tasks."release:checksums"]
+description = "Write dist-release/SHA256SUMS for every yaah-* asset in it"
+dir = "{{config_root}}"
+run = '''
+set -eu
+cd "${YAAH_DIST_DIR:-{{config_root}}/../dist-release}"
+if command -v sha256sum >/dev/null 2>&1; then sha256sum yaah-* > SHA256SUMS.tmp; else shasum -a 256 yaah-* > SHA256SUMS.tmp; fi
+mv SHA256SUMS.tmp SHA256SUMS
+cat SHA256SUMS
+'''
+
+[tasks."release:linux:docker"]
+description = "Build the Linux release bundles in the CI container, arm64 natively and x86_64 under emulation (RELEASE_ARCHES='arm64 amd64' by default), into dist-release/"
+dir = "{{config_root}}/.."
+run = '''
+set -eu
+mkdir -p dist-release
+for arch in ${RELEASE_ARCHES:-arm64 amd64}; do
+  docker build --platform "linux/$arch" -t "yaah-ci:linux-$arch" -f ci/Dockerfile .
+  docker run --rm --init --platform "linux/$arch" -e CI_TASK=release:build -e YAAH_DIST_DIR=/out \
+    -v "$PWD":/src:ro -v "$PWD/dist-release":/out \
+    -v "yaah-release-work-$arch":/home/runner/work -v yaah-ci-cargo:/home/runner/.cargo/registry -v yaah-ci-pnpm:/home/runner/.pnpm-store \
+    "yaah-ci:linux-$arch"
+done
+'''

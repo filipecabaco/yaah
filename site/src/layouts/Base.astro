@@ -1,0 +1,136 @@
+---
+import "../styles/global.css";
+import Mark from "../components/Mark.astro";
+
+interface Props {
+  title: string;
+  description: string;
+}
+const { title, description } = Astro.props;
+
+const nav = [
+  { href: "#features", label: "Features" },
+  { href: "#examples", label: "Examples" },
+  { href: "#how-it-works", label: "How it works" },
+  { href: "#get-started", label: "Get started" },
+];
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <!-- No og:url, og:image or canonical: there is no hosted address to point them at yet. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="yaah" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="color-scheme" content="light dark" />
+    <!-- Theme before first paint: the saved choice, else the system's. -->
+    <script is:inline>
+      (() => {
+        let saved = null;
+        try {
+          saved = localStorage.getItem("yaah-theme");
+        } catch {}
+        const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.classList.toggle("dark", dark);
+      })();
+    </script>
+  </head>
+  <body class="min-h-dvh">
+    <a
+      href="#main"
+      class="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-background focus:px-3 focus:py-2 focus:text-sm focus:shadow"
+      >Skip to content</a
+    >
+    <header class="sticky top-0 z-40 border-b bg-background/85 backdrop-blur-md supports-[backdrop-filter]:bg-background/70">
+      <div class="mx-auto flex h-14 max-w-6xl items-center gap-6 px-5 sm:px-8">
+        <a href="#top" class="inline-flex items-center gap-1.5 rounded-md" aria-label="yaah, back to top">
+          <Mark class="size-[1.35rem]" />
+          <span class="text-[15px] font-semibold tracking-tight">yaah</span>
+        </a>
+        <nav aria-label="Sections" class="hidden md:block">
+          <ul class="flex items-center gap-1 text-sm text-muted-foreground">
+            {
+              nav.map((n) => (
+                <li>
+                  <a href={n.href} class="rounded-md px-2.5 py-1.5 transition-colors hover:bg-accent hover:text-foreground">
+                    {n.label}
+                  </a>
+                </li>
+              ))
+            }
+          </ul>
+        </nav>
+        <div class="ml-auto flex items-center gap-2">
+          <a
+            href="#get-started"
+            class="inline-flex h-8 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 md:hidden"
+            >Get started</a
+          >
+          <button
+            type="button"
+            id="theme-toggle"
+            class="inline-flex size-8 items-center justify-center rounded-md border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="Switch to dark theme"
+          >
+            <svg class="size-4 dark:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401" />
+            </svg>
+            <svg class="hidden size-4 dark:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <slot />
+    </main>
+
+    <footer class="border-t">
+      <div class="mx-auto flex max-w-6xl flex-col gap-4 px-5 py-10 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between sm:px-8">
+        <p class="inline-flex items-center gap-2">
+          <Mark class="size-5 text-foreground" />
+          <span><span class="font-medium text-foreground">yaah</span>, yet another agent harness.</span>
+        </p>
+        <p>A proof of concept for macOS and Linux. Built from source; no release yet.</p>
+      </div>
+    </footer>
+
+    <script is:inline>
+      (() => {
+        const button = document.getElementById("theme-toggle");
+        const label = () => {
+          const dark = document.documentElement.classList.contains("dark");
+          button.setAttribute("aria-label", dark ? "Switch to light theme" : "Switch to dark theme");
+        };
+        label();
+        button.addEventListener("click", () => {
+          const dark = document.documentElement.classList.toggle("dark");
+          try {
+            localStorage.setItem("yaah-theme", dark ? "dark" : "light");
+          } catch {}
+          label();
+        });
+        // Follow the system while no choice is saved.
+        matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
+          let saved = null;
+          try {
+            saved = localStorage.getItem("yaah-theme");
+          } catch {}
+          if (!saved) {
+            document.documentElement.classList.toggle("dark", e.matches);
+            label();
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

@@ -4,8 +4,10 @@
 //! Settings → General reads `general()` and writes through the setters.
 
 use crate::accounts::home;
+use crate::agent_versions::Version;
 use crate::json_file::JsonFile;
 use serde_json::{Map, Value, json};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -57,6 +59,59 @@ pub fn teach_agents() -> bool {
 
 pub fn set_teach_agents(on: bool) -> Result<(), String> {
     set("teachAgents", json!(on))
+}
+
+/// The versions the user holds npm-based agents at ("Hold at vX"): preset id →
+/// exact version. A preset without one runs what `agent_versions::choose` picks.
+fn agent_versions_in(s: &Map<String, Value>) -> BTreeMap<String, String> {
+    let Some(Value::Object(held)) = s.get("agentVersions") else { return BTreeMap::new() };
+    held.iter()
+        .filter_map(|(k, v)| Some((k.clone(), v.as_str().filter(|v| Version::parse(v).is_some())?.to_owned())))
+        .filter(|(k, _)| crate::agents::preset(k).is_some_and(|p| p.npx.is_some()))
+        .collect()
+}
+
+pub fn agent_versions() -> BTreeMap<String, String> {
+    agent_versions_in(&load())
+}
+
+/// Hold `preset` at `version`, or release it (`None`).
+/// Tier B of the adapter conformance suite (`agent_conformance::live`): live
+/// prompts with the user's account before a newer adapter version runs.
+/// `liveAdapterTests` in `settings.json`, off by default. Prepared, not active:
+/// it reads false until `live::ENABLED` is switched on, and nothing sets it yet
+/// (Settings → Agents shows it as "coming soon").
+pub fn live_adapter_tests() -> bool {
+    crate::agent_conformance::live::ENABLED && load().get("liveAdapterTests").and_then(Value::as_bool).unwrap_or(false)
+}
+
+pub fn set_agent_version(preset: &str, version: Option<&str>) -> Result<(), String> {
+    set_agent_version_in(file(), preset, version)
+}
+
+fn set_agent_version_in(file: &JsonFile, preset: &str, version: Option<&str>) -> Result<(), String> {
+    let p = crate::agents::preset(preset).ok_or_else(|| format!("unknown agent preset {preset}"))?;
+    if p.npx.is_none() {
+        return Err(format!("{} isn't run from an npm package, so yaah doesn't choose its version", p.label));
+    }
+    if let Some(v) = version
+        && Version::parse(v).is_none()
+    {
+        return Err(format!("`{v}` isn't an exact version such as 1.2.3"));
+    }
+    file.update(|all: &mut Map<String, Value>| {
+        let held = all.entry("agentVersions").or_insert_with(|| json!({}));
+        if !held.is_object() {
+            *held = json!({});
+        }
+        if let Some(held) = held.as_object_mut() {
+            match version {
+                Some(v) => held.insert(preset.to_owned(), json!(v)),
+                None => held.remove(preset),
+            };
+        }
+        Ok(())
+    })
 }
 
 // ── themes ───────────────────────────────────────────────────────────────────
@@ -238,6 +293,7 @@ fn data_dirs() -> Vec<Value> {
         ("Quick-chat folders", ".yaah/scratch", "Scratch folders for chats without a project."),
         ("Project context", ".yaah/projects", "Each project's brief and context folder."),
         ("Component library", ".yaah/components", "Components agents built, with history. yaah's own ship with the app."),
+        ("Agents installed by yaah", ".yaah/agents", "npm-based agents, one folder per version, run directly with Node."),
         ("Settings", ".config/yaah", "Agents, integrations, MCP servers, connections and these settings (secrets in 0600 files)."),
         ("Themes", ".config/yaah/themes", "Drop any VS Code colour theme (.json) here and pick it under Appearance."),
     ]
@@ -314,6 +370,31 @@ mod tests {
         assert!(!teach_agents_in(&serde_json::from_value(json!({ "teachAgents": false })).unwrap()));
         assert!(teach_agents_in(&serde_json::from_value(json!({ "teachAgents": "no" })).unwrap()), "only a real false turns it off");
         assert!(set_tool_card(" ", Some("auto")).is_err() && set_tool_card("Bash", Some("sideways")).is_err());
+    }
+
+    #[test]
+    fn agent_version_holds_round_trip_and_refuse_anything_but_a_version() {
+        let dir = std::env::temp_dir().join(format!("yaah-settings-{}", crate::random::token()));
+        let file = JsonFile::new(dir.join("settings.json"), false);
+        file.update(|m: &mut Map<String, Value>| Ok(m.insert("appearance".into(), json!("dark")))).unwrap();
+        set_agent_version_in(&file, "claude", Some("0.100.0")).unwrap();
+        set_agent_version_in(&file, "gemini", Some("1.0.0-rc.1")).unwrap();
+        let held = agent_versions_in(&file.read());
+        assert_eq!(held, BTreeMap::from([("claude".into(), "0.100.0".into()), ("gemini".into(), "1.0.0-rc.1".into())]));
+        set_agent_version_in(&file, "claude", None).unwrap();
+        assert_eq!(agent_versions_in(&file.read()).keys().collect::<Vec<_>>(), ["gemini"], "released");
+        assert_eq!(file.read::<Map<String, Value>>()["appearance"], "dark", "other settings stay");
+
+        for bad in ["latest", "^1.0.0", "1.0", "v1.0.0", "file:../x", "1.0.0 || 2.0.0", "", "git+https://x"] {
+            assert!(set_agent_version_in(&file, "claude", Some(bad)).is_err(), "{bad:?}");
+        }
+        assert!(set_agent_version_in(&file, "goose", Some("1.0.0")).is_err(), "not an npm preset");
+        assert!(set_agent_version_in(&file, "nope", Some("1.0.0")).is_err());
+        // Whatever the file holds, only valid versions of npm presets come back.
+        let s: Map<String, Value> =
+            serde_json::from_value(json!({ "agentVersions": { "claude": "latest", "goose": "1.0.0", "codex": "2.6.0", "gemini": 3 } })).unwrap();
+        assert_eq!(agent_versions_in(&s), BTreeMap::from([("codex".into(), "2.6.0".into())]));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

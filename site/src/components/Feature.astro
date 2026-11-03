@@ -1,0 +1,19 @@
+---
+// One feature: what it does on the left, a real screenshot on the right.
+interface Props {
+  id: string;
+  title: string;
+}
+const { id, title } = Astro.props;
+---
+<article id={id} aria-labelledby={`${id}-title`} class="grid gap-8 border-t py-14 first:border-t-0 md:grid-cols-12 md:gap-12 md:py-20">
+  <div class="min-w-0 md:col-span-5">
+    <h3 id={`${id}-title`} class="text-xl font-semibold tracking-tight text-balance sm:text-2xl">{title}</h3>
+    <div class="mt-4 space-y-4 text-[15px] leading-7 text-muted-foreground [&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:py-px [&_code]:font-mono [&_code]:text-[0.86em] [&_code]:text-foreground [&_strong]:font-medium [&_strong]:text-foreground">
+      <slot />
+    </div>
+  </div>
+  <div class="min-w-0 md:col-span-7">
+    <slot name="media" />
+  </div>
+</article>
