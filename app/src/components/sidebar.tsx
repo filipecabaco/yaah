@@ -1,4 +1,4 @@
-import { memo, useState, type ReactElement } from "react";
+import { memo, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 import {
   Bot,
   ChevronDown,
@@ -13,6 +13,8 @@ import {
   LogIn,
   MessageSquare,
   MessageSquarePlus,
+  PanelLeftClose,
+  PanelLeftOpen,
   Pencil,
   Plus,
   Search,
@@ -21,7 +23,7 @@ import {
   Settings,
 } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
-import { Wordmark } from "@/components/brand/mark";
+import { Mark, Wordmark } from "@/components/brand/mark";
 import { ChatMenu, CopyMenuItem } from "@/components/menus";
 import { Hint } from "@/components/shortcuts";
 import { Badge } from "@/components/ui/badge";
@@ -44,7 +46,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { api, canChat, PROJECT_STATUSES, type AgentProfile, type Project, type ProjectStatus, type SessionInfo } from "@/lib/api";
+import { api, canChat, PROJECT_STATUSES, SIDEBAR, type AgentProfile, type Project, type ProjectStatus, type SessionInfo } from "@/lib/api";
 import { baseName } from "@/lib/format";
 import type { Selection } from "@/hooks/use-yaah";
 import { useTrafficLights } from "@/hooks/use-titlebar";
@@ -82,6 +84,13 @@ type Props = {
   onAddRepos: (id: string) => void;
   /** Opens the project page with its delete confirmation showing. */
   onDeleteProject: (id: string) => void;
+  /** Hidden to a thin strip (⌘B). */
+  collapsed: boolean;
+  /** In CSS pixels, 220–480. */
+  width: number;
+  onToggle: () => void;
+  /** A new width, once a drag of its edge ends (or per key). */
+  onWidth: (width: number) => void;
 };
 
 /** Memoised: the app passes stable callbacks, so it re-renders only when chats, projects, agents or the selection change. */
@@ -89,153 +98,295 @@ export const Sidebar = memo(function Sidebar(props: Props) {
   const { agents, agentId, projects, chatsByProject, selection, onSelect, onNewProject } = props;
   const account = agents.find((a) => a.id === agentId);
   const trafficLights = useTrafficLights();
+  // While its edge is dragged, only the sidebar re-renders; the app gets the width when the drag ends.
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const width = dragWidth ?? props.width;
 
+  const hidden = props.collapsed;
+
+  // Hidden (⌘B), it slides to nothing, as in Finder or Notes; the main area's title bar (`CollapsedTitleBar`) takes over.
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
-      <div className="flex flex-col gap-2 p-3">
-        {/* Drags the window (the logo and Search stay clickable); on macOS it leaves room for the traffic lights. */}
-        <div data-tauri-drag-region="deep" className={cn("flex items-center justify-between gap-2", trafficLights && "pl-[68px]")}>
-          <span data-tauri-drag-region="false" className="inline-flex">
-            <Wordmark className="px-1 text-sm" />
-          </span>
-          <Button variant="outline" size="sm" className="h-7 gap-2 px-2 text-muted-foreground" onClick={props.onPalette}>
-            <Search /> Search
-            <Kbd>{formatKeys(SHORTCUTS.palette.keys)}</Kbd>
-          </Button>
-        </div>
-        <span className="px-1 text-xs text-muted-foreground">Agent</span>
-        <div className="flex gap-1.5">
-          <Select value={agentId} onValueChange={props.onAgent}>
-            <SelectTrigger className="min-w-0 flex-1" aria-label="Agent for new chats">
-              <SelectValue placeholder="No agent" />
-            </SelectTrigger>
-            <SelectContent>
-              {agents.map((a) => (
-                <SelectItem key={a.id} value={a.id}>
-                  <span>{a.label}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {a.loggedIn === false ? "not logged in" : (a.email ?? (a.label === a.presetLabel ? "" : a.presetLabel))}
-                  </span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Hint label="Manage agents">
-            <Button variant="outline" size="icon" onClick={props.onManageAgents} aria-label="Manage agents">
-              <Settings2 />
-            </Button>
-          </Hint>
-        </div>
-        {account && account.loggedIn === false && (
-          <Button variant="secondary" size="sm" onClick={() => props.onLogin(account)}>
-            <LogIn /> Log in “{account.label}”
-          </Button>
-        )}
-      </div>
-
-      <Separator />
-
-      <NewMenu
-        quickChatShortcut={!props.activeProjectId}
-        onNewQuickChat={props.onNewQuickChat}
-        agents={agents}
-        onNewQuickChatWith={props.onNewQuickChatWith}
-        onNewChatInFolder={props.onNewChatInFolder}
-        onNewProject={onNewProject}
+    <div className="relative flex shrink-0" data-collapsed={hidden || undefined}>
+      <div
+        className={cn("overflow-hidden", dragWidth == null && "transition-[width] duration-200 ease-out motion-reduce:transition-none")}
+        style={{ width: hidden ? 0 : width }}
+        inert={hidden}
+        aria-hidden={hidden || undefined}
       >
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex items-center justify-between px-3 pt-3 pb-1">
-            <span className="px-1 text-xs font-medium text-muted-foreground">Chats</span>
-            <div className="flex items-center">
-              <Hint label="New quick chat (no project)" shortcut="newChat">
-                <Button variant="ghost" size="icon-xs" onClick={props.onNewQuickChat} aria-label="New quick chat">
-                  <Plus />
-                </Button>
-              </Hint>
-              {agents.length > 1 && (
-                <AgentMenu
-                  agents={agents}
-                  heading="Quick chat with…"
-                  current={agentId}
-                  currentHint={!props.activeProjectId && formatKeys(SHORTCUTS.newChat.keys)}
-                  align="end"
-                  onPick={props.onNewQuickChatWith}
+        <aside aria-label="Sidebar" className="@container/sidebar flex h-full flex-col border-r bg-sidebar text-sidebar-foreground" style={{ width }}>
+          <div className="flex flex-col gap-2 p-3">
+            {/* Row 1 drags the window and, on macOS, holds the traffic lights; the logo follows them and Hide stays inside the edge. */}
+            <div data-tauri-drag-region="deep" className={cn("flex h-7 min-w-0 items-center justify-between gap-2", trafficLights && "pl-[68px]")}>
+              <span data-tauri-drag-region="false" className="inline-flex min-w-0">
+                <Wordmark className="px-1 text-sm" />
+              </span>
+              <Hint label="Hide the sidebar" shortcut="toggleSidebar">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0 text-muted-foreground"
+                  onClick={props.onToggle}
+                  aria-label="Hide the sidebar"
                 >
-                  <Button variant="ghost" size="icon-xs" aria-label="Start a quick chat with…" title="Quick chat with…">
-                    <ChevronDown />
-                  </Button>
-                </AgentMenu>
-              )}
-            </div>
-          </div>
-          <QuickChats chats={props.quickChats} selection={selection} onSelect={onSelect} onNew={props.onNewQuickChat} />
-
-          <NewMenu onNewProject={onNewProject}>
-            <div className="flex items-center justify-between px-3 pt-3 pb-1">
-              <span className="px-1 text-xs font-medium text-muted-foreground">Projects</span>
-              <Hint label="New project" shortcut="newProject">
-                <Button variant="ghost" size="icon-xs" onClick={onNewProject} aria-label="New project">
-                  <Plus />
+                  <PanelLeftClose />
                 </Button>
               </Hint>
+            </div>
+            <Button variant="outline" size="sm" className="h-7 w-full justify-start gap-2 px-2 text-muted-foreground" onClick={props.onPalette}>
+              <Search /> Search
+              <Kbd className="ml-auto">{formatKeys(SHORTCUTS.palette.keys)}</Kbd>
+            </Button>
+            <span className="px-1 text-xs text-muted-foreground">Agent</span>
+            <div className="flex gap-1.5">
+              <Select value={agentId} onValueChange={props.onAgent}>
+                <SelectTrigger className="min-w-0 flex-1" aria-label="Agent for new chats">
+                  <SelectValue placeholder="No agent" />
+                </SelectTrigger>
+                <SelectContent>
+                  {agents.map((a) => (
+                    <SelectItem key={a.id} value={a.id}>
+                      <span>{a.label}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {a.loggedIn === false ? "not logged in" : (a.email ?? (a.label === a.presetLabel ? "" : a.presetLabel))}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Hint label="Manage agents">
+                <Button variant="outline" size="icon" onClick={props.onManageAgents} aria-label="Manage agents">
+                  <Settings2 />
+                </Button>
+              </Hint>
+            </div>
+            {account && account.loggedIn === false && (
+              <Button variant="secondary" size="sm" onClick={() => props.onLogin(account)}>
+                <LogIn /> Log in “{account.label}”
+              </Button>
+            )}
+          </div>
+
+          <Separator />
+
+          <NewMenu
+            quickChatShortcut={!props.activeProjectId}
+            onNewQuickChat={props.onNewQuickChat}
+            agents={agents}
+            onNewQuickChatWith={props.onNewQuickChatWith}
+            onNewChatInFolder={props.onNewChatInFolder}
+            onNewProject={onNewProject}
+          >
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex items-center justify-between px-3 pt-3 pb-1">
+                <span className="px-1 text-xs font-medium text-muted-foreground">Chats</span>
+                <div className="flex items-center">
+                  <Hint label="New quick chat (no project)" shortcut="newChat">
+                    <Button variant="ghost" size="icon-xs" onClick={props.onNewQuickChat} aria-label="New quick chat">
+                      <Plus />
+                    </Button>
+                  </Hint>
+                  {agents.length > 1 && (
+                    <AgentMenu
+                      agents={agents}
+                      heading="Quick chat with…"
+                      current={agentId}
+                      currentHint={!props.activeProjectId && formatKeys(SHORTCUTS.newChat.keys)}
+                      align="end"
+                      onPick={props.onNewQuickChatWith}
+                    >
+                      <Button variant="ghost" size="icon-xs" aria-label="Start a quick chat with…" title="Quick chat with…">
+                        <ChevronDown />
+                      </Button>
+                    </AgentMenu>
+                  )}
+                </div>
+              </div>
+              <QuickChats chats={props.quickChats} selection={selection} onSelect={onSelect} onNew={props.onNewQuickChat} />
+
+              <NewMenu onNewProject={onNewProject}>
+                <div className="flex items-center justify-between px-3 pt-3 pb-1">
+                  <span className="px-1 text-xs font-medium text-muted-foreground">Projects</span>
+                  <Hint label="New project" shortcut="newProject">
+                    <Button variant="ghost" size="icon-xs" onClick={onNewProject} aria-label="New project">
+                      <Plus />
+                    </Button>
+                  </Hint>
+                </div>
+              </NewMenu>
+
+              {/* Radix lays the viewport's content out as a table, which grows to the longest name; block keeps names truncated. */}
+              <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
+                <nav className="flex flex-col gap-0.5 px-2 pb-3">
+                  {projects.length === 0 && (
+                    <button
+                      onClick={onNewProject}
+                      className="rounded-md border border-dashed px-2 py-3 text-left text-xs text-muted-foreground hover:bg-sidebar-accent"
+                    >
+                      No projects yet. Create one to group the folders a piece of work spans.
+                    </button>
+                  )}
+                  {projects.map((p) => (
+                    <ProjectNode
+                      key={p.id}
+                      project={p}
+                      chats={chatsByProject[p.id] ?? []}
+                      selection={selection}
+                      onSelect={onSelect}
+                      // Its own agent while that exists, else the one picked above (use-yaah `agentFor`).
+                      account={agents.find((a) => a.id === p.agentId) ?? account}
+                      active={p.id === props.activeProjectId}
+                      onNewChat={props.onNewChat}
+                      onChange={props.onProjectChange}
+                      onRename={props.onRenameProject}
+                      onAddRepos={props.onAddRepos}
+                      onDelete={props.onDeleteProject}
+                    />
+                  ))}
+                </nav>
+              </ScrollArea>
             </div>
           </NewMenu>
 
-          {/* Radix lays the viewport's content out as a table, which grows to the longest name; block keeps names truncated. */}
-          <ScrollArea className="min-h-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:block!">
-            <nav className="flex flex-col gap-0.5 px-2 pb-3">
-              {projects.length === 0 && (
-                <button
-                  onClick={onNewProject}
-                  className="rounded-md border border-dashed px-2 py-3 text-left text-xs text-muted-foreground hover:bg-sidebar-accent"
-                >
-                  No projects yet. Create one to group the folders a piece of work spans.
-                </button>
+          <Separator />
+          <div className="p-2">
+            <button
+              onClick={() => onSelect({ kind: "components" })}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent",
+                selection?.kind === "components" && "bg-sidebar-accent",
               )}
-              {projects.map((p) => (
-                <ProjectNode
-                  key={p.id}
-                  project={p}
-                  chats={chatsByProject[p.id] ?? []}
-                  selection={selection}
-                  onSelect={onSelect}
-                  // Its own agent while that exists, else the one picked above (use-yaah `agentFor`).
-                  account={agents.find((a) => a.id === p.agentId) ?? account}
-                  active={p.id === props.activeProjectId}
-                  onNewChat={props.onNewChat}
-                  onChange={props.onProjectChange}
-                  onRename={props.onRenameProject}
-                  onAddRepos={props.onAddRepos}
-                  onDelete={props.onDeleteProject}
-                />
-              ))}
-            </nav>
-          </ScrollArea>
-        </div>
-      </NewMenu>
-
-      <Separator />
-      <div className="p-2">
-        <button
-          onClick={() => onSelect({ kind: "components" })}
-          className={cn(
-            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent",
-            selection?.kind === "components" && "bg-sidebar-accent",
-          )}
-        >
-          <LayoutPanelTop className="size-4 text-muted-foreground" /> Component library
-        </button>
-        <button
-          onClick={props.onSettings}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent"
-        >
-          <Settings className="size-4 text-muted-foreground" /> Settings
-          <Kbd className="ml-auto">{formatKeys(SHORTCUTS.settings.keys)}</Kbd>
-        </button>
+            >
+              <LayoutPanelTop className="size-4 text-muted-foreground" /> Component library
+            </button>
+            <button
+              onClick={props.onSettings}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent"
+            >
+              <Settings className="size-4 text-muted-foreground" /> Settings
+              <Kbd className="ml-auto">{formatKeys(SHORTCUTS.settings.keys)}</Kbd>
+            </button>
+          </div>
+        </aside>
       </div>
-    </aside>
+      {!hidden && (
+        <ResizeEdge
+          width={width}
+          onDrag={setDragWidth}
+          onDone={(w) => {
+            setDragWidth(null);
+            props.onWidth(w);
+          }}
+        />
+      )}
+    </div>
   );
 });
+
+const clampWidth = (w: number) => Math.round(Math.min(SIDEBAR.max, Math.max(SIDEBAR.min, w)));
+
+/**
+ * The sidebar's right edge: drag it (220–480 px), arrow keys (Shift: further), Home/End,
+ * double-click for the default width.
+ */
+function ResizeEdge({ width, onDrag, onDone }: { width: number; onDrag: (w: number) => void; onDone: (w: number) => void }) {
+  const [dragging, setDragging] = useState(false);
+  const stop = useRef<(() => void) | null>(null);
+  useEffect(() => () => stop.current?.(), []);
+  const start = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const from = e.clientX;
+    let w = width;
+    const move = (ev: globalThis.PointerEvent) => {
+      w = clampWidth(width + ev.clientX - from);
+      onDrag(w);
+    };
+    const up = () => {
+      stop.current?.();
+      onDone(w);
+    };
+    stop.current = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      stop.current = null;
+      setDragging(false);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    setDragging(true);
+  };
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const step = e.shiftKey ? 48 : 16;
+    const to: Record<string, number> = { ArrowLeft: width - step, ArrowRight: width + step, Home: SIDEBAR.min, End: SIDEBAR.max };
+    if (!(e.key in to) || e.metaKey || e.ctrlKey || e.altKey) return;
+    e.preventDefault();
+    onDone(clampWidth(to[e.key]));
+  };
+  return (
+    <>
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize the sidebar"
+        aria-valuenow={width}
+        aria-valuemin={SIDEBAR.min}
+        aria-valuemax={SIDEBAR.max}
+        tabIndex={0}
+        title="Drag to resize · double-click for the default width"
+        data-dragging={dragging || undefined}
+        className="group absolute inset-y-0 -right-[4px] z-30 flex w-[7px] cursor-col-resize touch-none justify-center outline-none"
+        onPointerDown={start}
+        onKeyDown={onKeyDown}
+        onDoubleClick={() => onDone(SIDEBAR.default)}
+      >
+        <div className="h-full w-0.5 bg-transparent transition-colors group-hover:bg-ring group-focus-visible:bg-ring group-data-dragging:bg-ring" />
+      </div>
+      {dragging && <div className="fixed inset-0 z-50 cursor-col-resize" />}
+    </>
+  );
+}
+
+/**
+ * With the sidebar hidden (⌘B), the main area's top row is the title bar, as in Finder or Notes:
+ * on macOS a gutter for the traffic lights, then Show sidebar, the logo and Search. It drags the
+ * window (its buttons stay buttons). Always rendered, so it grows and fades in as the sidebar slides
+ * away instead of jumping; 52 px tall, like the sidebar's own first row, so the lights sit centred in it.
+ */
+export function CollapsedTitleBar({ shown, onToggle, onPalette }: { shown: boolean; onToggle: () => void; onPalette: () => void }) {
+  const trafficLights = useTrafficLights();
+  return (
+    <div
+      className={cn(
+        "grid shrink-0 transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none",
+        shown ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+      )}
+      inert={!shown}
+      aria-hidden={!shown || undefined}
+      data-shown={shown || undefined}
+    >
+      <div className="min-h-0 overflow-hidden">
+        <header
+          data-tauri-drag-region="deep"
+          aria-label="Title bar"
+          className={cn("flex h-[52px] min-w-0 items-center gap-1.5 border-b px-3", trafficLights && "pl-[80px]")}
+        >
+          <Hint label="Show the sidebar" shortcut="toggleSidebar">
+            <Button variant="ghost" size="icon-sm" className="text-muted-foreground" onClick={onToggle} aria-label="Show the sidebar">
+              <PanelLeftOpen />
+            </Button>
+          </Hint>
+          <Mark className="size-4 text-foreground" title="yaah" />
+          <Button variant="outline" size="sm" className="ml-2 h-7 gap-2 px-2 text-muted-foreground" onClick={onPalette}>
+            <Search /> Search
+            <Kbd>{formatKeys(SHORTCUTS.palette.keys)}</Kbd>
+          </Button>
+        </header>
+      </div>
+    </div>
+  );
+}
 
 function ProjectNode({
   project,

@@ -234,6 +234,27 @@ pub fn reveal_data_dir(path: String) -> Result<(), String> {
     Ok(())
 }
 
+// ── window layout (split panes, sidebar) ─────────────────────────────────────
+
+/// The split panes and the sidebar as last left, without panes on chats or projects deleted since.
+#[tauri::command]
+pub fn window_layout(hub: State<'_, Arc<Hub>>, projects: State<'_, Projects>) -> Result<serde_json::Value, String> {
+    let chats: std::collections::HashSet<String> = hub.list_sessions().into_iter().map(|s| s.session_id).collect();
+    let projects: std::collections::HashSet<String> = projects.list()?.into_iter().map(|p| p.id).collect();
+    Ok(settings::window_layout(|id| chats.contains(id), |id| projects.contains(id)))
+}
+
+/// Saved as the UI sends it, once checked (`layout.rs`).
+#[tauri::command]
+pub fn set_layout(layout: crate::layout::Layout) -> Result<(), String> {
+    settings::set_layout(layout)
+}
+
+#[tauri::command]
+pub fn set_sidebar(collapsed: bool, width: u32) -> Result<(), String> {
+    settings::set_sidebar(collapsed, width)
+}
+
 // ── integrations (Settings → Integrations) ──────────────────────────────────
 
 #[tauri::command]

@@ -993,6 +993,8 @@ mod tests {
                 commands: vec![],
                 agent_session_id: None,
                 handoff_from: None,
+                extra_dirs: vec![],
+                dirs_changed: false,
             };
             std::fs::write(dir.join(format!("sessions/{id}.json")), json!({ "info": info, "entries": [] }).to_string()).unwrap();
         }

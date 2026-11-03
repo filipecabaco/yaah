@@ -519,7 +519,7 @@ function UiButton({ p }: { p: Obj }) {
     send(prompt);
   };
   const click = () => {
-    if (draft) draftIntoComposer({ text: draft });
+    if (draft) draftIntoComposer({ text: draft }, chat?.pane);
     else if (asks) setConfirming((c) => !c);
     else if (prompt) send(prompt);
     else openExternal(href);

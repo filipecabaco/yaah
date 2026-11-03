@@ -19,6 +19,7 @@ export function openChat({ state }: Mock, fields: Pick<SessionInfo, "projectId" 
     stopReason: null,
     commands: slashCommands,
     createdAt: now(),
+    extraDirs: [],
   });
 }
 
@@ -495,15 +496,20 @@ export function chatReplies(m: Mock): Replies {
 
   return {
     list_sessions: (): SessionInfo[] => Object.values(state.sessions),
-    new_session: ({ projectId, accountId }: { projectId: string; accountId: string }): SessionInfo => {
+    // `extraDirs` (docs/research/chat-repos-contract.md): a project's join the project; a quick chat's are its own.
+    new_session: ({ projectId, accountId, extraDirs = [] }: { projectId: string; accountId: string; extraDirs?: string[] }): SessionInfo => {
       const p = need(
         state.projects.find((x) => x.id === projectId),
         `no project ${projectId}`,
       );
-      return openProjectChat(m, p, accountId);
+      p.dirs = [...new Set([...p.dirs, ...extraDirs])];
+      return Object.assign(openProjectChat(m, p, accountId), { extraDirs: [] as string[] });
     },
-    new_quick_chat: ({ accountId, dir }: { accountId: string; dir: string | null }): SessionInfo =>
-      open({ projectId: null, accountId, cwd: dir ?? `${home}/.yaah/scratch/3f9c2a7e41d0`, additionalDirs: [] }),
+    new_quick_chat: ({ accountId, dir, extraDirs = [] }: { accountId: string; dir: string | null; extraDirs?: string[] }): SessionInfo => {
+      const cwd = dir ?? `${home}/.yaah/scratch/3f9c2a7e41d0`;
+      const extra = [...new Set(extraDirs)].filter((d) => d !== cwd);
+      return Object.assign(open({ projectId: null, accountId, cwd, additionalDirs: extra }), { extraDirs: extra });
+    },
     set_chat_project: ({ sessionId, projectId }: { sessionId: string; projectId: string | null }): SessionInfo =>
       Object.assign(session(sessionId), { projectId }),
     promote_chat: ({ sessionId, name }: { sessionId: string; name: string }) => {
@@ -553,6 +559,27 @@ export function chatReplies(m: Mock): Replies {
       Object.assign(s, { accountId, handoffFrom: from ?? s.accountId });
       const list = (state.transcripts[sessionId] ??= []);
       await show(sessionId, list.length, { type: "switch", accountId, label: to, from });
+      await showInfo(s);
+      return s;
+    },
+    // session.rs `add_dirs`: a project chat's repos join the project (every chat in it follows), a quick chat keeps them;
+    // the notice waits for a running turn to end there, here it shows at once.
+    add_chat_dirs: async ({ sessionId, paths }: { sessionId: string; paths: string[] }): Promise<SessionInfo> => {
+      const s = session(sessionId);
+      const added = [...new Set(paths.map((p) => p.replace(/(.)\/+$/, "$1")))].filter((p) => p !== s.cwd && !s.additionalDirs.includes(p));
+      if (!added.length) return s;
+      const project = s.projectId ? state.projects.find((p) => p.id === s.projectId) : undefined;
+      if (project) {
+        project.dirs = [...new Set([...project.dirs, ...added])];
+        await m.emit("projects-changed", { projectId: project.id });
+        for (const c of Object.values(state.sessions).filter((c) => c.projectId === project.id)) {
+          const dirs = [...new Set([...project.dirs, project.contextDir, ...c.extraDirs])].filter((d) => d !== c.cwd);
+          Object.assign(c, { additionalDirs: dirs, dirsChanged: true });
+          if (c !== s) await showInfo(c);
+        }
+      } else Object.assign(s, { additionalDirs: [...s.additionalDirs, ...added], extraDirs: [...s.extraDirs, ...added], dirsChanged: true });
+      const list = (state.transcripts[sessionId] ??= []);
+      await show(sessionId, list.length, { type: "addedDirs", paths: added, to: project ? "project" : "chat" });
       await showInfo(s);
       return s;
     },

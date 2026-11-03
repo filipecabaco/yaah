@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, FolderGit2, MessageSquarePlus } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark } from "@/components/brand/mark";
@@ -11,7 +11,10 @@ import { AppContextMenu, ChatActionsProvider } from "@/components/menus";
 import { ShortcutsDialog } from "@/components/shortcuts";
 import type { NewProjectMode } from "@/components/new-project-dialog";
 import { preloadSettings } from "@/components/settings/tab-code";
-import { Sidebar } from "@/components/sidebar";
+import { PanePicker } from "@/components/pane-picker";
+import { PaneGrid } from "@/components/panes";
+import { focusPaneDom } from "@/lib/pane-focus";
+import { CollapsedTitleBar, Sidebar } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -73,27 +76,23 @@ export default function App() {
     },
     [agent, agents],
   );
+  // Everything below acts on the focused pane: selecting shows it there.
+  const panes = y.panes;
   const select = y.setSelection;
   const openChat = (id: string) => select({ kind: "chat", id });
-  // The Component library takes the main area; closing it goes back to what was open before (a chat, a project, or home).
   const selection = y.selection;
-  const current = useRef<Selection>(selection);
-  const beforeLibrary = useRef<Selection>(null);
-  // However the library opens (sidebar, palette, a chat's menu), remember the view it replaced.
-  useEffect(() => {
-    if (selection?.kind === "components" && current.current?.kind !== "components") beforeLibrary.current = current.current;
-    current.current = selection;
-  }, [selection]);
+  // The Component library takes a pane; closing it goes back to what that pane showed before (use-layout.ts).
   const openLibrary = useCallback(() => select({ kind: "components" }), [select]);
-  const closeLibrary = useCallback(() => select(beforeLibrary.current), [select]);
-  /** The sidebar's selection; its "Component library" entry toggles the library. */
+  const { closeLibrary, focusedId, setPaneContent } = panes;
+  /** The sidebar's selection, into the focused pane; its "Component library" entry toggles the library there. */
+  const focusedKind = selection?.kind;
   const selectFromSidebar = useCallback(
     (s: Selection) => {
       if (s?.kind !== "components") return select(s);
-      if (current.current?.kind === "components") closeLibrary();
+      if (focusedKind === "components") closeLibrary(focusedId());
       else openLibrary();
     },
-    [select, openLibrary, closeLibrary],
+    [select, openLibrary, closeLibrary, focusedId, focusedKind],
   );
   // Stable, so the (memoised) sidebar doesn't re-render with the rest of the app.
   const { newQuickChat, newChatInFolder, agentId } = y;
@@ -175,10 +174,23 @@ export default function App() {
     },
     prevChat: () => stepChat(-1),
     nextChat: () => stepChat(1),
-    jumpChat: (n) => {
+    jumpChat: ({ n }) => {
       const target = project && y.chatsByProject[project.id]?.[(n ?? 1) - 1];
       if (target) openChat(target.sessionId);
     },
+    // Split panes: a new pane opens on the picker, with the keyboard in it.
+    splitRight: () => focusPaneDom(panes.split("row")),
+    splitDown: () => focusPaneDom(panes.split("column")),
+    // The last pane stays; there ⌘W closes the library, as Esc does.
+    closePane: () => {
+      if (panes.close()) focusPaneDom(panes.focusedId());
+      else if (selection?.kind === "components") closeLibrary(panes.focusedId());
+    },
+    focusPane: ({ dir }) => {
+      const to = dir && panes.move(dir);
+      if (to) focusPaneDom(to);
+    },
+    toggleSidebar: panes.toggleSidebar,
   });
 
   const chatActions = useMemo(
@@ -211,8 +223,137 @@ export default function App() {
     />
   );
 
-  // Starting: the same sliding mark index.html shows before any script ran, until the agents are in.
-  if (!y.agentsLoaded && !y.loadError) {
+  const home = (
+    <main className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto p-8">
+      <div className="flex max-w-md flex-col items-center gap-5 text-center">
+        <Mark assemble className="size-16 text-foreground" title="yaah" />
+        <p className="text-sm text-pretty text-muted-foreground">
+          Start a quick chat for something small, or a project when the work spans several repos.
+        </p>
+        <div className="flex flex-wrap justify-center gap-2">
+          <div className="flex">
+            <Button className={y.agents.length > 1 ? "rounded-r-none" : undefined} onClick={() => withAgent(() => y.newQuickChat())}>
+              <MessageSquarePlus /> Quick chat <Kbd className="ml-1">{formatKeys(SHORTCUTS.newChat.keys)}</Kbd>
+            </Button>
+            {y.agents.length > 1 && (
+              <AgentMenu
+                agents={y.agents}
+                heading="Quick chat with…"
+                current={y.agentId}
+                currentHint={formatKeys(SHORTCUTS.newChat.keys)}
+                onPick={sidebar.onNewQuickChatWith}
+              >
+                <Button className="rounded-l-none border-l-primary-foreground/20 px-2" aria-label="Start a quick chat with…">
+                  <ChevronDown />
+                </Button>
+              </AgentMenu>
+            )}
+          </div>
+          <Button variant="outline" onClick={() => setCreatingProject("name")}>
+            <FolderGit2 /> New project <Kbd className="ml-1">{formatKeys(SHORTCUTS.newProject.keys)}</Kbd>
+          </Button>
+        </div>
+      </div>
+    </main>
+  );
+
+  /** What pane `p` shows, and its name for assistive tech. Built here so a divider drag reuses the same elements. */
+  const contents: Record<string, ReactNode> = {};
+  const labels: Record<string, string> = {};
+  for (const p of panes.panes) {
+    const c = p.content;
+    const focused = p.id === panes.layout.focused;
+    const blank = <main className="min-w-0 flex-1" />;
+    if (c?.kind === "components") {
+      labels[p.id] = "Component library";
+      contents[p.id] = (
+        <Suspense fallback={blank}>
+          <ComponentsView
+            initial={focused ? showComponent : null}
+            onInitialSeen={clearShowComponent}
+            onClose={() => closeLibrary(p.id)}
+            escapeCloses={focused}
+          />
+        </Suspense>
+      );
+    } else if (c?.kind === "chat") {
+      const s = y.sessions[c.id];
+      const own = s?.projectId ? (y.projects.find((x) => x.id === s.projectId) ?? null) : null;
+      labels[p.id] = `Chat: ${s?.title ?? "loading"}`;
+      contents[p.id] = s ? (
+        <Chat
+          session={s}
+          agents={y.agents}
+          project={own}
+          onOpenProject={(id) => setPaneContent(p.id, { kind: "project", id })}
+          onLogin={loginById}
+          pane={p.id}
+        />
+      ) : y.sessionsLoaded ? (
+        home
+      ) : (
+        blank
+      );
+    } else if (c?.kind === "project") {
+      const pr = y.projects.find((x) => x.id === c.id);
+      labels[p.id] = `Project: ${pr?.name ?? "loading"}`;
+      contents[p.id] = pr ? (
+        <Suspense fallback={blank}>
+          <ProjectView
+            project={pr}
+            chats={y.chatsByProject[pr.id] ?? []}
+            agents={y.agents}
+            account={y.agents.find((a) => a.id === y.agentFor(pr.id))}
+            onChange={y.putProject}
+            onDelete={y.deleteProject}
+            onOpenChat={(id) => setPaneContent(p.id, { kind: "chat", id })}
+            onNewChat={(id, agentId) => {
+              setStartNote(null);
+              return y.newChat(id, agentId);
+            }}
+            onLogin={setLoginFor}
+            // Asked from the sidebar, which acts on the focused pane.
+            askDelete={focused && askDelete === pr.id}
+            onAskDeleteSeen={clearAskDelete}
+            askRename={focused && askRename === pr.id}
+            onAskRenameSeen={clearAskRename}
+            notice={
+              startNote?.projectId === pr.id
+                ? `Started from ${pr.link?.id ?? "the issue"}, but its chat didn't open: ${startNote.message}`
+                : undefined
+            }
+          />
+        </Suspense>
+      ) : (
+        blank
+      );
+    } else if (c?.kind === "picker") {
+      labels[p.id] = "Open in this pane";
+      contents[p.id] = (
+        <PanePicker
+          agents={y.agents}
+          agentId={y.agentId}
+          chats={y.chatOrder}
+          projects={y.orderedProjects}
+          autoFocus={focused}
+          onNewChat={(id, repos) => withAgent(() => y.newQuickChat(undefined, id, repos), id)}
+          onNewProject={() => setCreatingProject("name")}
+          onOpen={(s) => setPaneContent(p.id, s)}
+          // Esc on an empty search: the pane goes (the last one goes home instead).
+          onClose={() => {
+            if (panes.close(p.id)) focusPaneDom(panes.focusedId());
+            else setPaneContent(p.id, null);
+          }}
+        />
+      );
+    } else {
+      labels[p.id] = "Home";
+      contents[p.id] = home;
+    }
+  }
+
+  // Starting: the same sliding mark index.html shows before any script ran, until the agents (and the layout) are in.
+  if ((!y.agentsLoaded || !panes.loaded) && !y.loadError) {
     return (
       <div className="grid h-screen place-items-center" role="status" aria-label="Starting yaah">
         <Mark loading className="size-14 text-foreground" />
@@ -254,80 +395,17 @@ export default function App() {
                 onSelect={selectFromSidebar}
                 onNewChat={y.newChat}
                 onProjectChange={y.putProject}
+                collapsed={panes.sidebar.collapsed}
+                width={panes.sidebar.width}
+                onToggle={panes.toggleSidebar}
+                onWidth={panes.setSidebarWidth}
                 {...sidebar}
               />
 
-              {y.selection?.kind === "components" ? (
-                <Suspense fallback={<main className="flex-1" />}>
-                  <ComponentsView initial={showComponent} onInitialSeen={clearShowComponent} onClose={closeLibrary} />
-                </Suspense>
-              ) : chat ? (
-                <Chat
-                  session={chat}
-                  agents={y.agents}
-                  project={project}
-                  onOpenProject={(id) => y.setSelection({ kind: "project", id })}
-                  onLogin={loginById}
-                />
-              ) : project ? (
-                <Suspense fallback={<main className="flex-1" />}>
-                  <ProjectView
-                    project={project}
-                    chats={y.chatsByProject[project.id] ?? []}
-                    agents={y.agents}
-                    account={y.agents.find((a) => a.id === y.agentFor(project.id))}
-                    onChange={y.putProject}
-                    onDelete={y.deleteProject}
-                    onOpenChat={openChat}
-                    onNewChat={(id, agentId) => {
-                      setStartNote(null);
-                      return y.newChat(id, agentId);
-                    }}
-                    onLogin={setLoginFor}
-                    askDelete={askDelete === project.id}
-                    onAskDeleteSeen={clearAskDelete}
-                    askRename={askRename === project.id}
-                    onAskRenameSeen={clearAskRename}
-                    notice={
-                      startNote?.projectId === project.id
-                        ? `Started from ${project.link?.id ?? "the issue"}, but its chat didn't open: ${startNote.message}`
-                        : undefined
-                    }
-                  />
-                </Suspense>
-              ) : (
-                <main className="flex flex-1 items-center justify-center p-8">
-                  <div className="flex max-w-md flex-col items-center gap-5 text-center">
-                    <Mark assemble className="size-16 text-foreground" title="yaah" />
-                    <p className="text-sm text-pretty text-muted-foreground">
-                      Start a quick chat for something small, or a project when the work spans several repos.
-                    </p>
-                    <div className="flex flex-wrap justify-center gap-2">
-                      <div className="flex">
-                        <Button className={y.agents.length > 1 ? "rounded-r-none" : undefined} onClick={() => withAgent(() => y.newQuickChat())}>
-                          <MessageSquarePlus /> Quick chat <Kbd className="ml-1">{formatKeys(SHORTCUTS.newChat.keys)}</Kbd>
-                        </Button>
-                        {y.agents.length > 1 && (
-                          <AgentMenu
-                            agents={y.agents}
-                            heading="Quick chat with…"
-                            current={y.agentId}
-                            currentHint={formatKeys(SHORTCUTS.newChat.keys)}
-                            onPick={sidebar.onNewQuickChatWith}
-                          >
-                            <Button className="rounded-l-none border-l-primary-foreground/20 px-2" aria-label="Start a quick chat with…">
-                              <ChevronDown />
-                            </Button>
-                          </AgentMenu>
-                        )}
-                      </div>
-                      <Button variant="outline" onClick={() => setCreatingProject("name")}>
-                        <FolderGit2 /> New project <Kbd className="ml-1">{formatKeys(SHORTCUTS.newProject.keys)}</Kbd>
-                      </Button>
-                    </div>
-                  </div>
-                </main>
-              )}
+              <div className="flex min-w-0 flex-1 flex-col">
+                <CollapsedTitleBar shown={panes.sidebar.collapsed} onToggle={panes.toggleSidebar} onPalette={sidebar.onPalette} />
+                <PaneGrid layout={panes.layout} contents={contents} labels={labels} onFocus={panes.focus} onResize={panes.resize} />
+              </div>
 
               <CommandPalette
                 page={palette}

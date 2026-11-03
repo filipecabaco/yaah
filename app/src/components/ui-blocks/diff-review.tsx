@@ -150,7 +150,7 @@ export default function DiffReview({
   const say = (msg: string) => setNotice(msg);
   const draft = useCallback(
     (kind: "ask" | "change", file: ReviewFile, h?: Hunk) => {
-      if (chat) draftIntoComposer(draftFor(chat, kind, file, h));
+      if (chat) draftIntoComposer(draftFor(chat, kind, file, h), chat.pane);
     },
     [chat],
   );

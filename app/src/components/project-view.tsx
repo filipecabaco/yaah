@@ -144,14 +144,15 @@ export function ProjectView({
   return (
     <main className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-8">
-        <header className="flex items-center gap-3">
+        <header className="flex flex-wrap items-center gap-3">
+          {/* In a narrow pane the name keeps its room and the selects wrap below it. */}
           <Input
             ref={nameInput}
             value={name}
             onChange={(e) => setName(e.target.value)}
             onBlur={rename}
             onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-            className="h-9 border-transparent px-1 text-lg font-semibold shadow-none hover:border-input focus-visible:border-input"
+            className="h-9 min-w-48 flex-1 border-transparent px-1 text-lg font-semibold shadow-none hover:border-input focus-visible:border-input"
             aria-label="Project name"
           />
           {agents.length > 0 && (
