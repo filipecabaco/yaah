@@ -1,8 +1,8 @@
 // View state for the app. It holds no logic of its own: everything here is
 // either fetched from a Rust command or applied from a Rust event.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, events, type AgentProfile, type NewProjectOptions, type Project, type SessionInfo, type WorkItem } from "@/lib/api";
+import { api, events, type AgentProfile, type NewProjectOptions, type Project, type SessionInfo, type StartStage, type WorkItem } from "@/lib/api";
 import { TranscriptStore } from "@/lib/transcripts";
 import type { Selection } from "@/lib/layout";
 import { useLayout } from "@/hooks/use-layout";
@@ -15,6 +15,25 @@ export function sortProjects(projects: Project[]): Project[] {
 export type Yaah = ReturnType<typeof useYaah>;
 
 export type { Selection };
+
+/** A chat being started in a pane, until `session/new` returns (chat.tsx `StartingChat` shows it). */
+export type Starting = {
+  startId: string;
+  agentId: string;
+  stage: StartStage;
+  /** The MCP servers the agent is starting, at the `mcpServers` stage. */
+  servers: string[];
+  /** `Date.now()` when it began. */
+  startedAt: number;
+  /** Why it failed; null while it runs. */
+  error: unknown;
+  /** What the pane showed when it began: it shows the start only while the pane still shows that. */
+  over: string;
+  /** The same start again, with `agentId` when given (Switch agent). */
+  retry: (agentId?: string) => void;
+};
+
+export const contentKey = (c: unknown) => JSON.stringify(c ?? null);
 
 export function useYaah() {
   /** null until the first load; empty means first run (show the setup screen). */
@@ -111,17 +130,93 @@ export function useYaah() {
     [projects, agents, agentId],
   );
 
-  /** A chat in a project, with `agent` when the user picked one, else the project's; `extraDirs` join the project. */
-  const newChat = useCallback(
-    async (projectId: string, agent?: string, extraDirs?: string[]) => {
-      const pane = focusedId();
-      const info = await api.newSession(projectId, agent || agentFor(projectId), extraDirs);
+  /** Chats being started, by the pane they'll open in. */
+  const [starting, setStarting] = useState<Record<string, Starting>>({});
+  const startingRef = useRef(starting);
+  const paneList = panes.panes;
+  const paneContent = useRef((id: string) => contentKey(paneList.find((p) => p.id === id)?.content));
+  useLayoutEffect(() => {
+    startingRef.current = starting;
+    paneContent.current = (id: string) => contentKey(paneList.find((p) => p.id === id)?.content);
+  });
+
+  useEffect(() => {
+    const unlisten = events.sessionStarting((e) =>
+      setStarting((prev) => {
+        const entry = Object.entries(prev).find(([, s]) => s.startId === e.startId);
+        if (!entry || entry[1].error != null) return prev;
+        return { ...prev, [entry[0]]: { ...entry[1], stage: e.stage, servers: e.servers } };
+      }),
+    );
+    return () => void unlisten.then((f) => f());
+  }, []);
+
+  // A failed start whose pane moved on is dropped: coming back there shouldn't bring it back.
+  useEffect(() => {
+    setStarting((prev) => {
+      const gone = Object.keys(prev).filter((id) => prev[id].error != null && paneContent.current(id) !== prev[id].over);
+      if (!gone.length) return prev;
+      const next = { ...prev };
+      for (const id of gone) delete next[id];
+      return next;
+    });
+  }, [paneList]);
+
+  /**
+   * Start a chat with `agentId` in `pane`, which shows how far it got (or why it failed, with
+   * Retry and Switch agent) until it opens there. Moving the pane on meanwhile leaves it be.
+   */
+  const startIn = useCallback(
+    async (pane: string, agentId: string, run: (agentId: string, startId: string) => Promise<SessionInfo>): Promise<string> => {
+      const startId = crypto.randomUUID();
+      const over = paneContent.current(pane);
+      const retry = (other?: string) => void startAgain.current(pane, other ?? agentId, run).catch(() => undefined);
+      setStarting((prev) => ({
+        ...prev,
+        [pane]: { startId, agentId, stage: "agent", servers: [], startedAt: Date.now(), error: null, over, retry },
+      }));
+      let info: SessionInfo;
+      try {
+        info = await run(agentId, startId);
+      } catch (e) {
+        setStarting((prev) =>
+          prev[pane]?.startId === startId ? { ...prev, [pane]: { ...prev[pane], error: e ?? "the agent didn't start" } } : prev,
+        );
+        throw e;
+      }
       transcripts.created(info.sessionId);
       setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
-      openIn(pane, { kind: "chat", id: info.sessionId });
+      const shown = startingRef.current[pane]?.startId === startId && paneContent.current(pane) === over;
+      setStarting((prev) => {
+        if (prev[pane]?.startId !== startId) return prev;
+        const { [pane]: _, ...rest } = prev;
+        return rest;
+      });
+      if (shown) openIn(pane, { kind: "chat", id: info.sessionId });
       return info.sessionId;
     },
-    [agentFor, transcripts, focusedId, openIn],
+    [transcripts, openIn],
+  );
+
+  const startAgain = useRef(startIn);
+  useLayoutEffect(() => {
+    startAgain.current = startIn;
+  });
+
+  /** Close a failed start's view: the pane shows what it did before. */
+  const dismissStart = useCallback((pane: string) => {
+    setStarting((prev) => {
+      if (!prev[pane]) return prev;
+      const { [pane]: _, ...rest } = prev;
+      return rest;
+    });
+  }, []);
+
+  /** A chat in a project, with `agent` when the user picked one, else the project's; `extraDirs` join the project. */
+  const newChat = useCallback(
+    (projectId: string, agent?: string, extraDirs?: string[]) =>
+      startIn(focusedId(), agent || agentFor(projectId), (a, startId) => api.newSession(projectId, a, extraDirs, startId)),
+    [agentFor, startIn, focusedId],
   );
 
   /**
@@ -147,15 +242,9 @@ export function useYaah() {
 
   /** A chat outside any project, in `dir` or a fresh scratch folder, with `agent` or the sidebar's, and `extraDirs` (repos) as its own. */
   const newQuickChat = useCallback(
-    async (dir?: string, agent?: string, extraDirs?: string[]) => {
-      const pane = focusedId();
-      const info = await api.newQuickChat(agent || agentId, dir, extraDirs);
-      transcripts.created(info.sessionId);
-      setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
-      openIn(pane, { kind: "chat", id: info.sessionId });
-      return info.sessionId;
-    },
-    [agentId, transcripts, focusedId, openIn],
+    (dir?: string, agent?: string, extraDirs?: string[]) =>
+      startIn(focusedId(), agent || agentId, (a, startId) => api.newQuickChat(a, dir, extraDirs, startId)),
+    [agentId, startIn, focusedId],
   );
 
   /** A quick chat in a folder the user picks (e.g. one holding the data to analyse). Nothing if they cancel. */
@@ -250,6 +339,9 @@ export function useYaah() {
     transcripts,
     activeProject: projects.find((p) => p.id === activeProjectId) ?? null,
     agentFor,
+    /** Chats being started, by pane (`startIn`). */
+    starting,
+    dismissStart,
     newChat,
     newQuickChat,
     newChatInFolder,

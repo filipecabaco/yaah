@@ -494,10 +494,30 @@ export function chatReplies(m: Mock): Replies {
     }
   }
 
+  // What session.rs reports while a chat starts: the agent, then session/new with its MCP servers.
+  const starting = async (startId?: string) => {
+    if (!startId) return;
+    await m.emit("session-starting", { startId, stage: "agent", servers: [] });
+    await m.wait(700);
+    await m.emit("session-starting", { startId, stage: "mcpServers", servers: ["chrome-devtools", "fetch"] });
+    await m.wait(900);
+  };
+
   return {
     list_sessions: (): SessionInfo[] => Object.values(state.sessions),
     // `extraDirs` (docs/research/chat-repos-contract.md): a project's join the project; a quick chat's are its own.
-    new_session: ({ projectId, accountId, extraDirs = [] }: { projectId: string; accountId: string; extraDirs?: string[] }): SessionInfo => {
+    new_session: async ({
+      projectId,
+      accountId,
+      extraDirs = [],
+      startId,
+    }: {
+      projectId: string;
+      accountId: string;
+      extraDirs?: string[];
+      startId?: string;
+    }): Promise<SessionInfo> => {
+      await starting(startId);
       const p = need(
         state.projects.find((x) => x.id === projectId),
         `no project ${projectId}`,
@@ -505,7 +525,18 @@ export function chatReplies(m: Mock): Replies {
       p.dirs = [...new Set([...p.dirs, ...extraDirs])];
       return Object.assign(openProjectChat(m, p, accountId), { extraDirs: [] as string[] });
     },
-    new_quick_chat: ({ accountId, dir, extraDirs = [] }: { accountId: string; dir: string | null; extraDirs?: string[] }): SessionInfo => {
+    new_quick_chat: async ({
+      accountId,
+      dir,
+      extraDirs = [],
+      startId,
+    }: {
+      accountId: string;
+      dir: string | null;
+      extraDirs?: string[];
+      startId?: string;
+    }): Promise<SessionInfo> => {
+      await starting(startId);
       const cwd = dir ?? `${home}/.yaah/scratch/3f9c2a7e41d0`;
       const extra = [...new Set(extraDirs)].filter((d) => d !== cwd);
       return Object.assign(open({ projectId: null, accountId, cwd, additionalDirs: extra }), { extraDirs: extra });

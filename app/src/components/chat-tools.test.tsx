@@ -2,8 +2,9 @@
 // switching a chat's agent for its next message, against the real App and the browser mock.
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Elapsed } from "@/components/entries";
-import { api } from "@/lib/api";
+import userEvent from "@testing-library/user-event";
+import { Elapsed, TranscriptEntry } from "@/components/entries";
+import { api, type Entry } from "@/lib/api";
 import { elapsedText } from "@/lib/format";
 import { setCardRules } from "@/lib/tool-cards";
 import { answerPermissionsUntil, renderApp, sendInQuickChat } from "@/test/app";
@@ -53,7 +54,9 @@ describe("tool cards", () => {
     const cargo = await within(log).findByText(/running 3 tests/);
     expect(cargo.tagName).toBe("PRE");
     expect(cargo.textContent).not.toContain("```");
-    expect(cargo.className).toContain("whitespace-pre");
+    expect(cargo).toHaveAttribute("data-layout", "code");
+    expect(cargo.className.split(" ")).toContain("whitespace-pre");
+    expect(cargo.className).toContain("overflow-auto");
     expect(cargo.className).not.toContain("break-all");
 
     await user.click(card(log, "git log --oneline --decorate -4"));
@@ -67,6 +70,7 @@ describe("tool cards", () => {
     await user.click(raw);
     const text = await within(log).findByText(/^diff --git a\/src\/billing\/invoice\.ts/);
     expect(text.tagName).toBe("PRE");
+    expect(text).toHaveAttribute("data-layout", "code");
     expect(text.textContent).toContain("\tconst rate = taxRate(plan.country);");
     await user.click(within(log).getByRole("button", { name: "Diff view" }));
     expect(within(log).queryByText(/^diff --git/)).toBeNull();
@@ -162,5 +166,90 @@ describe("switching a chat's agent", () => {
     await user.click(await within(dialog).findByRole("option", { name: /Switch agent…/ }));
     await user.click(await within(dialog).findByRole("option", { name: /Claude \(work\)/ }));
     expect(await within(log).findByText(/Switched to/)).toBeInTheDocument();
+  });
+});
+
+describe("a tool card's text", () => {
+  // As codex-acp sends it, for a server it didn't start.
+  const CODEX_ERROR =
+    "[codex-acp] MCP server `chrome-devtools` was not started, because the Codex config already defines an MCP server with this name. Codex uses its own entry, or no server if that entry is disabled.";
+  const tool = (text: string, status: "failed" | "completed" = "failed"): Entry => ({
+    type: "tool",
+    toolCallId: "t1",
+    title: "Run something",
+    kind: "other",
+    status,
+    content: [{ type: "content", content: { type: "text", text } }],
+    locations: [],
+    rawInput: null,
+  });
+  const open = async (entry: Entry) => {
+    const user = userEvent.setup();
+    render(<TranscriptEntry entry={entry} index={0} inTurn={false} live={false} onLogin={() => {}} />);
+    await user.click(screen.getByRole("button", { name: /Run something/ }));
+  };
+
+  it("wraps an error message in full, in the destructive colour, sized to its content", async () => {
+    await open(tool(CODEX_ERROR));
+    const pre = screen.getByText(CODEX_ERROR);
+    expect(pre).toHaveAttribute("data-layout", "prose");
+    expect(pre.className).toContain("whitespace-pre-wrap");
+    expect(pre.className).toContain("[overflow-wrap:anywhere]");
+    expect(pre.className).toContain("text-destructive");
+    // No sideways scroll and no fixed height: it grows with the text, up to max-h-96, then scrolls down.
+    expect(pre.className).toContain("overflow-y-auto");
+    expect(pre.className).not.toMatch(/(^|\s)overflow-auto(\s|$)/);
+    expect(pre.className).not.toMatch(/(^|\s)h-\d/);
+    expect(pre.className).toContain("max-h-96");
+    // One line of text plus its padding: line-height 1.25 rem, never under the padding.
+    expect(pre.className).toContain("leading-5");
+  });
+
+  it("wraps plain output of a call that worked, in the usual colour", async () => {
+    await open(tool("Saved 3 rows to invoices.csv and skipped 1 duplicate.", "completed"));
+    const pre = screen.getByText(/Saved 3 rows/);
+    expect(pre).toHaveAttribute("data-layout", "prose");
+    expect(pre.className).not.toContain("text-destructive");
+  });
+
+  it("keeps a code block on its lines, scrolling sideways with room for the scrollbar", async () => {
+    await open(tool("```ts\nconst veryLongLine = [1, 2, 3].map((n) => n * 2).filter(Boolean).join(', ');\n```", "completed"));
+    const pre = screen.getByText(/const veryLongLine/);
+    expect(pre).toHaveAttribute("data-layout", "code");
+    expect(pre.className.split(" ")).toContain("whitespace-pre");
+    expect(pre.className).toContain("overflow-auto");
+    expect(pre.className).toContain("pb-3");
+  });
+
+  it("still shows a diff in the diff view", async () => {
+    await open(tool("--- a/notes.txt\n+++ b/notes.txt\n@@ -1,2 +1,2 @@\n-hello\n+hello, world\n bye", "completed"));
+    expect(screen.getByRole("button", { name: "Raw" })).toBeInTheDocument();
+    expect(screen.queryByText(/^--- a\/notes\.txt/)).toBeNull();
+  });
+});
+
+describe("MCP startup notices", () => {
+  it("show a server the agent uses its own of as an info line, and failures in the notices card", () => {
+    const entry: Entry = {
+      type: "notices",
+      items: [
+        { severity: "info", title: "Codex uses its own chrome-devtools", mcpServer: "chrome-devtools" },
+        { severity: "warning", title: 'MCP server "rea" didn\'t start', description: "handshake timed out", mcpServer: "rea" },
+      ],
+    };
+    render(<TranscriptEntry entry={entry} index={0} inTurn={false} live={false} onLogin={() => {}} />);
+    const info = screen.getByText("Codex uses its own chrome-devtools");
+    expect(info.closest("[role=status]")?.textContent).toBe("Codex uses its own chrome-devtools");
+    expect(screen.getByText("1 MCP server isn't available in this chat")).toBeInTheDocument();
+    expect(screen.getByText("didn't start")).toBeInTheDocument();
+    expect(screen.queryByText(/failed/)).toBeNull();
+  });
+
+  it("show only the info line when nothing failed", () => {
+    const entry: Entry = { type: "notices", items: [{ severity: "info", title: "Codex uses its own fetch", mcpServer: "fetch" }] };
+    render(<TranscriptEntry entry={entry} index={0} inTurn={false} live={false} onLogin={() => {}} />);
+    expect(screen.getByText("Codex uses its own fetch")).toBeInTheDocument();
+    expect(screen.queryByText(/isn't available/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "MCP servers settings" })).toBeNull();
   });
 });

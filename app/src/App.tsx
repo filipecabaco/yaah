@@ -2,7 +2,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } f
 import { ChevronDown, FolderGit2, MessageSquarePlus } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark } from "@/components/brand/mark";
-import { Chat } from "@/components/chat";
+import { Chat, StartingChat } from "@/components/chat";
 import { focusComposer } from "@/components/chat-context";
 import { ErrorText } from "@/components/error-text";
 import { CommandPalette, type PalettePage } from "@/components/command-palette";
@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useShortcuts } from "@/hooks/use-shortcuts";
-import { useYaah, type Selection } from "@/hooks/use-yaah";
+import { contentKey, useYaah, type Selection } from "@/hooks/use-yaah";
 import { TranscriptsContext } from "@/hooks/use-transcript";
 import { api, canChat, type AgentProfile, type SessionInfo } from "@/lib/api";
 import { onOpenAgentSwitch, onOpenComponent, onOpenSettings } from "@/lib/app-events";
@@ -269,6 +269,14 @@ export default function App() {
     const c = p.content;
     const focused = p.id === panes.layout.focused;
     const blank = <main className="min-w-0 flex-1" />;
+    // A chat starting here covers what the pane showed, until it opens (or the pane moves on).
+    const start = y.starting[p.id];
+    if (start && contentKey(c) === start.over) {
+      const label = y.agents.find((a) => a.id === start.agentId)?.label ?? start.agentId;
+      labels[p.id] = `Starting a chat with ${label}`;
+      contents[p.id] = <StartingChat start={start} agents={y.agents} onDismiss={() => y.dismissStart(p.id)} />;
+      continue;
+    }
     if (c?.kind === "components") {
       labels[p.id] = "Component library";
       contents[p.id] = (

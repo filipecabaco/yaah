@@ -290,13 +290,14 @@ pub async fn new_session(
     project_id: String,
     account_id: String,
     extra_dirs: Option<Vec<String>>,
+    start_id: Option<String>,
 ) -> Result<SessionInfo, String> {
     // Repos chosen up front join the project, so its other chats get them too.
     let project = match extra_dirs.filter(|d| !d.is_empty()) {
         Some(dirs) => projects.add_dirs(&project_id, &dirs).inspect(|p| hub.sync_project(p))?,
         None => projects.get(&project_id)?,
     };
-    hub.new_session(ChatTarget::Project(&project), &account_id).await
+    hub.new_session_with(ChatTarget::Project(&project), &account_id, &[], start_id.as_deref()).await
 }
 
 /// A chat outside any project: in `dir`, or a fresh scratch folder for quick work,
@@ -307,6 +308,7 @@ pub async fn new_quick_chat(
     account_id: String,
     dir: Option<String>,
     extra_dirs: Option<Vec<String>>,
+    start_id: Option<String>,
 ) -> Result<SessionInfo, String> {
     let extra_dirs = extra_dirs.unwrap_or_default();
     // Checked before a scratch folder is made for nothing.
@@ -320,7 +322,7 @@ pub async fn new_quick_chat(
             d.to_string_lossy().into_owned()
         }
     };
-    hub.new_session_with(ChatTarget::Folder(dir), &account_id, &extra_dirs).await
+    hub.new_session_with(ChatTarget::Folder(dir), &account_id, &extra_dirs, start_id.as_deref()).await
 }
 
 /// Add repos to a chat as it goes: to its project when it has one (every chat there

@@ -67,7 +67,7 @@ describe("New project → Name and repos", () => {
 
     // Its chats start with the project's agent, which the chat keeps.
     await user.click(screen.getByRole("button", { name: "New chat as Claude (work)" }));
-    await waitFor(() => expect(argsOf(invoke, "new_session")).toEqual([{ projectId: id, accountId: "work" }]));
+    await waitFor(() => expect(argsOf(invoke, "new_session")).toEqual([{ projectId: id, accountId: "work", startId: expect.any(String) as string }]));
     expect(Object.values(mock.sessions).find((s) => s.projectId === id)?.accountId).toBe("work");
   });
 
@@ -109,7 +109,9 @@ describe("a project's agent", () => {
     expect(screen.getByRole("combobox", { name: "Agent for new chats" })).not.toHaveTextContent("work");
 
     newChatKey();
-    await waitFor(() => expect(argsOf(invoke, "new_session")).toEqual([{ projectId: "p1", accountId: "work" }]));
+    await waitFor(() =>
+      expect(argsOf(invoke, "new_session")).toEqual([{ projectId: "p1", accountId: "work", startId: expect.any(String) as string }]),
+    );
 
     // Back on the project: one chat with another agent, and the project keeps its own.
     await user.click(within(screen.getByRole("complementary")).getByRole("button", { name: "billing revamp" }));
@@ -117,7 +119,9 @@ describe("a project's agent", () => {
     const menu = await screen.findByRole("menu");
     expect(within(menu).getByRole("menuitem", { name: /^Claude \(work\)/ })).toHaveTextContent("project's");
     await user.click(within(menu).getByRole("menuitem", { name: /^Claude\s*dev@example\.com/ }));
-    await waitFor(() => expect(argsOf(invoke, "new_session").at(-1)).toEqual({ projectId: "p1", accountId: "default" }));
+    await waitFor(() =>
+      expect(argsOf(invoke, "new_session").at(-1)).toEqual({ projectId: "p1", accountId: "default", startId: expect.any(String) as string }),
+    );
     expect(mock.projects[0].agentId).toBe("work");
   });
 

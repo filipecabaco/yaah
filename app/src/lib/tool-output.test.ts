@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isUnifiedDiff, readToolText } from "@/lib/tool-output";
+import { isUnifiedDiff, readToolText, toolTextLayout } from "@/lib/tool-output";
 
 // Real output, as Claude's adapter sends a Bash result: "```console\n" + output.trimEnd() + "\n```".
 const fence = (text: string, info = "console", marker = "```") => `${marker}${info}\n${text}\n${marker}`;
@@ -94,5 +94,17 @@ describe("isUnifiedDiff", () => {
     expect(isUnifiedDiff(`Summary\n${GIT_DIFF}`)).toBe(false);
     expect(isUnifiedDiff("--- a heading\nnot a diff")).toBe(false);
     expect(isUnifiedDiff(GIT_LOG)).toBe(false);
+  });
+});
+
+describe("toolTextLayout", () => {
+  it("keeps code blocks and diffs on their lines; anything else wraps", () => {
+    expect(toolTextLayout(readToolText(fence(CARGO)))).toBe("code");
+    expect(toolTextLayout(readToolText(GIT_DIFF))).toBe("diff");
+    expect(toolTextLayout(readToolText(fence(DIFF_U)))).toBe("diff");
+    expect(toolTextLayout(readToolText("[codex-acp] MCP server `fetch` was not started, because the Codex config already defines it."))).toBe(
+      "prose",
+    );
+    expect(toolTextLayout(readToolText(GIT_LOG))).toBe("prose");
   });
 });

@@ -1,6 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { ArrowUp, ChevronDown, FileText, FolderGit2, FolderPlus, Repeat, SquareSlash, Square } from "lucide-react";
+import { AlertTriangle, ArrowUp, ChevronDown, FileText, FolderGit2, FolderPlus, Repeat, RotateCw, SquareSlash, Square } from "lucide-react";
+import { AgentMenu } from "@/components/agent-choice";
+import { Mark } from "@/components/brand/mark";
 import { Hint } from "@/components/shortcuts";
 import { ErrorText } from "@/components/error-text";
 import { Badge } from "@/components/ui/badge";
@@ -18,7 +20,9 @@ import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type AgentProfile, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
 import { onOpenAddRepos, openAddRepos, openAgentSwitch } from "@/lib/app-events";
-import { baseName, compactPath, plural } from "@/lib/format";
+import { baseName, compactPath, elapsedText, plural, startingText } from "@/lib/format";
+import { errorMessage } from "@/lib/narrow";
+import type { Starting } from "@/hooks/use-yaah";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { ChatContext, isFocusedPane, onDraft } from "@/components/chat-context";
 import { TranscriptEntry } from "@/components/entries";
@@ -629,5 +633,94 @@ function FileLabel({ label }: { label: string }) {
       <span className="font-medium">{label.slice(cut)}</span>
       {cut > 0 && <span className="ml-2 font-mono text-xs text-muted-foreground">{label.slice(0, cut)}</span>}
     </span>
+  );
+}
+
+/** Seconds since `since`, ticking each second. */
+function useSecondsSince(since: number, ticking: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!ticking) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [ticking]);
+  return Math.max(0, Math.floor((now - since) / 1000));
+}
+
+/** After this many seconds the starting view shows how long it has been. */
+const SHOW_ELAPSED_AFTER = 2;
+
+/**
+ * A new chat while its agent starts and `session/new` runs (use-yaah.ts `startIn`): the agent,
+ * the sliding mark, what it is waiting for, and the time so far once it takes a while. The
+ * composer waits (nothing queues a message yet). A failed start shows why, with Retry and
+ * Switch agent.
+ */
+export function StartingChat({ start, agents, onDismiss }: { start: Starting; agents: AgentProfile[]; onDismiss: () => void }) {
+  const agent = agents.find((a) => a.id === start.agentId);
+  const label = agent?.label ?? start.agentId;
+  const failed = start.error != null;
+  const seconds = useSecondsSince(start.startedAt, !failed);
+  const others = agents.filter((a) => a.id !== start.agentId);
+  return (
+    <div className="flex h-full min-w-0 flex-1 flex-col">
+      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm">
+        <h1 className="min-w-0 truncate font-medium">New chat</h1>
+        <Badge variant="outline">{label}</Badge>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {failed ? (
+          <div className="mx-auto w-full max-w-[75ch] px-4 py-16">
+            <div role="alert" className="flex flex-col gap-3 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm">
+              <div className="flex items-center gap-2 font-medium text-destructive">
+                <AlertTriangle className="size-4 shrink-0" aria-hidden />
+                {label} didn't start
+              </div>
+              <p className="text-xs [overflow-wrap:anywhere] whitespace-pre-wrap text-destructive">{errorMessage(start.error)}</p>
+              <div className="flex flex-wrap gap-2">
+                <Button size="sm" onClick={() => start.retry()}>
+                  <RotateCw /> Retry
+                </Button>
+                {others.length > 0 && (
+                  <AgentMenu agents={others} heading="Start it with…" onPick={(id) => start.retry(id)}>
+                    <Button size="sm" variant="outline">
+                      Switch agent <ChevronDown />
+                    </Button>
+                  </AgentMenu>
+                )}
+                <Button size="sm" variant="ghost" onClick={onDismiss}>
+                  Close
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div
+            role="status"
+            aria-live="polite"
+            aria-label={`Starting a chat with ${label}`}
+            className="flex flex-col items-center gap-3 px-4 py-16 text-center"
+          >
+            <Mark loading className="size-8 text-foreground" />
+            <p className="max-w-[60ch] text-sm font-medium">{startingText(start, label)}</p>
+            {seconds >= SHOW_ELAPSED_AFTER && <p className="text-xs text-muted-foreground tabular-nums">{elapsedText(seconds)}</p>}
+          </div>
+        )}
+      </div>
+      <div className="border-t py-3">
+        <div className="mx-auto flex w-full max-w-[min(100%,1400px)] items-end gap-2 px-4">
+          <Textarea
+            disabled
+            placeholder={failed ? `${label} didn't start` : `${label} is starting…`}
+            aria-label="Message"
+            className="max-h-48 min-h-10 resize-none"
+            rows={1}
+          />
+          <Button size="icon" disabled aria-label="Send">
+            <ArrowUp />
+          </Button>
+        </div>
+      </div>
+    </div>
   );
 }
