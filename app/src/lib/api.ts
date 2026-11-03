@@ -1,6 +1,7 @@
 // Typed bindings to the Rust core. Mirrors `src-tauri/src/{agents,projects,login,session}.rs`.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Layout } from "@/lib/layout";
 
 /** A login method an agent offers (ACP `authMethods`). */
 export type AuthMethod = {
@@ -204,9 +205,19 @@ export type SessionInfo = {
   agentSessionId?: string;
   /** Set by `switch_agent`: the agent the next message hands the chat over from. */
   handoffFrom?: string;
+  /** A quick chat's own folders besides its cwd (also in `additionalDirs`); empty for project chats. */
+  extraDirs: string[];
+  /** Its folders changed: the next message reopens the agent's session with them first. */
+  dirsChanged?: boolean;
 };
 
 export type SlashCommand = { name: string; description: string; input?: { hint?: string } | null };
+
+/** The sidebar: hidden to a strip, and its width in CSS pixels (220–480). */
+export type SidebarState = { collapsed: boolean; width: number };
+export const SIDEBAR = { min: 220, max: 480, default: 288 } as const;
+/** `panes`: null when nothing was saved yet (one pane, the home screen). */
+export type WindowLayout = { panes: Layout | null; sidebar: SidebarState };
 
 export type Appearance = "system" | "light" | "dark";
 export type GeneralSettings = {
@@ -335,7 +346,9 @@ export type Entry =
   | { type: "error"; message: string; loginAccount: string | null }
   | { type: "notices"; items: Notice[] }
   /** The chat moved to another agent (`switch_agent`); `label` is the new agent's, `from` the one before. */
-  | { type: "switch"; accountId: string; label: string; from: string | null };
+  | { type: "switch"; accountId: string; label: string; from: string | null }
+  /** Folders added to the chat as it went (`add_chat_dirs`): to its project, or to this chat only. */
+  | { type: "addedDirs"; paths: string[]; to: "project" | "chat" };
 
 /** A page of a transcript (`get_entries`). */
 export type EntryPage = { entries: Entry[]; from: number; total: number };
@@ -545,6 +558,10 @@ export const api = {
   readCustomTheme: (name: string) =>
     invoke<{ name?: string; displayName?: string; type?: string; colors: Record<string, string> }>("read_custom_theme", { name }),
   revealDataDir: (path: string) => invoke<void>("reveal_data_dir", { path }),
+  /** The split panes and the sidebar as last left (layout.rs): panes on deleted chats or projects already dropped. */
+  windowLayout: () => invoke<WindowLayout>("window_layout"),
+  setLayout: (layout: Layout) => invoke<void>("set_layout", { layout }),
+  setSidebar: (sidebar: SidebarState) => invoke<void>("set_sidebar", { collapsed: sidebar.collapsed, width: sidebar.width }),
   listConnections: () => invoke<ConnectionInfo[]>("list_connections"),
   addConnection: (name: string, url: string) => invoke<ConnectionInfo>("add_connection", { name, url }),
   removeConnection: (name: string) => invoke<void>("remove_connection", { name }),
@@ -565,9 +582,14 @@ export const api = {
 
   // chats
   listSessions: () => invoke<SessionInfo[]>("list_sessions"),
-  newSession: (projectId: string, accountId: string) => invoke<SessionInfo>("new_session", { projectId, accountId }),
-  /** A chat outside any project: in `dir`, or a fresh scratch folder. */
-  newQuickChat: (accountId: string, dir?: string) => invoke<SessionInfo>("new_quick_chat", { accountId, dir: dir ?? null }),
+  /** `extraDirs`: repos chosen up front; they join the project (docs/research/chat-repos-contract.md). */
+  newSession: (projectId: string, accountId: string, extraDirs?: string[]) =>
+    invoke<SessionInfo>("new_session", { projectId, accountId, ...(extraDirs?.length ? { extraDirs } : {}) }),
+  /** A chat outside any project: in `dir`, or a fresh scratch folder; `extraDirs`: repos chosen up front, the chat's own. */
+  newQuickChat: (accountId: string, dir?: string, extraDirs?: string[]) =>
+    invoke<SessionInfo>("new_quick_chat", { accountId, dir: dir ?? null, ...(extraDirs?.length ? { extraDirs } : {}) }),
+  /** Add repos to a chat as it goes: to its project when it has one, else to the chat (docs/research/chat-repos-contract.md). */
+  addChatDirs: (sessionId: string, paths: string[]) => invoke<SessionInfo>("add_chat_dirs", { sessionId, paths }),
   setChatProject: (sessionId: string, projectId: string | null) => invoke<SessionInfo>("set_chat_project", { sessionId, projectId }),
   /** Make a project from a chat's folder and file the chat under it. */
   promoteChat: (sessionId: string, name: string) => invoke<[Project, SessionInfo]>("promote_chat", { sessionId, name }),

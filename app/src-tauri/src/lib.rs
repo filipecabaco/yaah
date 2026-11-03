@@ -10,6 +10,7 @@ mod data_commands;
 mod files;
 pub mod integrations;
 mod json_file;
+pub mod layout;
 pub mod login;
 pub mod mcp_servers;
 pub mod path_env;
@@ -104,6 +105,9 @@ pub fn run() {
             agent_guide::set_teach_agents,
             data_commands::read_custom_theme,
             data_commands::reveal_data_dir,
+            data_commands::window_layout,
+            data_commands::set_layout,
+            data_commands::set_sidebar,
             data_commands::integrations_status,
             data_commands::integration_connect,
             data_commands::integration_set_key,
@@ -144,6 +148,7 @@ pub fn run() {
             commands::write_brief,
             commands::new_session,
             commands::new_quick_chat,
+            commands::add_chat_dirs,
             commands::set_chat_project,
             commands::promote_chat,
             commands::list_sessions,

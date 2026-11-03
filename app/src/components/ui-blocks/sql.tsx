@@ -171,7 +171,7 @@ export default function UiSql({ connection, sql = "", limit, title }: { connecti
       "error" in ran
         ? `It failed: ${errorMessage(ran.error)}`
         : `It returned ${ran.result.rows.length}${ran.result.truncated ? "+" : ""} rows (${ran.result.columns.join(", ")}).`;
-    draftIntoComposer({ text: `About this query on \`${conn}\`:\n\`\`\`sql\n${ran.sql}\n\`\`\`\n${outcome}\n` });
+    draftIntoComposer({ text: `About this query on \`${conn}\`:\n\`\`\`sql\n${ran.sql}\n\`\`\`\n${outcome}\n` }, chat?.pane);
   };
 
   const tables = schema?.tables.length;

@@ -186,7 +186,7 @@ function askAbout(chat: ChatInfo, file: DiffFile, hunk: Hunk) {
   const abs = file.path.startsWith("/") ? file.path : `${chat.cwd.replace(/\/$/, "")}/${file.path}`;
   const label = abs.startsWith(chat.cwd + "/") ? abs.slice(chat.cwd.length + 1) : abs;
   const range = from === to ? `line ${from}` : `lines ${from}–${to}`;
-  draftIntoComposer({ text: `About @${label} ${range}: `, mention: { label, path: abs } });
+  draftIntoComposer({ text: `About @${label} ${range}: `, mention: { label, path: abs } }, chat.pane);
 }
 
 function AskButton({ onClick }: { onClick: () => void }) {

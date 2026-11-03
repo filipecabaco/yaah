@@ -6,6 +6,7 @@
 use crate::accounts::home;
 use crate::agent_versions::Version;
 use crate::json_file::JsonFile;
+use crate::layout::{self, Layout};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -302,6 +303,41 @@ pub fn set_tool_card(key: &str, mode: Option<&str>) -> Result<(), String> {
     })
 }
 
+// ── window layout ────────────────────────────────────────────────────────────
+/// The split panes and the sidebar as last left (`layout.rs`), panes on chats or
+/// projects that are gone already dropped: `{ panes, sidebar }`.
+pub fn window_layout(chat_exists: impl Fn(&str) -> bool, project_exists: impl Fn(&str) -> bool) -> Value {
+    window_layout_in(&load(), chat_exists, project_exists)
+}
+
+fn window_layout_in(s: &Map<String, Value>, chat_exists: impl Fn(&str) -> bool, project_exists: impl Fn(&str) -> bool) -> Value {
+    layout::for_ui(layout::from_saved(s.get("layout")), layout::Sidebar::from_saved(s.get("sidebar")), chat_exists, project_exists)
+}
+
+pub fn set_layout(l: Layout) -> Result<(), String> {
+    set_layout_in(file(), l)
+}
+
+fn set_layout_in(file: &JsonFile, l: Layout) -> Result<(), String> {
+    let l = serde_json::to_value(l.checked()?).map_err(|e| e.to_string())?;
+    file.update(|all: &mut Map<String, Value>| {
+        all.insert("layout".into(), l);
+        Ok(())
+    })
+}
+
+pub fn set_sidebar(collapsed: bool, width: u32) -> Result<(), String> {
+    set_sidebar_in(file(), collapsed, width)
+}
+
+fn set_sidebar_in(file: &JsonFile, collapsed: bool, width: u32) -> Result<(), String> {
+    let s = serde_json::to_value(layout::Sidebar::new(collapsed, width)).map_err(|e| e.to_string())?;
+    file.update(|all: &mut Map<String, Value>| {
+        all.insert("sidebar".into(), s);
+        Ok(())
+    })
+}
+
 /// Where yaah keeps things, for the General tab ("Reveal" buttons).
 fn data_dirs() -> Vec<Value> {
     let h = home();
@@ -428,6 +464,47 @@ mod tests {
         let s: Map<String, Value> =
             serde_json::from_value(json!({ "agentVersions": { "claude": "latest", "goose": "1.0.0", "codex": "2.6.0", "gemini": 3 } })).unwrap();
         assert_eq!(agent_versions_in(&s), BTreeMap::from([("codex".into(), "2.6.0".into())]));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn the_layout_and_sidebar_persist_beside_other_settings_and_come_back_pruned() {
+        let dir = std::env::temp_dir().join(format!("yaah-layout-{}", crate::random::token()));
+        let file = JsonFile::new(dir.join("settings.json"), false);
+        file.update(|m: &mut Map<String, Value>| Ok(m.insert("appearance".into(), json!("dark")))).unwrap();
+        assert_eq!(window_layout_in(&file.read(), |_| true, |_| true), json!({ "panes": null, "sidebar": { "collapsed": false, "width": 288 } }));
+
+        let saved: Layout = serde_json::from_value(json!({
+            "root": {
+                "type": "split", "id": "s1", "dir": "row", "ratio": 0.3,
+                "a": { "type": "pane", "id": "p1", "content": { "kind": "chat", "id": "kept" } },
+                "b": { "type": "pane", "id": "p2", "content": { "kind": "chat", "id": "deleted" } },
+            },
+            "focused": "p2",
+        }))
+        .unwrap();
+        set_layout_in(&file, saved).unwrap();
+        set_sidebar_in(&file, true, 9999).unwrap();
+        let all: Map<String, Value> = file.read();
+        assert_eq!(all["appearance"], "dark", "other settings stay");
+        assert_eq!(all["sidebar"], json!({ "collapsed": true, "width": 480 }), "the width is kept within bounds");
+        assert_eq!(all["layout"]["root"]["b"]["content"]["id"], "deleted", "saved whole; pruning happens when read");
+
+        // A restart after "deleted" was deleted: its pane is gone and the focus moved.
+        let back = window_layout_in(&all, |id| id == "kept", |_| true);
+        assert_eq!(back["panes"], json!({ "root": { "type": "pane", "id": "p1", "content": { "kind": "chat", "id": "kept" } }, "focused": "p1" }));
+        assert_eq!(back["sidebar"]["collapsed"], true);
+
+        // What the UI couldn't have made is refused and the saved layout stays.
+        let dup: Layout = serde_json::from_value(json!({
+            "root": { "type": "split", "id": "s1", "dir": "row", "ratio": 0.5,
+                "a": { "type": "pane", "id": "p1", "content": null }, "b": { "type": "pane", "id": "p1", "content": null } },
+            "focused": "p1",
+        }))
+        .unwrap();
+        assert!(set_layout_in(&file, dup).is_err());
+        assert_eq!(file.read::<Map<String, Value>>()["layout"]["root"]["a"]["id"], "p1");
+        assert_eq!(file.read::<Map<String, Value>>()["layout"]["root"]["type"], "split");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

@@ -1,6 +1,7 @@
 // Settings → General: appearance, themes (with one custom drop-in, "harbor"),
 // tool-card rules, workspace folders and data folders.
-import type { AgentGuide, Appearance, GeneralSettings, GuideRoute } from "@/lib/api";
+import { SIDEBAR, type AgentGuide, type Appearance, type GeneralSettings, type GuideRoute, type SidebarState, type WindowLayout } from "@/lib/api";
+import { prune, type Layout } from "@/lib/layout";
 // The real templates Rust embeds (src-tauri/agent-guide/), so Settings shows what agents are told.
 import guideTemplate from "../../../src-tauri/agent-guide/guide.md?raw";
 import uiSkill from "../../../src-tauri/agent-guide/yaah-ui.md?raw";
@@ -54,6 +55,9 @@ export function seedSettings() {
     cardRules: {} as Record<string, CardMode>,
     workspaceRoots: [ws],
     teachAgents: true,
+    /** The split panes and sidebar as last left (settings.json `layout`, `sidebar`). */
+    layout: null as Layout | null,
+    sidebar: { collapsed: false, width: SIDEBAR.default } as SidebarState,
   };
 }
 
@@ -140,5 +144,22 @@ export function settingsReplies({ state }: Mock): Replies {
     },
     set_workspace_roots: ({ roots }: { roots: string[] }): string[] => (state.workspaceRoots = roots),
     reveal_data_dir: () => null,
+    // layout.rs: panes on chats or projects that are gone are dropped on the way out.
+    window_layout: (): WindowLayout => ({
+      panes:
+        state.layout &&
+        prune(state.layout, (c) =>
+          c?.kind === "chat" ? c.id in state.sessions : c?.kind === "project" ? state.projects.some((p) => p.id === c.id) : true,
+        ),
+      sidebar: state.sidebar,
+    }),
+    set_layout: ({ layout }: { layout: Layout }) => {
+      state.layout = structuredClone(layout);
+      return null;
+    },
+    set_sidebar: ({ collapsed, width }: SidebarState) => {
+      state.sidebar = { collapsed, width: Math.min(SIDEBAR.max, Math.max(SIDEBAR.min, Math.round(width))) };
+      return null;
+    },
   };
 }

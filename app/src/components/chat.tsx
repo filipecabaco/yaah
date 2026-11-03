@@ -1,20 +1,31 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, ChevronDown, FileText, Repeat, SquareSlash, Square } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { ArrowUp, ChevronDown, FileText, FolderGit2, FolderPlus, Repeat, SquareSlash, Square } from "lucide-react";
 import { Hint } from "@/components/shortcuts";
 import { ErrorText } from "@/components/error-text";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Command, CommandGroup, CommandItem, CommandList, CommandShortcut } from "@/components/ui/command";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type AgentProfile, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
-import { openAgentSwitch } from "@/lib/app-events";
-import { compactPath } from "@/lib/format";
+import { onOpenAddRepos, openAddRepos, openAgentSwitch } from "@/lib/app-events";
+import { baseName, compactPath, plural } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
-import { ChatContext, onDraft } from "@/components/chat-context";
+import { ChatContext, isFocusedPane, onDraft } from "@/components/chat-context";
 import { TranscriptEntry } from "@/components/entries";
 import { FolderMenu } from "@/components/menus";
 import { useTranscript, useTranscripts } from "@/hooks/use-transcript";
+
+const RepoPicker = lazy(() => import("@/components/repo-picker").then((m) => ({ default: m.RepoPicker })));
 
 type Props = {
   session: SessionInfo;
@@ -22,15 +33,26 @@ type Props = {
   project: Project | null;
   onOpenProject: (id: string) => void;
   onLogin: (accountId: string) => void;
+  /** The split pane it is shown in: drafts from its transcript land in its own composer. */
+  pane?: string;
 };
 
-export function Chat({ session, agents, project, onOpenProject, onLogin }: Props) {
+export function Chat({ session, agents, project, onOpenProject, onLogin, pane }: Props) {
   const agent = agents.find((a) => a.id === session.accountId);
   const roots = [session.cwd, ...session.additionalDirs.filter((d) => d !== project?.contextDir)];
   // Only what deep components need; a stable object, so they don't re-render on every entry.
   const chat = useMemo(
-    () => ({ sessionId: session.sessionId, cwd: session.cwd, busy: session.running }),
-    [session.sessionId, session.cwd, session.running],
+    () => ({ sessionId: session.sessionId, cwd: session.cwd, busy: session.running, pane }),
+    [session.sessionId, session.cwd, session.running, pane],
+  );
+  // "Add repositories…" (⌘K, `/repos`, the folder menu) opens the picker in the pane it came from.
+  const [addingRepos, setAddingRepos] = useState(false);
+  useEffect(
+    () =>
+      onOpenAddRepos((r) => {
+        if (r.sessionId === session.sessionId && (r.pane === pane || (!r.pane && isFocusedPane(pane)))) setAddingRepos(true);
+      }),
+    [session.sessionId, pane],
   );
 
   return (
@@ -72,17 +94,68 @@ export function Chat({ session, agents, project, onOpenProject, onLogin }: Props
         <FolderMenu path={session.cwd}>
           <span className="ml-auto truncate font-mono text-xs text-muted-foreground" title={roots.map((r) => compactPath(r)).join("\n")}>
             {compactPath(session.cwd)}
-            {roots.length > 1 && ` +${roots.length - 1}`}
           </span>
         </FolderMenu>
+        <ChatFolders roots={roots} pending={!!session.dirsChanged} inProject={!!project} onAdd={() => openAddRepos(session.sessionId, pane)} />
       </header>
+      {addingRepos && (
+        <Suspense>
+          <RepoPicker
+            open
+            onClose={() => setAddingRepos(false)}
+            exclude={[session.cwd, ...session.additionalDirs]}
+            addTo={{ project: project?.name ?? null }}
+            onAdd={async (dirs) => void (await api.addChatDirs(session.sessionId, dirs))}
+          />
+        </Suspense>
+      )}
 
       <ChatContext.Provider value={chat}>
         {/* One per chat: whether it follows the stream, and how far back it shows, are the chat's own. */}
         <Transcript key={session.sessionId} sessionId={session.sessionId} running={session.running} onLogin={onLogin} />
       </ChatContext.Provider>
-      <Composer key={session.sessionId} session={session} agentLabel={agent?.label} />
+      <Composer key={session.sessionId} session={session} agentLabel={agent?.label} pane={pane} />
     </div>
+  );
+}
+
+/** The chat's folders in its header: how many, a menu listing them, and a way to add repositories. */
+function ChatFolders({ roots, pending, inProject, onAdd }: { roots: string[]; pending: boolean; inProject: boolean; onAdd: () => void }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          aria-label={`${plural(roots.length, "folder")} in this chat. Show them or add repositories`}
+        >
+          <FolderGit2 className="size-3.5" aria-hidden />
+          <span className="tabular-nums">{roots.length}</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-w-96 min-w-64">
+        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+          {inProject ? "This chat works in its project's folders" : "This chat works in"}
+        </DropdownMenuLabel>
+        {roots.map((root) => (
+          <DropdownMenuItem
+            key={root}
+            title={`Reveal ${root}`}
+            onSelect={() => void revealItemInDir(root).catch((e: unknown) => console.error("could not reveal", root, e))}
+          >
+            <div className="min-w-0">
+              <div className="truncate">{baseName(root)}</div>
+              <div className="truncate font-mono text-[11px] text-muted-foreground">{compactPath(root)}</div>
+            </div>
+          </DropdownMenuItem>
+        ))}
+        {pending && <p className="px-2 py-1 text-xs text-muted-foreground">New folders reach the agent with your next message.</p>}
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={onAdd}>
+          <FolderPlus /> Add repositories…
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -228,17 +301,28 @@ type Suggestion = {
   path?: string;
   /** One of yaah's own commands: runs here, never sent to the agent. */
   local?: () => void;
+  /** Its icon in the list, when not the default. */
+  icon?: ReactNode;
 };
 
 /** yaah's own slash commands, listed before the agent's. */
-const localCommands = (sessionId: string): (Suggestion & { name: string })[] => [
+const localCommands = (session: SessionInfo, pane?: string): (Suggestion & { name: string })[] => [
   {
     id: "yaah:agent",
     name: "agent",
     label: "/agent",
     detail: "Switch the agent for the next message",
     insert: "",
-    local: () => openAgentSwitch(sessionId),
+    local: () => openAgentSwitch(session.sessionId),
+  },
+  {
+    id: "yaah:repos",
+    name: "repos",
+    label: "/repos",
+    detail: session.projectId ? "Add repositories to this project" : "Add repositories to this chat",
+    insert: "",
+    icon: <FolderPlus />,
+    local: () => openAddRepos(session.sessionId, pane),
   },
 ];
 
@@ -246,7 +330,7 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** `@label` still standing as its own word in the text. */
 const mentioned = (text: string, label: string) => new RegExp(`(^|\\s)@${escapeRe(label)}(?=\\s|$)`).test(text);
 
-function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: string }) {
+function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLabel?: string; pane?: string }) {
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
   const [error, setError] = useState<unknown>(null);
@@ -266,15 +350,19 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
   // Other components (e.g. "Ask about this" on a diff) can draft into this composer.
   useEffect(
     () =>
-      onDraft(({ text: add, mention }) => {
-        const next = text.trim() ? `${text.replace(/\s*$/, "")}\n${add}` : add;
-        moveCaret.current = next.length;
-        setText(next);
-        setCaret(next.length);
-        if (mention) setMentions((m) => ({ ...m, [mention.label]: mention.path }));
-        setTimeout(() => input.current?.focus());
-      }, session.sessionId),
-    [text, session.sessionId],
+      onDraft(
+        ({ text: add, mention }) => {
+          const next = text.trim() ? `${text.replace(/\s*$/, "")}\n${add}` : add;
+          moveCaret.current = next.length;
+          setText(next);
+          setCaret(next.length);
+          if (mention) setMentions((m) => ({ ...m, [mention.label]: mention.path }));
+          setTimeout(() => input.current?.focus());
+        },
+        session.sessionId,
+        pane,
+      ),
+    [text, session.sessionId, pane],
   );
 
   const trigger = useMemo(() => findTrigger(text, caret), [text, caret]);
@@ -308,7 +396,7 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
 
   const items: Suggestion[] = useMemo(() => {
     if (openKind === "command") {
-      const own = fuzzyRank(localCommands(session.sessionId), openQuery, (c) => [c.name, c.detail ?? ""]);
+      const own = fuzzyRank(localCommands(session, pane), openQuery, (c) => [c.name, c.detail ?? ""]);
       const agents = fuzzyRank(session.commands, openQuery, (c) => [c.name, c.description]).map((c) => ({
         id: c.name,
         label: `/${c.name}`,
@@ -320,7 +408,7 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
     }
     if (openKind === "file") return (files ?? []).map((f) => ({ id: f.path, label: f.label, insert: `@${f.label} `, path: f.path }));
     return [];
-  }, [openKind, openQuery, session.commands, session.sessionId, files]);
+  }, [openKind, openQuery, session, pane, files]);
 
   // A new list starts at its first item.
   const listKey = `${openKind}:${openQuery}`;
@@ -361,7 +449,7 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
   async function send() {
     const prompt = text.trim();
     if (!prompt) return;
-    const own = localCommands(session.sessionId).find((c) => prompt === c.label);
+    const own = localCommands(session, pane).find((c) => prompt === c.label);
     if (own) {
       setText("");
       own.local?.();
@@ -462,7 +550,7 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
                     <CommandGroup key={g.heading} heading={g.heading}>
                       {g.list.map((s) => (
                         <CommandItem key={s.id} value={s.id} onSelect={() => accept(s)}>
-                          {s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : <FileText />}
+                          {s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : <FileText />)}
                           {s.path ? <FileLabel label={s.label} /> : <span className="shrink-0 font-mono">{s.label}</span>}
                           {s.local && (
                             <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px]" title="yaah's own command, not sent to the agent">
@@ -492,9 +580,10 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
           </Command>
         )}
         <Textarea
-          id="composer"
+          data-composer
           ref={input}
-          autoFocus
+          // Only the pane the user is in takes the focus (a restored layout opens several chats at once).
+          autoFocus={isFocusedPane(pane)}
           value={text}
           onChange={(e) => {
             setText(e.target.value);

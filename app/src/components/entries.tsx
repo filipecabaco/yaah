@@ -12,6 +12,7 @@ import {
   Circle,
   FilePen,
   FileText,
+  FolderPlus,
   Globe,
   Info,
   LayoutPanelTop,
@@ -39,7 +40,7 @@ import { PatchView, TextDiff, UiTree } from "@/components/ui-render";
 import type { FormHost } from "@/components/ui-form-host";
 import { api, type Entry, type ToolContent } from "@/lib/api";
 import { openComponent, openSettings } from "@/lib/app-events";
-import { elapsedText, plural } from "@/lib/format";
+import { baseName, compactPath, elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
 import { readToolText } from "@/lib/tool-output";
 import { cn } from "@/lib/utils";
@@ -82,6 +83,8 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inT
       return <NoticesEntry entry={entry} />;
     case "switch":
       return <SwitchEntry entry={entry} />;
+    case "addedDirs":
+      return <AddedDirsEntry entry={entry} />;
   }
 });
 
@@ -94,10 +97,11 @@ const quoted = (text: string) =>
     .join("\n") + "\n\n";
 
 function UserMessage({ entry }: { entry: Of<"user"> }) {
+  const pane = useChat()?.pane;
   return (
     <div className="flex max-w-[75ch] flex-col items-end gap-1 text-sm">
       <CopyMenu
-        act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }) }]}
+        act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }, pane) }]}
         actions={[{ label: "Copy text", text: () => entry.text }]}
       >
         <div className="max-w-[85%] rounded-lg bg-muted px-3 py-2 whitespace-pre-wrap">{entry.text}</div>
@@ -116,10 +120,13 @@ function UserMessage({ entry }: { entry: Of<"user"> }) {
 }
 
 function AgentMessage({ entry }: { entry: Of<"agent"> }) {
+  const pane = useChat()?.pane;
   return (
     <CopyMenu
       // The selected part of this message, if any; else all of it.
-      act={(t) => [{ label: "Quote in reply", icon: <Quote />, onSelect: () => draftIntoComposer({ text: quoted(t.ownSelection || entry.text) }) }]}
+      act={(t) => [
+        { label: "Quote in reply", icon: <Quote />, onSelect: () => draftIntoComposer({ text: quoted(t.ownSelection || entry.text) }, pane) },
+      ]}
       actions={[{ label: "Copy text", text: () => entry.text }]}
     >
       <div className="max-w-[75ch] text-sm">
@@ -534,6 +541,23 @@ function SwitchEntry({ entry }: { entry: Of<"switch"> }) {
       <span className="shrink-0">
         Switched to <span className="font-medium text-foreground">{entry.label}</span>
         {entry.from && <> from {entry.from}</>}
+      </span>
+      <span className="h-px flex-1 bg-border" aria-hidden />
+    </div>
+  );
+}
+
+/** Repos added as the chat went: to its project (every chat there gets them) or to this chat only. */
+function AddedDirsEntry({ entry }: { entry: Of<"addedDirs"> }) {
+  const names = entry.paths.map(baseName);
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+  return (
+    <div role="status" aria-label="Repositories added" className="flex items-center gap-3 py-1 text-xs text-muted-foreground">
+      <span className="h-px flex-1 bg-border" aria-hidden />
+      <FolderPlus className="size-3 shrink-0" aria-hidden />
+      <span className="min-w-0" title={entry.paths.join("\n")}>
+        Added <span className="font-medium text-foreground">{list}</span> to this {entry.to}
+        <span className="block truncate font-mono text-[11px]">{entry.paths.map((p) => compactPath(p)).join(" · ")}</span>
       </span>
       <span className="h-px flex-1 bg-border" aria-hidden />
     </div>

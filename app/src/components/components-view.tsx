@@ -26,14 +26,17 @@ export function ComponentsView({
   initial = null,
   onInitialSeen,
   onClose,
+  escapeCloses = true,
 }: {
   initial?: string | null;
   onInitialSeen?: () => void;
   /** Back to what was open before. Also on Escape, unless a field or dialog has it. */
   onClose?: () => void;
+  /** Whether Escape closes it (only in the pane the user is in). */
+  escapeCloses?: boolean;
 }) {
   useEffect(() => {
-    if (!onClose) return;
+    if (!onClose || !escapeCloses) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
       const t = e.target;
@@ -43,7 +46,7 @@ export function ComponentsView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, escapeCloses]);
   const [components, setComponents] = useState<UiComponent[] | null>(null);
   const [selected, setSelected] = useState<string | null>(initial);
   const [filter, setFilter] = useState<string | null>(null);

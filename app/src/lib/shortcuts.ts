@@ -1,11 +1,28 @@
 // The app's keyboard shortcuts. macOS uses ⌘, Linux uses Ctrl. Every global
 // shortcut needs that modifier, so plain typing in a field is never taken.
+import type { Direction } from "@/lib/layout";
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 export const MOD = isMac ? "⌘" : "Ctrl";
 export const SHIFT = isMac ? "⇧" : "Shift";
+export const ALT = isMac ? "⌥" : "Alt";
 
-export type ShortcutId = "palette" | "newChat" | "newProject" | "focusComposer" | "stop" | "prevChat" | "nextChat" | "jumpChat" | "help" | "settings";
+export type ShortcutId =
+  | "palette"
+  | "newChat"
+  | "newProject"
+  | "focusComposer"
+  | "stop"
+  | "prevChat"
+  | "nextChat"
+  | "jumpChat"
+  | "splitRight"
+  | "splitDown"
+  | "closePane"
+  | "focusPane"
+  | "toggleSidebar"
+  | "help"
+  | "settings";
 
 type Shortcut = { label: string; keys: string[]; code?: string; shift?: boolean };
 
@@ -18,6 +35,11 @@ export const SHORTCUTS: Record<ShortcutId, Shortcut> = {
   prevChat: { label: "Previous chat", keys: [MOD, "["], code: "BracketLeft" },
   nextChat: { label: "Next chat", keys: [MOD, "]"], code: "BracketRight" },
   jumpChat: { label: "Nth chat of the current project", keys: [MOD, "1–9"] },
+  splitRight: { label: "Split the pane to the right", keys: [MOD, "D"], code: "KeyD" },
+  splitDown: { label: "Split the pane downward", keys: [MOD, SHIFT, "D"], code: "KeyD", shift: true },
+  closePane: { label: "Close the pane", keys: [MOD, "W"], code: "KeyW" },
+  focusPane: { label: "Move to the next pane over", keys: [MOD, ALT, "←↑↓→"] },
+  toggleSidebar: { label: "Show or hide the sidebar", keys: [MOD, "B"], code: "KeyB" },
   help: { label: "Keyboard shortcuts", keys: [MOD, "/"], code: "Slash" },
   settings: { label: "Settings", keys: [MOD, ","], code: "Comma" },
 };
@@ -38,10 +60,20 @@ export function formatKeys(keys: string[]): string {
   return keys.join(isMac ? "" : "+");
 }
 
+const ARROWS: Record<string, Direction> = { ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down" };
+
+/** A shortcut a keydown is: which one, the digit for ⌘1–9, the direction for ⌘⌥ arrows. */
+export type ShortcutHit = { id: ShortcutId; n?: number; dir?: Direction };
+
 /** Which shortcut a keydown is, if any. Only modifier combos count. */
-export function shortcutFor(e: KeyboardEvent): { id: ShortcutId; n?: number } | null {
+export function shortcutFor(e: KeyboardEvent): ShortcutHit | null {
   const mod = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
-  if (!mod || e.altKey) return null;
+  if (!mod) return null;
+  // ⌘⌥ + an arrow moves between panes; no other shortcut takes ⌥.
+  if (e.altKey) {
+    const dir = ARROWS[e.key];
+    return dir && !e.shiftKey ? { id: "focusPane", dir } : null;
+  }
   // Match the physical key; fall back to the character when no code is reported.
   const is = (code: string, key: string) => (e.code ? e.code === code : e.key.toLowerCase() === key);
   const digit = /^Digit([1-9])$/.exec(e.code) ?? (!e.code ? /^([1-9])$/.exec(e.key) : null);

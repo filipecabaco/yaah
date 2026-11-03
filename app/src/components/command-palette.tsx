@@ -2,8 +2,13 @@
 // the current selection. Rename and delete happen inline as palette pages.
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
+  ArrowRightLeft,
   CircleDot,
+  Columns2,
+  PanelLeft,
   Plug,
+  Rows2,
+  X,
   Database,
   FolderGit2,
   FolderInput,
@@ -24,6 +29,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { focusComposer } from "@/components/chat-context";
+import { focusPaneDom } from "@/lib/pane-focus";
+import { openAddRepos } from "@/lib/app-events";
 import { ErrorText } from "@/components/error-text";
 import { connectionReady } from "@/components/settings/form-state";
 import { Badge } from "@/components/ui/badge";
@@ -341,6 +348,7 @@ function PaletteBody({
     );
   } else {
     const ready = canChat(account);
+    const manyPanes = y.panes.panes.length > 1;
     // A project's chats start with its own agent.
     const projectAgent = project ? y.agents.find((a) => a.id === y.agentFor(project.id)) : undefined;
     const actions: (Entry | false | null | undefined)[] = [
@@ -391,6 +399,13 @@ function PaletteBody({
         shortcut: "focusComposer",
         onSelect: () => close(focusComposer),
       },
+      chat && {
+        id: "add-chat-repos",
+        icon: <FolderGit2 />,
+        label: "Add repositories…",
+        detail: chat.projectId ? `to ${projectName(chat.projectId)}` : "to this chat",
+        onSelect: () => close(() => openAddRepos(chat.sessionId, y.panes.focusedId())),
+      },
       chat && { id: "rename", icon: <Pencil />, label: "Rename chat…", onSelect: () => onPage({ kind: "rename", chat }) },
       chat && {
         id: "move-chat",
@@ -407,13 +422,50 @@ function PaletteBody({
           onSelect: () => onPage({ kind: "promote", chat }),
         },
       chat && { id: "delete-chat", icon: <Trash2 />, label: "Delete chat…", onSelect: () => onPage({ kind: "delete", chat }) },
-      project && { id: "add-repos", icon: <FolderGit2 />, label: `Add repos to ${project.name}…`, onSelect: () => close(onAddRepos) },
+      // With a chat open, its own "Add repositories…" (above) adds to its project and tells the chat.
+      project && !chat && { id: "add-repos", icon: <FolderGit2 />, label: `Add repos to ${project.name}…`, onSelect: () => close(onAddRepos) },
       project && {
         id: "status",
         icon: <CircleDot />,
         label: "Set project status…",
         detail: project.status,
         onSelect: () => onPage({ kind: "status", project }),
+      },
+      // Split panes: the keyboard lands in the pane that opens or takes over.
+      {
+        id: "split-right",
+        icon: <Columns2 />,
+        label: "Split right",
+        detail: "a new pane beside this one",
+        shortcut: "splitRight",
+        onSelect: () => close(() => focusPaneDom(y.panes.split("row"))),
+      },
+      {
+        id: "split-down",
+        icon: <Rows2 />,
+        label: "Split down",
+        detail: "a new pane below this one",
+        shortcut: "splitDown",
+        onSelect: () => close(() => focusPaneDom(y.panes.split("column"))),
+      },
+      manyPanes && {
+        id: "close-pane",
+        icon: <X />,
+        label: "Close pane",
+        shortcut: "closePane",
+        onSelect: () =>
+          close(() => {
+            y.panes.close();
+            focusPaneDom(y.panes.focusedId());
+          }),
+      },
+      manyPanes && { id: "next-pane", icon: <ArrowRightLeft />, label: "Focus next pane", onSelect: () => close(() => focusPaneDom(y.panes.next())) },
+      {
+        id: "toggle-sidebar",
+        icon: <PanelLeft />,
+        label: y.panes.sidebar.collapsed ? "Show sidebar" : "Hide sidebar",
+        shortcut: "toggleSidebar",
+        onSelect: () => run(() => y.panes.toggleSidebar()),
       },
       { id: "new-project", icon: <Plus />, label: "New project…", shortcut: "newProject", onSelect: () => close(onNewProject) },
       {
