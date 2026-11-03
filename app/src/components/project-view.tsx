@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, FolderGit2, Loader2, MessageSquarePlus, Trash2, X } from "lucide-react";
+import { ChevronDown, FolderGit2, Loader2, MessageSquarePlus, ShieldCheck, Trash2, X } from "lucide-react";
 import { AgentMenu, AgentSelect } from "@/components/agent-choice";
 import { ChatMenu } from "@/components/menus";
 import { RepoPicker } from "@/components/repo-picker";
@@ -296,6 +296,38 @@ export function ProjectView({
             exclude={project.dirs}
             onAdd={async (dirs) => onChange(await api.addProjectDirs(project.id, dirs))}
           />
+        </section>
+
+        <section className="flex flex-col gap-2" aria-labelledby="project-trusted">
+          <h2 id="project-trusted" className="text-sm font-medium">
+            Trusted MCP servers
+          </h2>
+          {(project.trustedMcpServers ?? []).length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              None. On a permission request for an MCP tool, “Always allow tools from … in this project” adds its server here.
+            </p>
+          ) : (
+            (project.trustedMcpServers ?? []).map((s) => (
+              <div key={s} className="flex items-center gap-2 rounded-md border px-3 py-1.5">
+                <ShieldCheck className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                <span className="min-w-0 flex-1 truncate font-mono text-xs" title={s}>
+                  {s}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  title="Stop trusting"
+                  aria-label={`Stop trusting ${s}`}
+                  onClick={() => run(async () => onChange(await api.untrustProjectMcpServer(project.id, s)))}
+                >
+                  <X />
+                </Button>
+              </div>
+            ))
+          )}
+          <p className="text-xs text-muted-foreground">
+            The project&apos;s chats run every tool of these servers without asking, including ones that change things. Other tools still ask.
+          </p>
         </section>
 
         <section className="flex flex-col gap-2">

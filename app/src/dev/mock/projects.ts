@@ -102,6 +102,12 @@ export function projectReplies(m: Mock): Replies {
     set_project_status: ({ id, status }: { id: string; status: ProjectStatus }) => update(id, (p) => (p.status = status)),
     add_project_dirs: ({ id, dirs }: { id: string; dirs: string[] }) => update(id, (p) => (p.dirs = [...new Set([...p.dirs, ...dirs])])),
     remove_project_dir: ({ id, dir }: { id: string; dir: string }) => update(id, (p) => (p.dirs = p.dirs.filter((d) => d !== dir))),
+    // session.rs `set_project_trust`: the project's chats follow at once, and the UI hears the project changed.
+    untrust_project_mcp_server: async ({ id, server }: { id: string; server: string }) => {
+      const p = update(id, (p) => (p.trustedMcpServers = (p.trustedMcpServers ?? []).filter((s) => s !== server)));
+      await m.emit("projects-changed", { projectId: id });
+      return p;
+    },
     delete_project: ({ id }: { id: string }) => {
       state.projects = state.projects.filter((p) => p.id !== id);
       return null;

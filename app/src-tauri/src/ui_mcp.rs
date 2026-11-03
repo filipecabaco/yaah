@@ -1127,6 +1127,8 @@ mod tests {
                 handoff_from: None,
                 extra_dirs: vec![],
                 dirs_changed: false,
+                remembered: std::collections::BTreeMap::default(),
+                trusted_mcp_servers: vec![],
             };
             std::fs::write(dir.join(format!("sessions/{id}.json")), json!({ "info": info, "entries": [] }).to_string()).unwrap();
         }

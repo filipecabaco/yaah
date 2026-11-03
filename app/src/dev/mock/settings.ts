@@ -56,6 +56,10 @@ export function seedSettings() {
     cardRules: {} as Record<string, CardMode>,
     workspaceRoots: [ws],
     teachAgents: true,
+    /** Settings → Chat: allow reads in the chat's folders without asking (session/permissions.rs). */
+    trustReadOnly: true,
+    /** Settings → Chat: draw runs of tool calls as one row. */
+    groupToolCalls: true,
     /** The split panes and sidebar as last left (settings.json `layout`, `sidebar`). */
     layout: null as Layout | null,
     sidebar: { collapsed: false, width: SIDEBAR.default } as SidebarState,
@@ -98,6 +102,8 @@ export function settingsReplies({ state }: Mock): Replies {
       version: "0.1.0",
       dataDirs,
       teachAgents: state.teachAgents,
+      trustReadOnly: state.trustReadOnly,
+      groupToolCalls: state.groupToolCalls,
       terminalApp: state.terminalApp,
       terminalApps: TERMINAL_APPS,
     }),
@@ -143,6 +149,14 @@ export function settingsReplies({ state }: Mock): Replies {
     },
     set_teach_agents: ({ enabled }: { enabled: boolean }) => {
       state.teachAgents = enabled;
+      return null;
+    },
+    set_trust_read_only: ({ enabled }: { enabled: boolean }) => {
+      state.trustReadOnly = enabled;
+      return null;
+    },
+    set_group_tool_calls: ({ enabled }: { enabled: boolean }) => {
+      state.groupToolCalls = enabled;
       return null;
     },
     set_workspace_roots: ({ roots }: { roots: string[] }): string[] => (state.workspaceRoots = roots),

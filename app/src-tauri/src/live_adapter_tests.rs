@@ -79,6 +79,7 @@ fn run_live_check(check: &crate::agent_conformance::live::LiveCheck) -> Result<b
                 context_dir: repo.to_string_lossy().into(),
                 link: None,
                 agent_id: None,
+                trusted_mcp_servers: vec![],
             };
             let quiet: Emit = Arc::new(|_: &str, _: Value| {});
             let ask = |hub: &Hub, sid: &str, text: &str| {

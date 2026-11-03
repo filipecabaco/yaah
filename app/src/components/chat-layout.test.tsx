@@ -1,8 +1,9 @@
 // The chat's column in wide windows: it scales with its pane, user bubbles hug its right edge
-// (capped at 75ch), agent prose keeps a left-aligned 80ch measure, cards take the full width,
+// (capped at 75ch), agent text sits in a soft left bubble up to 100ch, cards take the full width,
 // and the composer shares the column. Against the real App and the browser mock.
-import { screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { TranscriptEntry } from "@/components/entries";
 import { renderApp, sendInQuickChat } from "@/test/app";
 
 /**
@@ -52,16 +53,63 @@ describe("the chat column", () => {
     expect(message.className).toContain("max-w-[min(75ch,85%)]");
     // The bubble itself isn't capped again (the old 85% of 75ch left it mid-column).
     expect(bubble.className).toContain("max-w-full");
+    // Nothing between the message and the column narrows it, so ml-auto reaches the cards' right edge
+    // (the old layout's left-anchored 75ch wrapper is what put the bubble mid-column).
+    const above = classesUpTo(message.parentElement as Element, log);
+    expect(above.filter((c) => c.startsWith("max-w-") || c.startsWith("w-"))).toEqual([]);
+    expect(above).not.toContain("items-start");
   });
 
-  it("keeps agent prose left-aligned at 80ch, and gives cards the full width", async () => {
+  it("puts the agent's text in a soft bubble on the left, quieter than a card", async () => {
     const { log } = await commandTurn();
-    const prose = within(log)
+    const reply = within(log)
       .getByText(/Discounts now apply before tax/)
       .closest("[data-align]") as HTMLElement;
-    expect(prose).toHaveAttribute("data-align", "start");
-    expect(prose.className).toContain("max-w-[80ch]");
-    expect(prose.classList).not.toContain("ml-auto");
+    expect(reply).toHaveAttribute("data-align", "start");
+    expect(reply.classList).not.toContain("ml-auto");
+    // Fits short text, up to a readable measure; index.css widens it to the full measure for wide blocks.
+    expect(reply.classList).toContain("w-fit");
+    expect(reply.className).toContain("max-w-[min(140ch,100%)]");
+    // A muted fill and the user bubble's corners, from theme tokens; no border, unlike a tool card.
+    expect(reply.classList).toContain("bg-muted/50");
+    expect(reply.classList).toContain("rounded-lg");
+    expect(reply.classList).not.toContain("border");
+    expect(reply.classList).not.toContain("bg-card");
+    expect(reply.classList).toContain("leading-relaxed");
+    // The prose spacing hook in index.css.
+    expect(reply.classList).toContain("agent-reply");
+    const card = within(log).getByText("git diff main...HEAD").closest(".bg-card") as HTMLElement;
+    expect(card.classList).toContain("border");
+  });
+
+  it("gives each run of agent text around tool calls its own bubble", async () => {
+    const app = renderApp();
+    const log = await sendInQuickChat(app.user, "Show me some cities in a scenario");
+    await within(log).findByText(/All five items are rendered/, undefined, { timeout: 15_000 });
+    const runs = log.querySelectorAll(".agent-reply");
+    expect(runs.length).toBeGreaterThan(1);
+    for (const run of runs) {
+      // Each is a transcript entry of its own, not one bubble wrapped around the tool cards.
+      expect(run.querySelector(".bg-card")).toBeNull();
+      expect(run.closest("[role=log] > div")?.querySelectorAll(".agent-reply").length).toBe(1);
+    }
+    // A tool card sits between two bubbles.
+    const entries = [...log.children];
+    const kinds = entries.map((e) => (e.querySelector(".agent-reply") ? "agent" : e.querySelector(".bg-card") ? "card" : "other"));
+    expect(kinds.join(" ")).toMatch(/agent( other)*( card)+( other)* agent/);
+  });
+
+  it("draws no empty bubble for a text run that hasn't streamed anything yet", () => {
+    const entry = (text: string) => ({ type: "agent" as const, text, messageId: null });
+    const props = { index: 0, inTurn: true, live: true, onLogin: () => {} };
+    const { container, rerender } = render(<TranscriptEntry entry={entry("")} {...props} />);
+    expect(container.querySelector(".agent-reply")).toBeNull();
+    rerender(<TranscriptEntry entry={entry("Looking at")} {...props} />);
+    expect(container.querySelector(".agent-reply")?.textContent).toBe("Looking at");
+  });
+
+  it("gives cards the full width", async () => {
+    const { log } = await commandTurn();
     // A tool card and the rendered UI: nothing between them and the column caps their width.
     const cardButton = within(log).getByText("git diff main...HEAD").closest("button") as HTMLElement;
     const ui = within(log).getByRole("tablist").closest("figure") as HTMLElement;

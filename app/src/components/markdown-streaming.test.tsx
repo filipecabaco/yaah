@@ -36,3 +36,19 @@ it("reuses parsed blocks when the same text is drawn again (a chat opened again)
   expect(parses.texts).toEqual([]);
   expect(container.querySelector("em")?.textContent).toBe("emphasised");
 });
+
+it("parses only the last block of a streamed MDX reply, keeping an open element's blocks together", async () => {
+  const { loadMdx } = await import("@/lib/mdx");
+  await loadMdx();
+  const head = '---\ntitle: Realtime\n---\n\nimport { Admonition } from "ui";\n\n<Admonition type="note">\n\nFirst.\n\n</Admonition>\n\n';
+  const { rerender, container } = render(<Markdown>{head + "Then"}</Markdown>);
+  expect(container.querySelector('[data-mdx="admonition"]')).toHaveTextContent("First.");
+  parses.texts.length = 0;
+  rerender(<Markdown>{head + "Then we"}</Markdown>);
+  expect(parses.texts).toEqual(["\nThen we"]);
+  // An element still open takes in the blocks after it, so it is parsed whole as it grows.
+  parses.texts.length = 0;
+  rerender(<Markdown>{head + "Then we\n\n<Tip>\n\nOne\n\nTwo"}</Markdown>);
+  expect(parses.texts).toEqual(["\n<Tip>\n\nOne\n\nTwo\n</Tip>"]);
+  expect(container.querySelector('[data-type="tip"]')).toHaveTextContent("One");
+});

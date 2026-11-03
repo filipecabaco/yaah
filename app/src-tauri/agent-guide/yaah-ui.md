@@ -73,6 +73,8 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 ] }
 ```
 
+**MDX in Markdown.** Chat text and `markdown` draw MDX (an `.mdx` docs page) safely; nothing in it runs. Frontmatter folds away, `import`/`export` lines are hidden, `{expressions}` show as code. `Admonition`, `Callout`, `Note`, `Tip`, `Info`, `Warning`, `Caution`, `Danger` (`type`, `title`) draw as an alert; `Tabs` with `TabPanel`, `Tab` or `TabItem` (`label`, `value`, `id`) as tabs; also `details`/`summary`, `Steps`/`Step`, `Cards`/`Card` and `img`/`Image`. Other components show their content in a box labelled with their name. Props are string or number literals only.
+
 **Command output.** Pass short output as printed to the primitive or component made for it (`tests`, `filetree`, `json`, `textfile`, `wordcount`, `gitgraph`, `gitstatus`, `diffstat`). Don't restate it in prose. Anything long is referenced instead (next section).
 
 ## Reference data, don't paste it

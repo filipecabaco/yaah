@@ -18,8 +18,10 @@ describe("a quick chat", () => {
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
 
     await user.click(within(permission).getByRole("button", { name: "Yes" }));
-    expect(await within(permission).findByText("→ Yes")).toBeInTheDocument();
-    expect(within(permission).queryByRole("button")).toBeNull();
+    // Answered: the request folds into the Write card, as a chip.
+    await waitFor(() => expect(within(log).queryByRole("group", { name: "Permission requested" })).toBeNull());
+    const card = within(log).getAllByText(WRITE)[0].closest("button") as HTMLElement;
+    expect(within(card).getByText("Allowed")).toBeInTheDocument();
 
     // The rest of the recording: the reply, as Markdown, and the turn ends.
     expect(await within(log).findByText(/it contains exactly/)).toBeInTheDocument();

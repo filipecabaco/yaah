@@ -132,6 +132,8 @@ impl Hub {
             handoff_from: None,
             extra_dirs: vec![],
             dirs_changed: false,
+            remembered: std::collections::BTreeMap::new(),
+            trusted_mcp_servers: vec![],
         };
         let token = random_token();
         let mut session = Session::new(info, vec![], self.store.as_ref().map(|d| d.join(file_name(acp_id))));
@@ -314,6 +316,7 @@ mod tests {
             context_dir: format!("/home/me/.yaah/projects/{id}"),
             link: None,
             agent_id: None,
+            trusted_mcp_servers: vec![],
         }
     }
 

@@ -6,6 +6,7 @@ import type { Entry, Project, SessionInfo, SlashCommand } from "@/lib/api";
 import { baseName, home, need, now, type Mock, type Replies } from "./context";
 import { bundledComponents, recordings, type Recording } from "./fixtures";
 import { addProject } from "./projects";
+import { permissionsReply, trustedAnswer, trustedFor } from "./permissions";
 
 /** A new, empty chat (session.rs `new_session`). */
 export function openChat({ state }: Mock, fields: Pick<SessionInfo, "projectId" | "accountId" | "cwd" | "additionalDirs">): SessionInfo {
@@ -143,6 +144,83 @@ const markdownReply: Recording = [
         "```",
         "",
         "It backs off up to five times.",
+      ].join("\n"),
+      messageId: null,
+    },
+  },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
+/** A docs page section written in MDX (Supabase style), streamed: drawn as data, nothing in it runs. */
+const mdxReply: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  {
+    event: "session-entry",
+    index: 1,
+    entry: {
+      type: "agent",
+      text: [
+        "---",
+        "id: realtime-postgres-changes",
+        "title: Postgres Changes",
+        "description: Listen to Postgres changes with Supabase Realtime.",
+        "---",
+        "",
+        'import { Admonition, Tabs, TabPanel } from "ui";',
+        'export const meta = { sidebar: "realtime" };',
+        "",
+        "## Listen to inserts",
+        "",
+        "Subscribe to new rows in the `messages` table of project {props.projectRef}.",
+        "",
+        '<Admonition type="caution" title="Turn on replication first">',
+        "",
+        "Realtime only sees tables in the `supabase_realtime` **publication**. Add yours in the dashboard, or with SQL.",
+        "",
+        "</Admonition>",
+        "",
+        '<Tabs scrollable size="small" type="underlined" defaultActiveId="js" queryGroup="language">',
+        '  <TabPanel id="js" label="JavaScript">',
+        "",
+        "```js",
+        "const channel = supabase",
+        '  .channel("schema-db-changes")',
+        '  .on("postgres_changes", { event: "INSERT", schema: "public" }, (payload) => console.log(payload))',
+        "  .subscribe();",
+        "```",
+        "",
+        "  </TabPanel>",
+        '  <TabPanel id="dart" label="Dart">',
+        "",
+        "```dart",
+        "supabase.channel('schema-db-changes').onPostgresChanges(",
+        "  event: PostgresChangeEvent.insert, schema: 'public', callback: print,",
+        ").subscribe();",
+        "```",
+        "",
+        "  </TabPanel>",
+        "</Tabs>",
+        "",
+        "<Steps>",
+        '<Step title="Enable the publication">Run `alter publication supabase_realtime add table messages;`.</Step>',
+        '<Step title="Subscribe">Open the channel from your client, as above.</Step>',
+        "</Steps>",
+        "",
+        "<details>",
+        "<summary>Why am I not getting `DELETE` events?</summary>",
+        "",
+        "Set the table's replica identity to `full` so old rows are sent too.",
+        "",
+        "</details>",
+        "",
+        '<RealtimeLimits plan="pro">',
+        "",
+        "Up to 500 concurrent connections on Pro.",
+        "",
+        "</RealtimeLimits>",
+        "",
+        "{/* Nothing above runs: this comment stays hidden. */}",
       ].join("\n"),
       messageId: null,
     },
@@ -406,8 +484,10 @@ const routes: [RegExp, Recording][] = [
   [/diff of my project|workspace of yaah|request folders/i, folderRequest],
   [/big diff/i, bigDiff],
   [/assembl|deploys/i, assembling],
+  [/\bmdx\b|docs page/i, mdxReply],
   [/\blinks?\b|markdown/i, markdownReply],
   [/notices|mcp servers?\b/i, notices],
+  [/\btriage\b|auto-allow/i, permissionsReply],
   [/yaah (ui tools|components)|docker|bug report/i, recordings.pack],
   [/side project|weekend/i, recordings.ask],
   [/cities|scenario/i, recordings.scenarios],
@@ -528,14 +608,18 @@ export function chatReplies(m: Mock): Replies {
           : step.entry;
       const isUpdate = entry.type === "ui" && rendered.has(index);
       if (entry.type === "ui") rendered.add(index);
-      // The click supplies the permission choice and the form answer; skip the recorded ones.
-      if (entry.type === "permission" && entry.chosen != null) continue;
+      // The click supplies the permission choice and the form answer; skip the recorded ones
+      // (but not what session/permissions.rs answered itself, which is shown, marked).
+      if (entry.type === "permission" && entry.chosen != null && !entry.auto) continue;
       if (entry.type === "ui" && entry.answer != null && turn.answered.has(index)) continue;
       // In-place UI updates (e.g. a sub-agent panel) wait a while, as the real work did.
       await m.wait(isUpdate ? 6000 : entry.type === "agent" ? 120 : 350);
       if (turn.cancelled) return;
-      await show(sessionId, index, entry.type === "ui" ? shiftTimes(entry, shift) : entry);
-      if (entry.type === "permission" || (entry.type === "ui" && entry.askId && entry.answer == null)) await pause();
+      // A request for a server the user already trusts is answered without asking, as session.rs does.
+      const trusted = entry.type === "permission" ? trustedAnswer(entry, trustedFor(s, state.projects)) : null;
+      await show(sessionId, index, trusted ?? (entry.type === "ui" ? shiftTimes(entry, shift) : entry));
+      if ((entry.type === "permission" && entry.chosen == null && !trusted) || (entry.type === "ui" && entry.askId && entry.answer == null))
+        await pause();
       if (entry.type === "folderRequest" && entry.answer == null) {
         await pause();
         const answered = shown(sessionId, index);
@@ -693,9 +777,37 @@ export function chatReplies(m: Mock): Replies {
       const request = shown(sessionId, index);
       if (request?.type !== "permission") throw new Error("no permission request at that index");
       const option = request.options.find((o) => o.optionId === optionId);
-      await show(sessionId, index, { ...request, chosen: option?.name ?? "cancelled" });
+      await show(sessionId, index, { ...request, chosen: option?.name ?? "cancelled", answer: option?.kind ?? "cancelled" });
       state.turns[sessionId]?.resume?.();
       return null;
+    },
+    // session.rs `trust_server`: in the chat's project, or a quick chat's own; its waiting requests are answered.
+    trust_mcp_server: async ({ sessionId, index }: { sessionId: string; index: number }) => {
+      const s = session(sessionId);
+      const request = shown(sessionId, index);
+      if (request?.type !== "permission") throw new Error("no permission request at that index");
+      const server = request.mcpServer;
+      if (!server) throw new Error("yaah can't tell which MCP server this request is for");
+      const project = s.projectId ? state.projects.find((p) => p.id === s.projectId) : undefined;
+      if (project) {
+        project.trustedMcpServers = [...new Set([...(project.trustedMcpServers ?? []), server.id])];
+        await m.emit("projects-changed", { projectId: project.id });
+      } else {
+        s.trustedMcpServers = [...new Set([...(s.trustedMcpServers ?? []), server.id])];
+        await showInfo(s);
+      }
+      const answered = trustedAnswer(request, trustedFor(s, state.projects));
+      if (answered) {
+        await show(sessionId, index, answered);
+        state.turns[sessionId]?.resume?.();
+      }
+      return null;
+    },
+    untrust_chat_mcp_server: async ({ sessionId, server }: { sessionId: string; server: string }): Promise<SessionInfo> => {
+      const s = session(sessionId);
+      s.trustedMcpServers = (s.trustedMcpServers ?? []).filter((t) => t !== server);
+      await showInfo(s);
+      return s;
     },
     answer_ui: async ({ sessionId, index, values }: { sessionId: string; index: number; values: Record<string, unknown> }) => {
       const ui = shown(sessionId, index);

@@ -272,6 +272,8 @@ export type Project = {
   link?: ProjectLink;
   /** The agent new chats in the project start with; none: the one picked in the sidebar. */
   agentId?: string;
+  /** MCP servers whose tools (all of them) the project's chats run without asking. */
+  trustedMcpServers?: string[];
 };
 
 // Projects from tracker items. Mirrors `src-tauri/src/work_items.rs`.
@@ -348,6 +350,10 @@ export type SessionInfo = {
   extraDirs: string[];
   /** Its folders changed: the next message reopens the agent's session with them first. */
   dirsChanged?: boolean;
+  /** "Don't ask again" answers in this chat, by request title: the option kind chosen. Kept across restarts. */
+  remembered?: Record<string, string>;
+  /** A quick chat's trusted MCP servers (a project chat's are its project's). */
+  trustedMcpServers?: string[];
 };
 
 export type SlashCommand = { name: string; description: string; input?: { hint?: string } | null };
@@ -390,6 +396,10 @@ export type GeneralSettings = {
   version: string;
   /** Teach agents about yaah's UI (Settings → Chat). */
   teachAgents: boolean;
+  /** Allow reads and searches inside a chat's folders without asking (Settings → Chat). */
+  trustReadOnly?: boolean;
+  /** Draw two or more tool calls in a row as one row that opens on a click (Settings → Chat). */
+  groupToolCalls?: boolean;
   /** The app "Open in terminal" uses: "system" or one of `terminalApps` (terminal_apps.rs). */
   terminalApp?: string;
   terminalApps?: { id: string; label: string }[];
@@ -453,6 +463,9 @@ export type PermissionOption = {
   kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" | (string & {});
 };
 
+/** Why yaah answered a permission request itself, and the same in words ("read-only in this chat's folders"). */
+export type PermissionAuto = { reason: "readOnly" | "trustedServer" | "remembered" | (string & {}); why: string };
+
 export type ToolContent =
   | { type: "content"; content: { type: string; text?: string } }
   | { type: "diff"; path: string; oldText: string | null; newText: string }
@@ -487,6 +500,12 @@ export type Entry =
       title: string;
       options: PermissionOption[];
       chosen: string | null;
+      /** The chosen option's kind, or "cancelled"; absent while waiting. */
+      answer?: PermissionOption["kind"] | "cancelled";
+      /** Set when yaah answered without the user clicking (session/permissions.rs). */
+      auto?: PermissionAuto;
+      /** The MCP server the tool belongs to, when yaah can tell: the card offers to trust it. */
+      mcpServer?: { id: string; label: string };
     }
   | {
       type: "ui";
@@ -718,6 +737,7 @@ export const api = {
   setToolCard: (key: string, mode: string | null) => invoke<void>("set_tool_card", { key, mode }),
   agentGuide: () => invoke<AgentGuide>("agent_guide"),
   setTeachAgents: (enabled: boolean) => invoke<void>("set_teach_agents", { enabled }),
+  setGroupToolCalls: (enabled: boolean) => invoke<void>("set_group_tool_calls", { enabled }),
   readCustomTheme: (name: string) =>
     invoke<{ name?: string; displayName?: string; type?: string; colors: Record<string, string> }>("read_custom_theme", { name }),
   revealDataDir: (path: string) => invoke<void>("reveal_data_dir", { path }),
@@ -793,6 +813,12 @@ export const api = {
   cancelTurn: (sessionId: string) => invoke<void>("cancel_turn", { sessionId }),
   respondPermission: (sessionId: string, index: number, optionId: string | null) =>
     invoke<void>("respond_permission", { sessionId, index, optionId }),
+  /** "Always allow tools from <server>": trusts the request's MCP server in the chat's project, or in a quick chat. */
+  trustMcpServer: (sessionId: string, index: number) => invoke<void>("trust_mcp_server", { sessionId, index }),
+  untrustProjectMcpServer: (id: string, server: string) => invoke<Project>("untrust_project_mcp_server", { id, server }),
+  untrustChatMcpServer: (sessionId: string, server: string) => invoke<SessionInfo>("untrust_chat_mcp_server", { sessionId, server }),
+  /** Settings → Chat: allow reads and searches inside a chat's folders without asking. */
+  setTrustReadOnly: (enabled: boolean) => invoke<void>("set_trust_read_only", { enabled }),
 };
 
 function on<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {

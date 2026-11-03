@@ -130,7 +130,7 @@
       }
     },
     "markdown": {
-      "description": "Markdown text (GitHub flavoured).",
+      "description": "Markdown text (GitHub flavoured). MDX renders too, as data (nothing runs): frontmatter folded, imports hidden, `{expressions}` as code, common docs components (Admonition, Tabs, Steps, Cards, details) drawn natively.",
       "uses": [
         "react-markdown",
         "remark-gfm"

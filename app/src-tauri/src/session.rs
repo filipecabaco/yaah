@@ -23,7 +23,7 @@ use crate::projects::Project;
 use crate::ui_mcp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak, mpsc};
@@ -37,6 +37,9 @@ mod folder_request;
 /// ACP `terminal/*`: which chat a request is for, and keeping a released terminal's output.
 mod terminal_chats;
 use terminal_chats::TerminalChats;
+/// Which permission requests yaah answers itself (read-only, trusted MCP servers), and the server a request is for.
+pub mod permissions;
+use permissions::{Auto, McpServer};
 
 /// Sends an event to the UI. The app wires this to `AppHandle::emit`; tests to a channel.
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
@@ -93,6 +96,18 @@ pub enum Entry {
         options: Value,
         /// Name of the chosen option, or "cancelled". `None` while waiting.
         chosen: Option<String>,
+        /// The kind of the chosen option (`allow_once`, `allow_always`, `reject_once`,
+        /// `reject_always`) or `"cancelled"`; `None` while waiting. Chats saved before
+        /// it existed get it from `chosen` when read (`Session::ensure_loaded`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        answer: Option<String>,
+        /// Set when yaah answered without the user clicking, and why (`permissions.rs`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auto: Option<Auto>,
+        /// The MCP server the tool belongs to, when yaah can tell (`permissions::mcp_server`):
+        /// the card offers to trust it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mcp_server: Option<McpServer>,
     },
     /// UI the agent rendered via the UI MCP server. `tree` is a snapshot with
     /// library components expanded, so later library edits don't change it.
@@ -232,6 +247,17 @@ pub struct SessionInfo {
     /// hand-off for an agent that can't load). Cleared once that is done.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dirs_changed: bool,
+    /// Permission requests the user said "don't ask again" to, by request title (a
+    /// tool name or an exact command): the option kind they chose (`allow_always` or
+    /// `reject_always`). For this chat only, kept with it across restarts; a later
+    /// request is answered with that kind's one-off option. The agent may also
+    /// remember it its own way.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub remembered: BTreeMap<String, String>,
+    /// MCP servers the user trusted in this chat (a quick chat: a project chat's
+    /// are its project's), by id: their tools are allowed without asking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trusted_mcp_servers: Vec<String>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref, reason = "serde's skip_serializing_if passes a reference")]
@@ -327,10 +353,6 @@ struct Session {
     importing: Option<resume::Import>,
     /// Where the transcript is saved; `None` keeps it in memory only.
     save_to: Option<PathBuf>,
-    /// Permission requests the user said "don't ask again" to, by request title
-    /// (a tool name or an exact command): the option kind to answer with. For this
-    /// chat only; the agent may also remember it its own way.
-    remembered: HashMap<String, String>,
     /// Permission requests still waiting, by entry index, with the process that
     /// asked (its generation, and where answers go): the answer goes there and nowhere else.
     waiting: HashMap<usize, (u64, Responder)>,
@@ -395,7 +417,6 @@ impl Session {
             replaying: false,
             importing: None,
             save_to,
-            remembered: HashMap::new(),
             waiting: HashMap::new(),
             ui_token: None,
             after_turn: vec![],
@@ -423,8 +444,21 @@ impl Session {
         match read_entries(path) {
             Ok(mut entries) => {
                 for e in &mut entries {
-                    if let Entry::Permission { chosen: chosen @ None, .. } = e {
-                        *chosen = Some("cancelled (app restarted)".into());
+                    if let Entry::Permission { chosen, answer, auto, options, .. } = e {
+                        if chosen.is_none() {
+                            *chosen = Some("cancelled (app restarted)".into());
+                            *answer = Some("cancelled".into());
+                        }
+                        // Saved before `answer` existed: read it from the chosen option's name.
+                        if answer.is_none()
+                            && let Some(c) = chosen.as_deref()
+                        {
+                            let (kind, remembered) = permissions::answer_of(options, c, REMEMBERED);
+                            *answer = kind;
+                            if remembered && auto.is_none() {
+                                *auto = Some(Auto::remembered());
+                            }
+                        }
                     }
                 }
                 self.entries = entries.into_iter().map(Arc::new).collect();
@@ -455,8 +489,9 @@ impl Session {
             .into_iter()
             .filter_map(|i| {
                 let (_, responder) = self.waiting.remove(&i)?;
-                let Some(Entry::Permission { request_id, chosen, .. }) = self.entry_mut(i) else { return None };
+                let Some(Entry::Permission { request_id, chosen, answer, .. }) = self.entry_mut(i) else { return None };
                 *chosen = Some(why.to_owned());
+                *answer = Some("cancelled".into());
                 responder.ok(request_id.clone(), outcome(None));
                 Some(i)
             })
@@ -674,6 +709,25 @@ struct Shared {
     save_delay_us: AtomicU64,
     /// Terminal panes' shells and agents' commands (`terminals.rs`, `acp_terminals.rs`).
     terminals: Arc<crate::terminals::Terminals>,
+    /// What permission requests yaah may answer itself. Taken on its own, briefly,
+    /// never while waiting on another lock.
+    trust: Mutex<Trust>,
+}
+
+/// The user's permission choices that aren't a chat's own: the app sets them
+/// from `settings.json` and `projects.json` (`Hub::set_trust_read_only`,
+/// `Hub::set_project_trust`); a Hub in a test reads no file.
+struct Trust {
+    /// Allow reads and searches inside a chat's folders (Settings → Chat). On unless turned off.
+    read_only: bool,
+    /// Trusted MCP servers by project id.
+    projects: HashMap<String, Vec<String>>,
+}
+
+impl Default for Trust {
+    fn default() -> Self {
+        Self { read_only: true, projects: HashMap::new() }
+    }
 }
 
 fn micros(d: Duration) -> u64 {
@@ -709,7 +763,22 @@ impl Shared {
             io,
             coalesce_us: AtomicU64::new(micros(COALESCE)),
             save_delay_us: AtomicU64::new(micros(SAVE_DELAY)),
+            trust: Mutex::default(),
         }
+    }
+
+    /// Whether yaah answers a request in chat `s` itself, and how: the option
+    /// to pick, its name, and why. Only ever an `allow_once` option.
+    fn auto_answer(&self, s: &Session, req: &permissions::Request, options: &Value) -> Option<(String, String, Auto)> {
+        let (read_only, mut trusted) = {
+            let t = self.trust.lock().unwrap();
+            (t.read_only, s.info.project_id.as_ref().and_then(|p| t.projects.get(p)).cloned().unwrap_or_default())
+        };
+        trusted.extend(s.info.trusted_mcp_servers.iter().cloned());
+        let roots: Vec<PathBuf> = std::iter::once(&s.info.cwd).chain(&s.info.additional_dirs).map(PathBuf::from).collect();
+        let auto = permissions::decide(req, &permissions::Policy { read_only, roots: &roots, trusted: &trusted })?;
+        let (id, name) = permissions::allow_once(options)?;
+        Some((id, name, auto))
     }
 
     /// A chat by its id, or by the ACP session id its current agent knows it by.
@@ -1254,6 +1323,8 @@ impl Hub {
             handoff_from: None,
             extra_dirs,
             dirs_changed: false,
+            remembered: BTreeMap::new(),
+            trusted_mcp_servers: vec![],
         };
         let mut session = Session::new(info.clone(), vec![], self.store.as_ref().map(|d| d.join(file_name(&session_id))));
         session.brief = brief;
@@ -1777,7 +1848,7 @@ impl Hub {
     /// chat (the agent often asks several at once), and later ones, the same way.
     pub fn respond_permission(&self, session_id: &str, index: usize, option_id: Option<&str>) -> Result<(), String> {
         self.shared.with(session_id, |s| {
-            let Some(Entry::Permission { request_id, options, chosen, title, .. }) = s.entry_mut(index) else {
+            let Some(Entry::Permission { request_id, options, chosen, title, answer, .. }) = s.entry_mut(index) else {
                 return Err("no permission request at that index".to_owned());
             };
             if chosen.is_some() {
@@ -1788,6 +1859,7 @@ impl Hub {
                 None => "cancelled".into(),
             });
             let kind = option_id.and_then(|id| option_kind(options, id));
+            *answer = Some(if option_id.is_some() { kind.clone().unwrap_or_default() } else { "cancelled".into() });
             let (request_id, title) = (request_id.clone(), title.clone());
             let sent = s.waiting.remove(&index).is_some_and(|(_, r)| r.ok(request_id, outcome(option_id)));
             self.shared.emit_entry(s, index);
@@ -1796,18 +1868,20 @@ impl Hub {
                 && title != UNNAMED_REQUEST
                 && title != UNNAMED_TOOL
             {
-                s.remembered.insert(title.clone(), kind.to_owned());
-                let same: Vec<(usize, Value, String, String)> = (0..s.entries.len())
+                s.info.remembered.insert(title.clone(), kind.to_owned());
+                let same: Vec<(usize, Value, String, String, &str)> = (0..s.entries.len())
                     .filter_map(|i| match &*s.entries[i] {
                         Entry::Permission { request_id, options, chosen: None, title: t, .. } if *t == title => {
-                            remembered_option(options, kind).map(|(id, name)| (i, request_id.clone(), id, name))
+                            remembered_option(options, kind).map(|(id, name, once)| (i, request_id.clone(), id, name, once))
                         }
                         _ => None,
                     })
                     .collect();
-                for (i, request_id, id, name) in same {
-                    if let Some(Entry::Permission { chosen, .. }) = s.entry_mut(i) {
+                for (i, request_id, id, name, once) in same {
+                    if let Some(Entry::Permission { chosen, answer, auto, .. }) = s.entry_mut(i) {
                         *chosen = Some(format!("{name} {REMEMBERED}"));
+                        *answer = Some(once.to_owned());
+                        *auto = Some(Auto::remembered());
                     }
                     if let Some((_, r)) = s.waiting.remove(&i) {
                         r.ok(request_id, outcome(Some(&id)));
@@ -1818,6 +1892,106 @@ impl Hub {
             self.shared.save(s);
             if sent { Ok(()) } else { Err("agent process is not running".into()) }
         })?
+    }
+
+    /// "Always allow tools from <server>": trust the MCP server the request at
+    /// `index` is for, in the chat's project (`add_to_project` stores it there and
+    /// returns the project) or, in a quick chat, in the chat itself. That covers
+    /// every tool of the server. Its requests waiting now are answered with
+    /// `allow_once` (in every chat of the project, or in this chat), and later
+    /// ones the same way without asking.
+    pub fn trust_server(
+        &self,
+        session_id: &str,
+        index: usize,
+        add_to_project: impl FnOnce(&str, &str) -> Result<Project, String>,
+    ) -> Result<(), String> {
+        let (server, project_id) = self.shared.with(session_id, |s| match s.entries.get(index).map(|e| &**e) {
+            Some(Entry::Permission { mcp_server: Some(m), .. }) => Ok((m.clone(), s.info.project_id.clone())),
+            Some(Entry::Permission { .. }) => Err("yaah can't tell which MCP server this request is for".to_owned()),
+            _ => Err("no permission request at that index".to_owned()),
+        })??;
+        let chats = match &project_id {
+            Some(p) => {
+                let project = add_to_project(p, &server.id)?;
+                self.set_project_trust(&project);
+                self.shared.chats()
+            }
+            None => vec![self.shared.chat(session_id).ok_or("unknown session")?],
+        };
+        for chat in chats {
+            let mut s = chat.lock().unwrap();
+            if s.info.project_id != project_id {
+                continue;
+            }
+            if project_id.is_none() && !s.info.trusted_mcp_servers.contains(&server.id) {
+                s.ensure_loaded();
+                s.info.trusted_mcp_servers.push(server.id.clone());
+                self.shared.emit_info(&mut s);
+                self.shared.save(&mut s);
+            }
+            self.answer_trusted(&mut s, &server);
+        }
+        Ok(())
+    }
+
+    /// Answer the requests waiting in `s` for `server`'s tools, now that it is trusted.
+    fn answer_trusted(&self, s: &mut Session, server: &McpServer) {
+        let mut same: Vec<usize> = s
+            .waiting
+            .keys()
+            .copied()
+            .filter(
+                |&i| matches!(s.entries.get(i).map(|e| &**e), Some(Entry::Permission { mcp_server: Some(m), chosen: None, .. }) if m.id == server.id),
+            )
+            .collect();
+        if same.is_empty() {
+            // Nothing to write (and a chat whose entries weren't read must not be written).
+            return;
+        }
+        same.sort_unstable();
+        for i in same {
+            let Some(Entry::Permission { request_id, options, chosen, answer, auto, .. }) = s.entry_mut(i) else { continue };
+            let Some((option_id, name)) = permissions::allow_once(options) else { continue };
+            *chosen = Some(name);
+            *answer = Some("allow_once".into());
+            *auto = Some(Auto::trusted(server));
+            let request_id = request_id.clone();
+            if let Some((_, r)) = s.waiting.remove(&i) {
+                r.ok(request_id, outcome(Some(&option_id)));
+            }
+            self.shared.emit_entry(s, i);
+        }
+        self.shared.save(s);
+    }
+
+    /// Stop trusting `server` in a quick chat (`trust_server`).
+    pub fn untrust_chat_server(&self, session_id: &str, server: &str) -> Result<SessionInfo, String> {
+        self.shared.with(session_id, |s| {
+            s.info.trusted_mcp_servers.retain(|t| t != server);
+            self.shared.emit_info(s);
+            self.shared.save(s);
+            s.info.clone()
+        })
+    }
+
+    /// The MCP servers trusted in `project` changed (or the app started): its chats follow at once.
+    pub fn set_project_trust(&self, project: &Project) {
+        self.load_project_trust(std::slice::from_ref(project));
+        (self.shared.app)("projects-changed", json!({ "projectId": project.id }));
+    }
+
+    /// Each project's trusted MCP servers, as `projects.json` has them (at startup).
+    pub fn load_project_trust(&self, projects: &[Project]) {
+        let mut t = self.shared.trust.lock().unwrap();
+        for p in projects {
+            t.projects.insert(p.id.clone(), p.trusted_mcp_servers.clone());
+        }
+    }
+
+    /// Settings → Chat, "Allow reads in the chat's folders" (`settings::trust_read_only`).
+    pub fn set_trust_read_only(&self, on: bool) {
+        self.shared.trust.lock().unwrap().read_only = on;
     }
 
     fn start_gate(&self, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -1920,15 +2094,31 @@ fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &
                     .or_else(|| tool_call_id.as_deref().and_then(|t| tool_title(s, t)))
                     .unwrap_or(UNNAMED_REQUEST)
                     .to_owned();
-                // The user already said "don't ask again" to exactly this in this chat: answer it the same way,
-                // and still show it, marked, so nothing happens unseen.
-                let remembered = s.remembered.get(&title).and_then(|kind| remembered_option(&options, kind));
-                let chosen = remembered.map(|(option_id, name)| {
-                    responder.ok(id.clone(), outcome(Some(&option_id)));
-                    format!("{name} {REMEMBERED}")
-                });
+                // The tool call as yaah has it now: a request may name only its id.
+                let known = tool_call_id.as_deref().and_then(|t| s.tool_index.get(t)).map(|&i| s.entries[i].clone());
+                let (kind, locations, raw_input) = match known.as_deref() {
+                    Some(Entry::Tool { kind, locations, raw_input, .. }) => (kind.as_deref(), locations, raw_input),
+                    _ => (tool_call.get("kind").and_then(Value::as_str), &tool_call["locations"], &tool_call["rawInput"]),
+                };
+                let mcp_server = permissions::mcp_server(&params, tool_call, &title, kind, raw_input);
+                // The user already said "don't ask again" to exactly this in this chat: answer it the same way.
+                // Else read-only inside the chat's folders, or a trusted server's tool. Either way it is still
+                // shown, marked, so nothing happens unseen.
+                let remembered = s.info.remembered.get(&title).and_then(|kind| remembered_option(&options, kind));
+                let picked =
+                    remembered.map(|(option_id, name, kind)| (option_id, format!("{name} {REMEMBERED}"), kind, Auto::remembered())).or_else(|| {
+                        let req = permissions::Request { kind, locations, raw_input, server: mcp_server.as_ref() };
+                        shared.auto_answer(s, &req, &options).map(|(option_id, name, auto)| (option_id, name, "allow_once", auto))
+                    });
+                let (chosen, answer, auto) = match picked {
+                    Some((option_id, name, kind, auto)) => {
+                        responder.ok(id.clone(), outcome(Some(&option_id)));
+                        (Some(name), Some(kind.to_owned()), Some(auto))
+                    }
+                    None => (None, None, None),
+                };
                 let waiting = chosen.is_none();
-                let i = shared.push(s, Entry::Permission { request_id: id.clone(), tool_call_id, title, options, chosen });
+                let i = shared.push(s, Entry::Permission { request_id: id.clone(), tool_call_id, title, options, chosen, answer, auto, mcp_server });
                 if waiting {
                     s.waiting.insert(i, (generation, responder.clone()));
                 }
@@ -2371,12 +2561,14 @@ fn option_name(options: &Value, option_id: &str) -> Option<String> {
     option_with(options, option_id)?["name"].as_str().map(str::to_owned)
 }
 
-/// The option that carries out a remembered choice: the same kind, else its one-off form.
-fn remembered_option(options: &Value, kind: &str) -> Option<(String, String)> {
+/// The option that carries out a remembered choice for the user: its one-off
+/// form (`allow_once` for `allow_always`), its id, name and kind. Never an
+/// `always` option: some adapters write those into the user's own settings files,
+/// and the user chose that once, not for every replay. Without one, yaah asks.
+fn remembered_option(options: &Value, kind: &str) -> Option<(String, String, &'static str)> {
     let once = if kind == "allow_always" { "allow_once" } else { "reject_once" };
-    let list = options.as_array()?;
-    let o = list.iter().find(|o| o["kind"] == kind).or_else(|| list.iter().find(|o| o["kind"] == once))?;
-    Some((o["optionId"].as_str()?.to_owned(), o["name"].as_str().unwrap_or(kind).to_owned()))
+    let o = options.as_array()?.iter().find(|o| o["kind"] == once)?;
+    Some((o["optionId"].as_str()?.to_owned(), o["name"].as_str().unwrap_or(once).to_owned(), once))
 }
 
 /// Plain-text rendering of an ACP `ContentBlock`.
@@ -2413,6 +2605,8 @@ fn test_info(id: &str) -> SessionInfo {
         handoff_from: None,
         extra_dirs: vec![],
         dirs_changed: false,
+        remembered: BTreeMap::new(),
+        trusted_mcp_servers: vec![],
     }
 }
 
@@ -2566,6 +2760,7 @@ mod live_tests {
             context_dir: ctx.to_string_lossy().into(),
             link: None,
             agent_id: None,
+            trusted_mcp_servers: vec![],
         };
 
         let mut events = vec![];
@@ -2819,6 +3014,7 @@ mod live_tests {
             context_dir: repo.to_string_lossy().into(),
             link: None,
             agent_id: None,
+            trusted_mcp_servers: vec![],
         };
         let quiet: Emit = Arc::new(|_: &str, _: Value| {});
         let ask = |hub: &Hub, sid: &str, text: &str| {
@@ -3013,7 +3209,16 @@ mod persistence_tests {
                 locations: json!([]),
                 raw_input: Value::Null,
             },
-            Entry::Permission { request_id: json!(3), tool_call_id: Some("t1".into()), title: "Write x".into(), options: json!([]), chosen: None },
+            Entry::Permission {
+                request_id: json!(3),
+                tool_call_id: Some("t1".into()),
+                title: "Write x".into(),
+                options: json!([]),
+                chosen: None,
+                answer: None,
+                auto: None,
+                mcp_server: None,
+            },
         ];
         let hub = Hub::open(Arc::new(|_: &str, _: Value| {}), Some(dir.clone()), Store::user());
         let mut saved = Session::new(test_info("restored-1"), entries, Some(dir.join("restored-1.json")));
@@ -3192,63 +3397,9 @@ mod ask_tests {
     }
 }
 
+/// Answering permission requests: "don't ask again", read-only, trusted MCP servers (`permissions.rs`).
 #[cfg(test)]
-mod permission_tests {
-    use super::*;
-
-    fn fetch_request(id: i64, title: &str) -> Entry {
-        Entry::Permission {
-            request_id: json!(id),
-            tool_call_id: None,
-            title: title.into(),
-            options: json!([
-                { "optionId": "a", "name": "Yes, and don't ask again for Fetch commands", "kind": "allow_always" },
-                { "optionId": "o", "name": "Yes", "kind": "allow_once" },
-                { "optionId": "r", "name": "No", "kind": "reject_once" }
-            ]),
-            chosen: None,
-        }
-    }
-
-    /// "Don't ask again" answers the same request already waiting, leaves others alone,
-    /// and is remembered for this chat.
-    #[test]
-    fn dont_ask_again_answers_the_waiting_ones() {
-        let hub = Hub::new(Arc::new(|_: &str, _: Value| {}));
-        let info = test_info("p");
-        let entries = vec![
-            fetch_request(1, "mcp__fetch__fetch"),
-            fetch_request(2, "mcp__fetch__fetch"),
-            fetch_request(3, "rm -rf build"),
-            fetch_request(4, "mcp__fetch__fetch"),
-            fetch_request(5, UNNAMED_REQUEST),
-            fetch_request(6, UNNAMED_REQUEST),
-        ];
-        hub.shared.insert(Session::new(info, entries, None));
-        // No agent is running, so sending fails after the choice is recorded.
-        assert!(hub.respond_permission("p", 0, Some("a")).is_err());
-        assert!(hub.respond_permission("p", 0, Some("a")).unwrap_err().contains("already answered"));
-        assert!(hub.respond_permission("p", 99, None).is_err());
-        // A request the agent didn't name is too vague to remember.
-        let _ = hub.respond_permission("p", 4, Some("a"));
-        let t = hub.transcript("p").unwrap().entries;
-        assert!(matches!(&t[5], Entry::Permission { chosen: None, .. }), "an unnamed request still asks");
-        assert!(!hub.shared.chat("p").unwrap().lock().unwrap().remembered.contains_key(UNNAMED_REQUEST));
-        let chosen = |i: usize| match &t[i] {
-            Entry::Permission { chosen, .. } => chosen.clone(),
-            _ => None,
-        };
-        assert_eq!(chosen(0).as_deref(), Some("Yes, and don't ask again for Fetch commands"));
-        assert!(chosen(1).unwrap().ends_with("(you said don't ask again)"));
-        assert_eq!(chosen(2), None, "a different request still asks");
-        assert!(chosen(3).unwrap().ends_with("(you said don't ask again)"));
-        assert_eq!(hub.shared.chat("p").unwrap().lock().unwrap().remembered["mcp__fetch__fetch"], "allow_always");
-        assert_eq!(
-            remembered_option(&json!([{ "optionId": "x", "name": "Yes", "kind": "allow_once" }]), "allow_always"),
-            Some(("x".into(), "Yes".into()))
-        );
-    }
-}
+mod permission_tests;
 
 /// Streaming to the UI (`docs/research/streaming-contract.md`): appends, coalescing, ordering, drafts.
 #[cfg(test)]
@@ -3824,7 +3975,16 @@ mod switch_tests {
             Entry::Agent { text: "Looking.".into(), message_id: None },
             tool("cargo build", "failed"),
             Entry::Plan { entries: json!([{ "content": "a plan step" }]) },
-            Entry::Permission { request_id: json!(1), tool_call_id: None, title: "Run rm".into(), options: json!([]), chosen: Some("Allow".into()) },
+            Entry::Permission {
+                request_id: json!(1),
+                tool_call_id: None,
+                title: "Run rm".into(),
+                options: json!([]),
+                chosen: Some("Allow".into()),
+                answer: None,
+                auto: None,
+                mcp_server: None,
+            },
             Entry::Ui {
                 ui_id: None,
                 title: Some("Build errors".into()),
@@ -4008,6 +4168,7 @@ mod dirs_tests {
             context_dir: ctx.to_string_lossy().into_owned(),
             link: None,
             agent_id: None,
+            trusted_mcp_servers: vec![],
         }
     }
 

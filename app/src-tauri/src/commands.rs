@@ -491,3 +491,27 @@ pub fn cancel_turn(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<(), S
 pub fn respond_permission(hub: State<'_, Arc<Hub>>, session_id: String, index: usize, option_id: Option<String>) -> Result<(), String> {
     hub.respond_permission(&session_id, index, option_id.as_deref())
 }
+
+/// "Always allow tools from <server>" on a permission card: in the chat's project, or in a quick chat.
+#[tauri::command]
+pub fn trust_mcp_server(hub: State<'_, Arc<Hub>>, projects: State<'_, Projects>, session_id: String, index: usize) -> Result<(), String> {
+    hub.trust_server(&session_id, index, |project, server| projects.trust_server(project, server))
+}
+
+#[tauri::command]
+pub fn untrust_project_mcp_server(hub: State<'_, Arc<Hub>>, projects: State<'_, Projects>, id: String, server: String) -> Result<Project, String> {
+    projects.untrust_server(&id, &server).inspect(|p| hub.set_project_trust(p))
+}
+
+#[tauri::command]
+pub fn untrust_chat_mcp_server(hub: State<'_, Arc<Hub>>, session_id: String, server: String) -> Result<SessionInfo, String> {
+    hub.untrust_chat_server(&session_id, &server)
+}
+
+/// Settings → Chat, "Allow reads in the chat's folders".
+#[tauri::command]
+pub fn set_trust_read_only(hub: State<'_, Arc<Hub>>, enabled: bool) -> Result<(), String> {
+    crate::settings::set_trust_read_only(enabled)?;
+    hub.set_trust_read_only(enabled);
+    Ok(())
+}

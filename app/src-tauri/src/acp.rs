@@ -53,6 +53,13 @@ pub enum Incoming {
 pub struct Responder(mpsc::UnboundedSender<String>);
 
 impl Responder {
+    /// A responder whose answers land in the returned channel, as the lines the agent would read.
+    #[cfg(test)]
+    pub fn for_test() -> (Self, mpsc::UnboundedReceiver<String>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        (Self(tx), rx)
+    }
+
     /// Returns false if the agent has exited.
     pub fn ok(&self, id: Value, result: Value) -> bool {
         self.send(&message([("id", id), ("result", result)]))
