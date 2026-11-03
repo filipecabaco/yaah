@@ -7,6 +7,8 @@ import Kbd from "../components/Kbd.astro";
 import Feature from "../components/Feature.astro";
 import Example from "../components/Example.astro";
 import Diagram from "../components/Diagram.astro";
+import Command from "../components/Command.astro";
+import { INSTALL, RELEASES, REPO } from "../lib/url";
 import { testReport, dbQuery, ask, bugForm, bugValues, saveMarkerMap, renderMarkerMap } from "../lib/examples";
 
 // The yaah pack: app/src-tauri/components/*.json, grouped by what they show.
@@ -55,6 +57,23 @@ const composerKeys: [string, string[]][] = [
   ["Mention a file", ["@"]],
 ];
 
+// install.sh --help: the options worth showing here.
+const installOptions: [string, string][] = [
+  ["--version v0.1.0", "Install that release instead of the latest."],
+  ["--deb", "Linux: install the .deb with apt (needs sudo) instead of the AppImage."],
+  ["--dry-run", "Print what would happen; download, write and remove nothing."],
+  ["--uninstall", "Remove what the installer put there. Keeps your data in ~/.yaah and ~/.config/yaah."],
+  ["--purge", "With --uninstall: delete that data too."],
+];
+
+// [path, "blob" or "tree", what it is]: links into the repository on GitHub.
+const docs: [string, string, string][] = [
+  ["app/README.md", "blob", "How each part works: agents, sessions, the component model, libraries, sources, integrations, themes, and the checks to run."],
+  ["app/PRODUCT.md", "blob", "Who yaah is for, and the principles behind it."],
+  ["docs/research/", "tree", "Reviews of the component model, security, performance and integrations."],
+  ["docs/experiments/", "tree", "Screenshots and notes from live tests and visual checks."],
+];
+
 const principles: [string, string][] = [
   ["Show, don't tell.", "The agent's answer is interface you can act on."],
   ["You stay in control.", "Tool calls ask first, and data access is read-only."],
@@ -78,17 +97,24 @@ const principles: [string, string][] = [
         reply with real, interactive UI: forms you fill in together, tables, live pull requests, databases, diffs and charts. All of
         it built from a component library that is data, not code.
       </p>
-      <div class="mt-8 flex flex-wrap items-center gap-3">
+      <Command class="mt-8 w-fit max-w-full" command={INSTALL} label="Install" />
+      <p class="mt-3 text-sm leading-6 text-muted-foreground">
+        A proof of concept for macOS (Apple Silicon) and Linux (x86_64, arm64). The installer checks the download's SHA-256
+        before it installs anything. <a href="#get-started" class="text-foreground underline decoration-border underline-offset-4 hover:decoration-current">Other ways to install</a>.
+      </p>
+      <div class="mt-6 flex flex-wrap items-center gap-3">
         <a
-          href="#get-started"
+          href={REPO}
           class="inline-flex h-10 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-          >Build from source</a
+          >View on GitHub</a
+        >
+        <a href={RELEASES} class="inline-flex h-10 items-center rounded-md border bg-background px-4 text-sm font-medium transition-colors hover:bg-accent"
+          >Releases</a
         >
         <a href="#examples" class="inline-flex h-10 items-center rounded-md border bg-background px-4 text-sm font-medium transition-colors hover:bg-accent"
           >See examples</a
         >
       </div>
-      <p class="mt-5 text-sm text-muted-foreground">A proof of concept for macOS and Linux. There is no release yet.</p>
     </div>
     <Shot
       class="mt-14 sm:mt-16"
@@ -250,8 +276,18 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             {agents.slice(0, -1).join(", ")} and {agents.at(-1)}; anything else is a custom command.
           </p>
           <p>
-            Presets that come from npm run the version yaah was tested with. For Claude Code, each Claude config folder is a separate
-            login, so a work and a personal account sit side by side.
+            Presets that come from npm (Claude's adapter, Codex, Gemini CLI, Copilot, Qwen Code, Auggie and Cline) are installed once
+            into <code>~/.yaah/agents</code> and run with <code>node</code>, not through <code>npx</code> on every start: an agent was ready in
+            129 ms instead of 808 in yaah's measurements.
+          </p>
+          <p>
+            <strong>Versions are checked, not just taken.</strong> Once a day yaah looks for a newer version on npm and installs it alongside.
+            It's only used after it passes yaah's conformance suite, run in a throwaway home without your logins or agent config, and
+            <code>npm audit</code> finds no high or critical advisory. Settings → Agents shows each version's state and advisories, with
+            <strong>Verify now</strong> and <strong>Hold at this version</strong>.
+          </p>
+          <p>
+            For Claude Code, each Claude config folder is a separate login, so a work and a personal account sit side by side.
           </p>
           <Shot
             slot="media"
@@ -552,13 +588,75 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
 
   <!-- Get started -->
   <section id="get-started" aria-labelledby="start-title" class="border-t">
-    <div class="mx-auto grid max-w-6xl gap-10 px-5 py-20 sm:px-8 sm:py-28 md:grid-cols-12 md:gap-12">
+    <div class="mx-auto max-w-6xl px-5 pt-20 sm:px-8 sm:pt-28">
+      <h2 id="start-title" class="text-3xl font-semibold tracking-tight sm:text-4xl">Get started</h2>
+      <p class="mt-4 max-w-[62ch] text-[16px] leading-7 text-muted-foreground">
+        One command installs the latest release on an Apple Silicon Mac or on Linux (x86_64 or arm64).
+      </p>
+      <Command class="mt-8 w-fit max-w-full" command={INSTALL} label="Install the latest release" />
+    </div>
+    <div class="mx-auto mt-10 grid max-w-6xl gap-10 px-5 sm:px-8 md:grid-cols-12 md:gap-12">
       <div class="md:col-span-5">
-        <h2 id="start-title" class="text-3xl font-semibold tracking-tight sm:text-4xl">Build from source</h2>
-        <p class="mt-4 text-[16px] leading-7 text-muted-foreground">
-          There is no release or download yet. yaah builds and runs from source on macOS and Linux.
+        <ul class="list-disc space-y-2 pl-5 text-[15px] leading-7 text-muted-foreground marker:text-border [&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:font-mono [&_code]:text-[0.86em] [&_code]:whitespace-nowrap [&_code]:text-foreground">
+          <li>It downloads the build for your system and the release's <code>SHA256SUMS</code>, and stops if the SHA-256 doesn't match.</li>
+          <li><strong class="font-medium text-foreground">macOS:</strong> <code>yaah.app</code> goes in <code>/Applications</code>, or <code>~/Applications</code> when that isn't writable.</li>
+          <li>
+            <strong class="font-medium text-foreground">Linux:</strong> the AppImage goes in <code>~/.local/bin/yaah</code>, with a menu entry and icon. With
+            <code>--deb</code> (Debian, Ubuntu) it installs the <code>.deb</code> through apt instead.
+          </li>
+          <li>It runs nothing it downloads except the installed app. <code>--dry-run</code> shows what it would do.</li>
+        </ul>
+        <p class="mt-6 text-[15px] leading-7 text-muted-foreground">
+          To chat, you need Node with npm (the npm-based agents run with it) and an account with the agent you use, such as a
+          logged-in Claude Code.
         </p>
-        <h3 class="mt-8 font-medium">You need</h3>
+      </div>
+      <div class="min-w-0 space-y-6 md:col-span-7">
+        <div class="overflow-x-auto rounded-lg border" tabindex="0" role="region" aria-label="Installer options">
+          <table class="w-full text-[14px] leading-6">
+            <caption class="border-b bg-muted/60 px-3.5 py-2 text-left font-mono text-[12px] text-muted-foreground">
+              Options go after <span class="text-foreground">sh -s --</span>, e.g. <span class="text-foreground">… | sh -s -- --dry-run</span>
+            </caption>
+            <tbody>
+              {
+                installOptions.map(([flag, what]) => (
+                  <tr class="border-b last:border-b-0">
+                    <th scope="row" class="py-2 pr-4 pl-3.5 text-left align-top font-mono text-[12.5px] font-normal whitespace-nowrap text-foreground">{flag}</th>
+                    <td class="py-2 pr-3.5 text-muted-foreground">{what}</td>
+                  </tr>
+                ))
+              }
+            </tbody>
+          </table>
+        </div>
+        <div class="rounded-lg border px-4 py-3.5 text-[15px] leading-7 text-muted-foreground [&_code]:rounded-sm [&_code]:bg-muted [&_code]:px-1 [&_code]:font-mono [&_code]:text-[0.86em] [&_code]:text-foreground">
+          <p>
+            <strong class="font-medium text-foreground">macOS builds are ad-hoc signed.</strong> They aren't signed with an Apple Developer ID or
+            notarised yet; notarised builds are planned. The installer verifies the checksum, then removes the quarantine attribute so yaah
+            opens without a Gatekeeper prompt.
+          </p>
+          <p class="mt-2">
+            Downloaded the <code>.dmg</code> with a browser instead? macOS will say it can't verify the developer: run
+            <code>xattr -dr com.apple.quarantine /Applications/yaah.app</code>, or allow it in System Settings → Privacy &amp; Security.
+          </p>
+        </div>
+        <p class="text-[15px] leading-7 text-muted-foreground">
+          Or download from <a href={RELEASES} class="text-foreground underline decoration-border underline-offset-4 hover:decoration-current">Releases</a>:
+          the <code class="rounded-sm bg-muted px-1 font-mono text-[0.86em] text-foreground">.dmg</code> for macOS, the AppImage or
+          <code class="rounded-sm bg-muted px-1 font-mono text-[0.86em] text-foreground">.deb</code> for Linux, and
+          <code class="rounded-sm bg-muted px-1 font-mono text-[0.86em] text-foreground">SHA256SUMS</code> to check them.
+        </p>
+      </div>
+    </div>
+
+    <div class="mx-auto mt-16 grid max-w-6xl gap-10 px-5 pb-20 sm:mt-20 sm:px-8 sm:pb-28 md:grid-cols-12 md:gap-12">
+      <div class="border-t pt-10 md:col-span-5">
+        <h3 class="text-xl font-semibold tracking-tight">Build from source</h3>
+        <p class="mt-3 text-[15px] leading-7 text-muted-foreground">
+          To change yaah, or to try its interface in a browser. Clone
+          <a href={REPO} class="text-foreground underline decoration-border underline-offset-4 hover:decoration-current">the repository</a> first.
+        </p>
+        <h4 class="mt-6 font-medium">You need</h4>
         <ul class="mt-3 list-disc space-y-1.5 pl-5 text-[15px] leading-7 text-muted-foreground marker:text-border">
           <li>Rust</li>
           <li>Node, with npm and npx, for the agents that come from npm</li>
@@ -569,17 +667,17 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
           <code class="rounded-sm bg-muted px-1 font-mono text-[0.86em] text-foreground">mise install</code> sets them up.
         </p>
       </div>
-      <div class="min-w-0 space-y-6 md:col-span-7">
+      <div class="min-w-0 space-y-6 md:col-span-7 md:border-t md:pt-10">
         <div class="overflow-hidden rounded-lg border bg-muted/60">
           <div class="border-b px-3.5 py-2 font-mono text-[12px] text-muted-foreground">Run the app</div>
-          <pre class="overflow-x-auto px-3.5 py-3 font-mono text-[13px] leading-[1.7] focus-visible:-outline-offset-2" tabindex="0"><code><span class="text-muted-foreground"># from the repository</span>
-cd app
+          <pre class="overflow-x-auto px-3.5 py-3 font-mono text-[13px] leading-[1.7] focus-visible:-outline-offset-2" tabindex="0"><code>git clone {REPO}.git
+cd yaah/app
 pnpm install
 pnpm tauri dev</code></pre>
         </div>
         <div class="overflow-hidden rounded-lg border bg-muted/60">
           <div class="border-b px-3.5 py-2 font-mono text-[12px] text-muted-foreground">Or only the interface, in a browser</div>
-          <pre class="overflow-x-auto px-3.5 py-3 font-mono text-[13px] leading-[1.7] focus-visible:-outline-offset-2" tabindex="0"><code>cd app
+          <pre class="overflow-x-auto px-3.5 py-3 font-mono text-[13px] leading-[1.7] focus-visible:-outline-offset-2" tabindex="0"><code>cd yaah/app
 pnpm dev
 <span class="text-muted-foreground"># open http://localhost:1420</span></code></pre>
         </div>
@@ -596,36 +694,33 @@ pnpm dev
     <div class="mx-auto grid max-w-6xl gap-12 px-5 py-20 sm:px-8 sm:py-24 md:grid-cols-2">
       <div>
         <h2 id="docs-title" class="text-2xl font-semibold tracking-tight sm:text-3xl">Read further</h2>
-        <p class="mt-3 text-[15px] leading-7 text-muted-foreground">The documentation lives in the repository.</p>
+        <p class="mt-3 text-[15px] leading-7 text-muted-foreground">
+          The documentation lives in <a href={REPO} class="text-foreground underline decoration-border underline-offset-4 hover:decoration-current">the repository</a>.
+        </p>
         <dl class="mt-6 text-[15px] leading-6">
-          <div class="border-t py-3.5">
-            <dt class="font-mono text-[13px]">app/README.md</dt>
-            <dd class="mt-1 text-muted-foreground">How each part works: agents, sessions, the component model, libraries, sources, integrations, themes, and the checks to run.</dd>
-          </div>
-          <div class="border-t py-3.5">
-            <dt class="font-mono text-[13px]">app/PRODUCT.md</dt>
-            <dd class="mt-1 text-muted-foreground">Who yaah is for, and the principles behind it.</dd>
-          </div>
-          <div class="border-t py-3.5">
-            <dt class="font-mono text-[13px]">docs/research/</dt>
-            <dd class="mt-1 text-muted-foreground">Reviews of the component model, security, performance and integrations.</dd>
-          </div>
-          <div class="border-t py-3.5">
-            <dt class="font-mono text-[13px]">docs/experiments/</dt>
-            <dd class="mt-1 text-muted-foreground">Screenshots and notes from live tests and visual checks.</dd>
-          </div>
+          {
+            docs.map(([path, href, detail]) => (
+              <div class="border-t py-3.5">
+                <dt class="font-mono text-[13px]">
+                  <a href={`${REPO}/${href}/main/${path}`} class="underline decoration-border underline-offset-4 transition-colors hover:decoration-current">{path}</a>
+                </dt>
+                <dd class="mt-1 text-muted-foreground">{detail}</dd>
+              </div>
+            ))
+          }
         </dl>
       </div>
       <div>
         <h2 class="text-2xl font-semibold tracking-tight sm:text-3xl">Not there yet</h2>
         <p class="mt-3 text-[15px] leading-7 text-muted-foreground">Planned or still being decided, so not on this page as features.</p>
         <ul class="mt-6 text-[15px] leading-6 text-muted-foreground">
-          <li class="border-t py-3.5"><span class="text-foreground">A packaged release.</span> For now, build from source.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">Notarised macOS builds.</span> Releases are ad-hoc signed; Developer ID signing and notarisation are planned.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">In-app updates.</span> To update, run the install command again.</li>
           <li class="border-t py-3.5"><span class="text-foreground">PDF, video, audio and slides.</span> Planned as primitives; today an agent says it can't show a PDF.</li>
           <li class="border-t py-3.5"><span class="text-foreground">Interactive widgets.</span> A sandboxed node that speaks the MCP Apps protocol is being considered.</li>
           <li class="border-t py-3.5"><span class="text-foreground">A public library index.</span> Libraries install from any git URL; there's no shared catalogue.</li>
           <li class="border-t py-3.5"><span class="text-foreground">More integrations.</span> Sentry and GitHub Actions are the next candidates.</li>
-          <li class="border-t py-3.5"><span class="text-foreground">Windows.</span> yaah is macOS and Linux only.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">Windows and Intel Macs.</span> Releases are for Apple Silicon Macs and Linux on x86_64 and arm64.</li>
         </ul>
       </div>
     </div>

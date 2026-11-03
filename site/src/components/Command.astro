@@ -1,0 +1,70 @@
+---
+// A shell command on one line, wrapped where it has to be, selectable as plain text. The copy
+// button is shown only when the clipboard API is there (it needs a secure context); without
+// script, the command is still there to select.
+interface Props {
+  command: string;
+  label?: string;
+  class?: string;
+}
+const { command, label, class: className = "" } = Astro.props;
+---
+<div class:list={["overflow-hidden rounded-lg border bg-muted/60", className]}>
+  {label && <div class="border-b px-3.5 py-2 font-mono text-[12px] text-muted-foreground">{label}</div>}
+  <div class="flex items-start gap-2">
+    <pre class="min-w-0 flex-1 px-3.5 py-3 font-mono text-[13px] leading-[1.7] whitespace-pre-wrap [overflow-wrap:anywhere]"><code>{command}</code></pre>
+    <button
+      type="button"
+      data-copy={command}
+      hidden
+      class="group mt-2 mr-2 inline-flex size-8 shrink-0 items-center justify-center rounded-md border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      aria-label="Copy the command"
+      title="Copy"
+    >
+      <svg class="size-4 group-data-[copied]:hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect width="14" height="14" x="8" y="8" rx="2" />
+        <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+      </svg>
+      <svg class="hidden size-4 group-data-[copied]:block" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 6 9 17l-5-5" />
+      </svg>
+    </button>
+  </div>
+</div>
+
+<script>
+  // One handler for every copy button on the page (Astro includes this once).
+  const status = document.createElement("p");
+  status.className = "sr-only";
+  status.setAttribute("role", "status");
+  document.body.append(status);
+  if (navigator.clipboard && window.isSecureContext) {
+    for (const button of document.querySelectorAll<HTMLButtonElement>("button[data-copy]")) {
+      button.hidden = false;
+      let timer: number | undefined;
+      button.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(button.dataset.copy ?? "");
+        } catch {
+          // Refused (permissions, an unfocused document): select the command for a manual copy.
+          const code = button.previousElementSibling?.querySelector("code");
+          if (code) {
+            const range = document.createRange();
+            range.selectNodeContents(code);
+            getSelection()?.removeAllRanges();
+            getSelection()?.addRange(range);
+          }
+          status.textContent = "Couldn't copy. The command is selected: press Ctrl+C, or ⌘C on a Mac.";
+          return;
+        }
+        button.dataset.copied = "";
+        status.textContent = "Copied to the clipboard.";
+        clearTimeout(timer);
+        timer = window.setTimeout(() => {
+          delete button.dataset.copied;
+          status.textContent = "";
+        }, 2000);
+      });
+    }
+  }
+</script>

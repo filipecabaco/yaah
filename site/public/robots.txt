@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://filipecabaco.github.io/yaah/sitemap.xml

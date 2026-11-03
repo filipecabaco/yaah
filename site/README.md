@@ -3,9 +3,11 @@
 A one-page site that shows what yaah does, with real screenshots and real tool calls. Static
 [Astro](https://astro.build), Tailwind 4 and Geist, styled with the app's own tokens
 (`app/src/index.css`), radius scale, mark and loader. No client framework; the only scripts are the
-theme switch.
+theme switch and the install command's copy button.
 
-Local only: nothing here deploys or publishes anything.
+Deployed to GitHub Pages at <https://filipecabaco.github.io/yaah/> by `.github/workflows/site.yml`,
+on every push to `main` that touches `site/` (or by hand, with "Run workflow"). Pages has to be set to
+"GitHub Actions" as its source in the repository settings.
 
 ## Run
 
@@ -16,8 +18,12 @@ cd site
 pnpm install
 pnpm dev       # http://localhost:4321, live reload
 pnpm build     # static output in dist/
-pnpm preview   # serve dist/ (stop it with: pnpm astro preview stop)
+pnpm preview   # serve dist/ at http://localhost:4321/yaah/ (stop it with: pnpm astro preview stop)
 ```
+
+The site lives under `/yaah/` (`base` in `astro.config.mjs`), in development too. Links to files in
+`public/` go through `asset()` in `src/lib/url.ts`, which prefixes the base; in-page anchors
+(`#features`) need nothing.
 
 ## Versions
 
@@ -35,9 +41,21 @@ src/components/Mark.astro    the four-tile mark (geometry from app/src/component
 src/components/Shot.astro    a screenshot in its light and dark capture, shown by theme
 src/components/Json.astro    a tool call's JSON, highlighted at build time (src/lib/json.ts)
 src/components/Diagram.astro how ACP and MCP connect yaah and the agent (inline SVG)
+src/components/Command.astro a shell command with a copy button (the install one-liner)
 src/lib/examples.ts          the tool calls shown, taken from app/src/dev/fixtures/
+src/lib/url.ts               base-aware URLs for public/, and the repo, releases and install links
 public/shots/                the screenshots, as WebP
+public/og.svg, og.png        the social image (1200×630); og.png is rendered from og.svg
+public/robots.txt            allows everything, points at the sitemap
+public/sitemap.xml           the one page, by hand (no sitemap integration for one URL)
 ```
+
+## Social image
+
+`public/og.svg` is generated, with the text as Geist outlines so it renders the same anywhere, and
+`public/og.png` is rendered from it with `rsvg-convert`. Both come from
+`docs/experiments/2026-11-03-website/deploy/og.exs`; its header has the steps (it needs `hb-view`,
+`rsvg-convert` and Geist as a TTF).
 
 ## Screenshots
 
@@ -50,5 +68,7 @@ there and convert it to WebP into `public/shots/` with the same name (`<name>-li
 ## Content rules
 
 The page only states what `app/README.md`, `app/PRODUCT.md`, `REVIEW.md` and `docs/` say is built.
-Anything planned is listed under "Not there yet". There is no release, download, licence or hosted
-repository to link to; the page says "build from source" and points to the README.
+Anything planned is listed under "Not there yet". Install instructions follow `install.sh` and the
+Install and Releases sections of `app/README.md`; building from source is the secondary path. The
+repository has no licence file, so the page says nothing about a licence, and it gives no download
+counts or other numbers it can't source.

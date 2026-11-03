@@ -1,0 +1,73 @@
+# Builds the website (site/, Astro) and deploys it to GitHub Pages at
+# https://filipecabaco.github.io/yaah/ (astro.config.mjs sets site and base: /yaah).
+# Pages must be set to "GitHub Actions" as its source in the repository settings.
+#
+# The toolchain comes from site/mise.toml (node, pnpm), through mise-action with
+# mise pinned to the same version as ci.yml and ci/Dockerfile.
+#
+# Actions, each checked with
+#   gh api "repos/<owner>/<repo>/contents/action.yml?ref=<tag>" -q .content | base64 -d | grep -E '^\s*using:'
+# on 2026-11-03, at the major tag and at the latest release; all run on node24:
+#   actions/checkout@v7               (v7.0.1)  node24
+#   jdx/mise-action@v5                (v5.2.6)  node24
+#   actions/configure-pages@v6        (v6.0.0)  node24
+#   actions/upload-pages-artifact@v5  (v5.0.0)  composite; inside it, actions/upload-artifact
+#                                               pinned to bbbca2dd (v7.0.0), node24
+#   actions/deploy-pages@v5           (v5.0.1)  node24
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deployment at a time; a newer push waits for the running one instead of cancelling
+# it half-way through a deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # mise's own version, the same as ci.yml and ci/Dockerfile.
+  MISE_VERSION: "2026.10.21"
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
+        with:
+          version: ${{ env.MISE_VERSION }}
+          working_directory: site
+      - name: Install
+        run: pnpm install --frozen-lockfile
+        working-directory: site
+      - name: Build
+        run: pnpm build
+        working-directory: site
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site/dist
+
+  deploy:
+    name: Deploy
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

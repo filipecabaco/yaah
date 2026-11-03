@@ -1,12 +1,18 @@
 ---
 import "../styles/global.css";
 import Mark from "../components/Mark.astro";
+import { absolute, asset, RELEASES, REPO } from "../lib/url";
 
 interface Props {
   title: string;
   description: string;
 }
 const { title, description } = Astro.props;
+
+// Absolute URLs on the deployed site (astro.config.mjs: site + base).
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const ogImage = absolute("og.png", Astro.site);
+const ogImageAlt = "The yaah mark and name, with the line: Agents answer with interface.";
 
 const nav = [
   { href: "#features", label: "Features" },
@@ -22,12 +28,24 @@ const nav = [
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <!-- No og:url, og:image or canonical: there is no hosted address to point them at yet. -->
+    <link rel="canonical" href={canonical} />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="yaah" />
+    <meta property="og:url" content={canonical} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content={ogImageAlt} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+    <meta name="twitter:image:alt" content={ogImageAlt} />
+    <link rel="icon" type="image/svg+xml" href={asset("favicon.svg")} />
+    <link rel="sitemap" href={asset("sitemap.xml")} />
     <meta name="color-scheme" content="light dark" />
     <!-- Theme before first paint: the saved choice, else the system's. -->
     <script is:inline>
@@ -72,6 +90,16 @@ const nav = [
             class="inline-flex h-8 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 md:hidden"
             >Get started</a
           >
+          <a
+            href={REPO}
+            class="inline-flex size-8 items-center justify-center rounded-md border bg-background text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            aria-label="yaah on GitHub"
+            title="yaah on GitHub"
+          >
+            <svg class="size-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .3a12 12 0 0 0-3.8 23.4c.6.1.8-.3.8-.6v-2c-3.3.7-4-1.6-4-1.6-.6-1.4-1.4-1.8-1.4-1.8-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 0-.8.4-1.3.7-1.6-2.7-.3-5.5-1.3-5.5-6 0-1.2.5-2.3 1.3-3.1-.2-.4-.6-1.6 0-3.2 0 0 1-.3 3.4 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.8.1 3.2.8.8 1.3 1.9 1.3 3.2 0 4.6-2.8 5.6-5.5 5.9.5.4.9 1.1.9 2.2v3.3c0 .3.1.7.8.6A12 12 0 0 0 12 .3" />
+            </svg>
+          </a>
           <button
             type="button"
             id="theme-toggle"
@@ -100,7 +128,11 @@ const nav = [
           <Mark class="size-5 text-foreground" />
           <span><span class="font-medium text-foreground">yaah</span>, yet another agent harness.</span>
         </p>
-        <p>A proof of concept for macOS and Linux. Built from source; no release yet.</p>
+        <p class="flex flex-wrap gap-x-5 gap-y-1">
+          <span>A proof of concept for macOS and Linux.</span>
+          <a href={REPO} class="underline decoration-border underline-offset-4 transition-colors hover:text-foreground hover:decoration-current">GitHub</a>
+          <a href={RELEASES} class="underline decoration-border underline-offset-4 transition-colors hover:text-foreground hover:decoration-current">Releases</a>
+        </p>
       </div>
     </footer>
 

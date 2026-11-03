@@ -1,6 +1,7 @@
 ---
 // A real screenshot of yaah, captured in light and dark (see
 // docs/experiments/2026-11-03-website/). Shows the capture for the current theme.
+import { asset } from "../lib/url";
 interface Props {
   name: string;
   alt: string;
@@ -14,20 +15,21 @@ interface Props {
 }
 const { name, alt, width, height, single = false, eager = false, caption, class: className = "" } = Astro.props;
 const loading = eager ? "eager" : "lazy";
+const src = (suffix: string) => asset(`shots/${name}${suffix}.webp`);
 ---
 <figure class:list={["min-w-0", className]}>
   <div class="overflow-hidden rounded-xl border bg-muted shadow-[0_1px_2px_rgb(0_0_0/0.04),0_8px_24px_-12px_rgb(0_0_0/0.12)] dark:shadow-[0_1px_2px_rgb(0_0_0/0.4),0_8px_24px_-12px_rgb(0_0_0/0.6)]">
     {single ? (
-      <a href={`/shots/${name}.webp`} class="block rounded-xl focus-visible:-outline-offset-2" title="Open the full-size screenshot">
-        <img src={`/shots/${name}.webp`} alt={alt} width={width} height={height} loading={loading} decoding="async" class="block h-auto w-full" />
+      <a href={src("")} class="block rounded-xl focus-visible:-outline-offset-2" title="Open the full-size screenshot">
+        <img src={src("")} alt={alt} width={width} height={height} loading={loading} decoding="async" class="block h-auto w-full" />
       </a>
     ) : (
       <>
-        <a href={`/shots/${name}-light.webp`} class="shot-light rounded-xl focus-visible:-outline-offset-2" title="Open the full-size screenshot">
-          <img src={`/shots/${name}-light.webp`} alt={alt} width={width} height={height} loading={loading} decoding="async" class="block h-auto w-full" />
+        <a href={src("-light")} class="shot-light rounded-xl focus-visible:-outline-offset-2" title="Open the full-size screenshot">
+          <img src={src("-light")} alt={alt} width={width} height={height} loading={loading} decoding="async" class="block h-auto w-full" />
         </a>
-        <a href={`/shots/${name}-dark.webp`} class="shot-dark rounded-xl focus-visible:-outline-offset-2" title="Open the full-size screenshot">
-          <img src={`/shots/${name}-dark.webp`} alt={alt} width={width} height={height} loading={loading} decoding="async" class="block h-auto w-full" />
+        <a href={src("-dark")} class="shot-dark rounded-xl focus-visible:-outline-offset-2" title="Open the full-size screenshot">
+          <img src={src("-dark")} alt={alt} width={width} height={height} loading={loading} decoding="async" class="block h-auto w-full" />
         </a>
       </>
     )}

@@ -176,20 +176,15 @@ Tier A results (pinned and latest):
 Sources: [CI in Docker](docs/experiments/2026-11-03-ci-docker/), `ci/`, `app/mise.toml`.
 
 - [x] **Local CI:** `mise run ci` (rust, web, conformance), the same commands in an Ubuntu 24.04 container (`mise run ci:docker`). Green; 65 s warm, about 3 min cold.
-- [ ] **Turn on GitHub CI** once the repo exists: move `.github/workflows/ci.yml` into `.github/workflows/`. Its actions are verified on node24: checkout v7, mise-action v5 (mise pinned), rust-cache v2, upload-artifact v7. It includes a nightly conformance run against the latest adapters.
+- [x] **GitHub CI is on**: move `.github/workflows/ci.yml` into `.github/workflows/`. Its actions are verified on node24: checkout v7, mise-action v5 (mise pinned), rust-cache v2, upload-artifact v7. It includes a nightly conformance run against the latest adapters.
 - [ ] **Docker/Postgres tests are skipped** in the container (no daemon or database there). Add service containers in GitHub CI?
 - [ ] **The container is arm64 on this Mac,** while GitHub's `ubuntu-latest` is x86_64; x86_64 has only been checked on GitHub's side in theory.
 - [x] **Installer built and tested locally** ([results](docs/experiments/2026-11-03-installer/)):
   - `install.sh` with checksum verification, macOS arm64 (ad-hoc signed, quarantine removed after verification), Linux AppImage or `--deb`, and `--uninstall`/`--purge`/`--dry-run`;
   - the release workflow draft `.github/workflows/release.yml` (node24 verified);
   - mise tasks `release:build`/`release:checksums`/`release:linux:docker`.
-- [ ] **Cut the first release** (needs your OK at each step):
-  1. create `filipecabaco/yaah` and push `main`;
-  2. move the release draft to `.github/workflows/release.yml`;
-  3. tag `v0.1.0`;
-  4. check the one-liner with `--dry-run`.
+- [x] **First release cut:** [v0.1.0](https://github.com/filipecabaco/yaah/releases/tag/v0.1.0), public repo [filipecabaco/yaah](https://github.com/filipecabaco/yaah); CI and release workflows live, and the one-liner was tested against the real release on macOS and Ubuntu.
 - [ ] **The AppImage on a bare server** needs the usual desktop libraries (X11, GL, fontconfig). The installer explains this; it's fine on a desktop.
-- [ ] **The `ubuntu-24.04-arm` runner** is free for public repos only. Should the repo be public?
 - [ ] **Later:** Apple Developer ID signing and notarisation; in-app updates; Homebrew.
 
 ## 12. Website
@@ -197,8 +192,8 @@ Sources: [CI in Docker](docs/experiments/2026-11-03-ci-docker/), `ci/`, `app/mis
 Source: `site/` (Astro; `pnpm dev`); screenshots in [2026-11-03-website](docs/experiments/2026-11-03-website/).
 
 - [ ] **Review the site:** one page with the opening, 12 features with real screenshots, 4 "you ask, the agent renders" examples with real JSON, how it works, build from source, and not there yet. It matches the app's look.
-- [ ] **Update it once a release exists:** the install one-liner, the GitHub link, adapter version management.
-- [ ] **Hosting** is not decided (static output; GitHub Pages fits once the repo exists).
+- [x] **Updated for the release:** install one-liner, GitHub and Releases links, adapter version management, canonical URL and social image.
+- [x] **Hosted** on GitHub Pages at https://filipecabaco.github.io/yaah/ (`.github/workflows/site.yml`, node24 actions).
 
 ## 13. Housekeeping
 
