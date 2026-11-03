@@ -12,6 +12,7 @@ import { preloadSettings, TAB_CODE } from "@/components/settings/tab-code";
 const {
   general: GeneralSettings,
   agents: AgentsSettings,
+  providers: ProvidersSettings,
   chat: ChatSettings,
   mcp: McpSettings,
   skills: SkillsSettings,
@@ -24,6 +25,11 @@ const {
 const TABS = [
   { id: "general", label: "General", about: "Appearance, workspace folders and where yaah keeps its data." },
   { id: "agents", label: "Agents (ACP)", about: "yaah runs any agent that speaks the Agent Client Protocol (ACP)." },
+  {
+    id: "providers",
+    label: "Model providers",
+    about: "Run Goose, OpenCode or Claude Code on your own Amazon Bedrock or OpenRouter account instead of the agent's own sign-in.",
+  },
   { id: "chat", label: "Chat", about: "How chats show what the agent is doing." },
   { id: "mcp", label: "MCP servers", about: "Tools you give every agent: yaah hands these servers to each chat's agent through ACP." },
   { id: "skills", label: "Skills", about: "Instructions and scripts agents load when a task calls for them. Install from GitHub in a click." },
@@ -42,14 +48,23 @@ const TABS = [
 export type SettingsTab = (typeof TABS)[number]["id"];
 
 /** What the settings dialog opens on: an agent screen, an integration, or a tab. */
-export type SettingsTarget = AgentTarget | { kind: "integrations"; service?: string } | { kind: "settings"; tab?: SettingsTab };
+export type SettingsTarget =
+  AgentTarget | { kind: "integrations"; service?: string } | { kind: "providers"; id?: string } | { kind: "settings"; tab?: SettingsTab };
 
 const tabOf = (t: SettingsTarget | null): SettingsTab =>
-  !t ? "general" : t.kind === "settings" ? (t.tab ?? "general") : t.kind === "integrations" ? "integrations" : "agents";
+  !t
+    ? "general"
+    : t.kind === "settings"
+      ? (t.tab ?? "general")
+      : t.kind === "integrations"
+        ? "integrations"
+        : t.kind === "providers"
+          ? "providers"
+          : "agents";
 
 type AgentProps = Omit<AgentsProps, "target">;
 
-/** Settings: general, agents (ACP), chat, MCP servers, skills, component libraries, integrations and keyboard. */
+/** Settings: general, agents (ACP), model providers, chat, MCP servers, skills, component libraries, integrations and keyboard. */
 export function AgentSetupDialog({ target, onClose, ...agentProps }: AgentProps & { target: SettingsTarget | null; onClose: () => void }) {
   const [tab, setTab] = useState<SettingsTab>(() => tabOf(target));
   const open = !!target;
@@ -85,6 +100,17 @@ export function AgentSetupDialog({ target, onClose, ...agentProps }: AgentProps 
       case "agents":
         // A new target picks its agent afresh.
         return <AgentsSettings key={JSON.stringify(agentTarget)} target={agentTarget} {...agentProps} />;
+      case "providers":
+        return (
+          <Scrolls>
+            {/* A new target highlights its provider afresh. */}
+            <ProvidersSettings
+              key={target?.kind === "providers" ? target.id : "all"}
+              agents={agentProps.agents}
+              initial={target?.kind === "providers" ? target.id : undefined}
+            />
+          </Scrolls>
+        );
       case "chat":
         return (
           <Scrolls>

@@ -3,6 +3,7 @@ pub mod acp;
 pub mod agent_conformance;
 pub mod agent_guide;
 pub mod agent_install;
+pub mod agent_routes;
 pub mod agent_versions;
 pub mod agents;
 mod commands;
@@ -10,11 +11,14 @@ mod data_commands;
 mod files;
 pub mod integrations;
 mod json_file;
+pub mod keychain;
 pub mod layout;
 pub mod login;
 pub mod mcp_servers;
 pub mod path_env;
 pub mod projects;
+pub mod provider_stub;
+pub mod providers;
 mod random;
 pub mod repos;
 pub mod session;
@@ -128,6 +132,14 @@ pub fn run() {
             data_commands::test_mcp_server,
             data_commands::mcp_import_candidates,
             data_commands::import_mcp_servers,
+            data_commands::list_providers,
+            data_commands::save_provider,
+            data_commands::delete_provider,
+            data_commands::test_provider,
+            data_commands::provider_models,
+            data_commands::aws_profiles,
+            data_commands::provider_sso_login,
+            data_commands::set_profile_provider,
             data_commands::list_skills,
             data_commands::skills_lookup,
             data_commands::skills_install,

@@ -46,7 +46,18 @@ import { Kbd } from "@/components/ui/kbd";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { api, canChat, PROJECT_STATUSES, SIDEBAR, type AgentProfile, type Project, type ProjectStatus, type SessionInfo } from "@/lib/api";
+import {
+  agentDetail,
+  api,
+  canChat,
+  needsProviderFix,
+  PROJECT_STATUSES,
+  SIDEBAR,
+  type AgentProfile,
+  type Project,
+  type ProjectStatus,
+  type SessionInfo,
+} from "@/lib/api";
 import { baseName } from "@/lib/format";
 import type { Selection } from "@/hooks/use-yaah";
 import { useTrafficLights } from "@/hooks/use-titlebar";
@@ -146,9 +157,7 @@ export const Sidebar = memo(function Sidebar(props: Props) {
                   {agents.map((a) => (
                     <SelectItem key={a.id} value={a.id}>
                       <span>{a.label}</span>
-                      <span className="text-xs text-muted-foreground">
-                        {a.loggedIn === false ? "not logged in" : (a.email ?? (a.label === a.presetLabel ? "" : a.presetLabel))}
-                      </span>
+                      <span className="text-xs text-muted-foreground">{agentDetail(a)}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -161,7 +170,15 @@ export const Sidebar = memo(function Sidebar(props: Props) {
             </div>
             {account && account.loggedIn === false && (
               <Button variant="secondary" size="sm" onClick={() => props.onLogin(account)}>
-                <LogIn /> Log in “{account.label}”
+                {needsProviderFix(account) ? (
+                  <>
+                    <Settings2 /> Fix in Settings → Model providers
+                  </>
+                ) : (
+                  <>
+                    <LogIn /> Log in “{account.label}”
+                  </>
+                )}
               </Button>
             )}
           </div>
@@ -518,7 +535,7 @@ function NewMenu({
               {agents.map((a) => (
                 <ContextMenuItem key={a.id} onSelect={() => onNewQuickChatWith(a.id)}>
                   {a.label}
-                  {a.loggedIn === false && <span className="text-xs text-muted-foreground">not logged in</span>}
+                  {a.loggedIn === false && <span className="text-xs text-muted-foreground">{agentDetail(a)}</span>}
                 </ContextMenuItem>
               ))}
             </ContextMenuSubContent>

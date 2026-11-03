@@ -624,6 +624,8 @@ struct Shared {
     aliases: Mutex<HashMap<String, String>>,
     /// Profiles whose agent answered "authentication required" since their last login.
     needs_login: Mutex<HashSet<String>>,
+    /// What each profile's running agent last said it is signed in with (`_auth/status_update`).
+    auth_status: Mutex<HashMap<String, agents::AuthStatus>>,
     profiles: &'static Store,
     /// Sends a chat's coalesced appends once its interval is up.
     flusher: Timer,
@@ -661,6 +663,7 @@ impl Shared {
             sessions: Mutex::new(sessions.into_iter().map(|(id, s)| (id, cell(s))).collect()),
             aliases: Mutex::new(aliases),
             needs_login: Mutex::default(),
+            auth_status: Mutex::default(),
             profiles,
             flusher,
             saver,
@@ -814,6 +817,19 @@ impl Shared {
     fn not_logged_in(&self, account_id: &str) -> String {
         let label = self.profiles.find(account_id).map_or_else(|| account_id.to_owned(), |a| a.label);
         format!("Agent \"{label}\" is not logged in.")
+    }
+
+    /// claude-agent-acp's `_auth/status_update`: what the agent is signed in
+    /// with. External (Bedrock…), gateway or API-key auth means it can chat
+    /// without a claude.ai login; `-32000` stays the backstop.
+    fn auth_status_update(&self, account_id: &str, params: &Value) {
+        let Some(status) = agents::AuthStatus::from_update(params) else { return };
+        let ready = status.ready();
+        let changed = self.auth_status.lock().unwrap().insert(account_id.to_owned(), status.clone()).as_ref() != Some(&status);
+        let cleared = ready && self.needs_login.lock().unwrap().remove(account_id);
+        if changed || cleared {
+            (self.app)("accounts-changed", Value::Null);
+        }
     }
 
     fn mark_needs_login(&self, account_id: &str) {
@@ -1368,6 +1384,17 @@ impl Hub {
         self.shared.needs_login.lock().unwrap().contains(account_id)
     }
 
+    /// What the profile's agent last reported it is signed in with.
+    pub fn auth_status(&self, account_id: &str) -> Option<agents::AuthStatus> {
+        self.shared.auth_status.lock().unwrap().get(account_id).cloned()
+    }
+
+    /// The profile as the UI is shown it, with its login state.
+    pub fn info(&self, profile: Profile) -> agents::ProfileInfo {
+        let (needs_login, reported) = (self.needs_login(&profile.id), self.auth_status(&profile.id));
+        agents::info(profile, needs_login, reported.as_ref())
+    }
+
     /// A login finished: stop asking for one.
     pub fn logged_in(&self, account_id: &str) {
         if self.shared.needs_login.lock().unwrap().remove(account_id) {
@@ -1388,6 +1415,8 @@ impl Hub {
         let gate = self.start_gate(account_id);
         let _starting = gate.lock().await;
         self.agents.lock().unwrap().remove(account_id);
+        // The next agent reports its own sign-in.
+        self.shared.auth_status.lock().unwrap().remove(account_id);
     }
 
     /// File a chat under a project, or under none. Its agent session keeps its
@@ -1743,9 +1772,17 @@ impl Hub {
         let extra_env = if account.is_claude() { vec![("MCP_TOOL_TIMEOUT", ui_mcp::ASK_TIMEOUT.as_millis().to_string())] } else { vec![] };
         let generation = self.generations.fetch_add(1, Ordering::Relaxed);
         let (shared, exit_shared) = (self.shared.clone(), self.shared.clone());
-        let conn = agents::spawn(
+        let account_id = account.id.clone();
+        // A binary agent yaah installs (goose, OpenCode) is downloaded first; a provider binding becomes its route.
+        agents::prepare(account).await?;
+        let (conn, route) = agents::spawn_routed(
             account,
-            move |msg, responder| handle_incoming(&shared, generation, msg, responder),
+            move |msg, responder| match msg {
+                Incoming::Notification { method, params } if agents::AuthStatus::is_update(&method) => {
+                    shared.auth_status_update(&account_id, &params);
+                }
+                msg => handle_incoming(&shared, generation, msg, responder),
+            },
             move |_| on_exit(&exit_shared, generation),
             &extra_env,
         )?;
@@ -1757,6 +1794,8 @@ impl Hub {
         if !caps.compatible {
             return Err(format!("agent negotiated unsupported ACP protocol version {:?}", caps.protocol_version));
         }
+        // Claude on OpenRouter through ACP `providers/set`, before any `session/new`.
+        crate::agent_routes::providers_set(&conn, &init, route.as_ref()).await?;
 
         let agent = Agent {
             conn,
@@ -3036,6 +3075,34 @@ mod stream_tests {
 
     fn update(hub: &Hub, update: &Value) {
         hub.shared.with("s", |s| apply_update(&hub.shared, s, update)).unwrap();
+    }
+
+    /// `_auth/status_update` from claude-agent-acp: external, gateway and API-key auth count as signed in.
+    #[test]
+    fn auth_status_updates_mark_the_profile_ready() {
+        let (hub, events) = hub(COALESCE);
+        let changes = || events.lock().unwrap().iter().filter(|(_, n, _)| n == "accounts-changed").count();
+        hub.shared.mark_needs_login("bedrock");
+        let before = changes();
+        hub.shared.auth_status_update("bedrock", &json!({ "authStatus": { "kind": "external", "label": "AWS Bedrock" } }));
+        assert!(!hub.needs_login("bedrock"), "a ready kind clears the login request");
+        assert_eq!(hub.auth_status("bedrock").map(|s| s.kind).as_deref(), Some("external"));
+        assert_eq!(changes(), before + 1);
+        // The same again changes nothing; a different one is told.
+        hub.shared.auth_status_update("bedrock", &json!({ "authStatus": { "kind": "external", "label": "AWS Bedrock" } }));
+        assert_eq!(changes(), before + 1);
+        hub.shared.auth_status_update("bedrock", &json!({ "authStatus": { "kind": "none", "label": "Not logged in" } }));
+        assert_eq!(changes(), before + 2);
+        assert!(!hub.auth_status("bedrock").unwrap().ready());
+        // `none` doesn't itself ask for a login: the agent's -32000 does.
+        assert!(!hub.needs_login("bedrock"));
+        hub.shared.auth_status_update("bedrock", &json!({ "nothing": true }));
+        assert_eq!(hub.auth_status("bedrock").map(|s| s.kind).as_deref(), Some("none"), "malformed updates are ignored");
+        for kind in ["gateway", "api_key"] {
+            hub.shared.mark_needs_login(kind);
+            hub.shared.auth_status_update(kind, &json!({ "authStatus": { "kind": kind } }));
+            assert!(!hub.needs_login(kind) && hub.auth_status(kind).unwrap().ready(), "{kind}");
+        }
     }
 
     fn chunk(hub: &Hub, text: &str, thought: bool) {

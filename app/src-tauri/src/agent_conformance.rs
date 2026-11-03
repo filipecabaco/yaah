@@ -41,6 +41,7 @@ use crate::agent_install;
 use crate::agent_versions::{Advisory, Outcome, Status, Verifier, Versions};
 use crate::agents::{self, Preset, Report};
 use crate::json_file::JsonFile;
+use crate::provider_stub::Plan;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -97,6 +98,10 @@ pub struct Expect {
     pub embedded_context: bool,
     /// Its login is a `terminal` auth method (`login.rs` reruns the agent with its args).
     pub terminal_login: bool,
+    /// Signed out (no provider), `session/new` fails with this JSON-RPC error instead of
+    /// auth-required: a known deviation yaah works around (goose needs a provider
+    /// binding, `agent_routes`). Another code, or auth-required, still fails the check.
+    pub signed_out_error: Option<i64>,
 }
 
 /// One row per npm-based preset. Presets not listed only need the generic checks.
@@ -109,6 +114,7 @@ pub const EXPECTATIONS: &[Expect] = &[
         additional_dirs: true,
         embedded_context: true,
         terminal_login: true,
+        signed_out_error: None,
     },
     Expect {
         preset: "codex",
@@ -118,6 +124,7 @@ pub const EXPECTATIONS: &[Expect] = &[
         additional_dirs: true,
         embedded_context: true,
         terminal_login: false,
+        signed_out_error: None,
     },
     Expect {
         preset: "gemini",
@@ -127,6 +134,7 @@ pub const EXPECTATIONS: &[Expect] = &[
         additional_dirs: false,
         embedded_context: true,
         terminal_login: false,
+        signed_out_error: None,
     },
     Expect {
         preset: "copilot",
@@ -136,6 +144,7 @@ pub const EXPECTATIONS: &[Expect] = &[
         additional_dirs: false,
         embedded_context: true,
         terminal_login: false,
+        signed_out_error: None,
     },
     Expect {
         preset: "qwen",
@@ -145,6 +154,7 @@ pub const EXPECTATIONS: &[Expect] = &[
         additional_dirs: false,
         embedded_context: true,
         terminal_login: false,
+        signed_out_error: None,
     },
     Expect {
         preset: "auggie",
@@ -154,6 +164,7 @@ pub const EXPECTATIONS: &[Expect] = &[
         additional_dirs: false,
         embedded_context: false,
         terminal_login: false,
+        signed_out_error: None,
     },
     Expect {
         preset: "cline",
@@ -163,6 +174,29 @@ pub const EXPECTATIONS: &[Expect] = &[
         additional_dirs: false,
         embedded_context: false,
         terminal_login: false,
+        signed_out_error: None,
+    },
+    // Release archives from the ACP registry (agent_install::BINARIES), as goose 1.57.0 and OpenCode 2.2.5 answer.
+    Expect {
+        preset: "goose",
+        load_session: true,
+        mcp_http: true,
+        system_prompt: false,
+        additional_dirs: false,
+        embedded_context: true,
+        terminal_login: false,
+        // goose 1.57.0 without a provider: -32603 "Internal error", not -32000.
+        signed_out_error: Some(-32603),
+    },
+    Expect {
+        preset: "opencode",
+        load_session: true,
+        mcp_http: true,
+        system_prompt: false,
+        additional_dirs: true,
+        embedded_context: true,
+        terminal_login: true,
+        signed_out_error: None,
     },
 ];
 
@@ -569,7 +603,9 @@ pub async fn run_checks(preset: &Preset, program: &str, args: &[String]) -> Vec<
     checks.push(unknown_method_check(&conn).await);
     if report.compatible && conn.is_alive() {
         let updates = seen.clone();
-        checks.push(session_check(&conn, &session_params(&sandbox.cwd(), preset.id, &report), move || updates.lock().unwrap().updates.clone()).await);
+        checks.push(
+            session_check(&conn, &session_params(&sandbox.cwd(), preset.id, &report), &expect, move || updates.lock().unwrap().updates.clone()).await,
+        );
     }
     checks.push(shutdown_check(&conn).await);
     let requests = std::mem::take(&mut seen.lock().unwrap().requests);
@@ -592,7 +628,7 @@ async fn unknown_method_check(conn: &Connection) -> Check {
 
 /// Signed out, `session/new` works or asks for a login in the shape yaah's login
 /// flow knows (`acp::AUTH_REQUIRED`). `updates` lists the `session/update` kinds seen so far.
-async fn session_check(conn: &Connection, params: &Value, updates: impl FnOnce() -> BTreeSet<String>) -> Check {
+async fn session_check(conn: &Connection, params: &Value, expect: &Expect, updates: impl FnOnce() -> BTreeSet<String>) -> Check {
     const NAME: &str = "session/new signed out";
     match tokio::time::timeout(SESSION_TIMEOUT, conn.request("session/new", params.clone())).await {
         Err(_) => Check::fail(NAME, format!("no answer within {SESSION_TIMEOUT:?}")),
@@ -605,6 +641,10 @@ async fn session_check(conn: &Connection, params: &Value, updates: impl FnOnce()
             None => Check::fail(NAME, format!("answered without a sessionId: {r}")),
         },
         Ok(Err(e)) if e.code == acp::AUTH_REQUIRED => Check::pass(NAME, format!("asks for a login: {e}")),
+        Ok(Err(e)) if expect.signed_out_error == Some(e.code) => Check::pass(
+            NAME,
+            format!("fails as known for {} without a provider (no login to offer; a provider binding makes it ready): {e}", expect.preset),
+        ),
         Ok(Err(e)) => Check::fail(NAME, format!("expected a session or auth-required ({}), got {e}", acp::AUTH_REQUIRED)),
     }
 }
@@ -630,6 +670,266 @@ async fn shutdown_check(conn: &Connection) -> Check {
         }
         (Err(e), _) => Check::fail("shutdown", e),
     }
+}
+
+// ── Provider mode ───────────────────────────────────────────────────────────
+
+/// One prompt on the stub: a tool call, its result, a reply.
+pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(180);
+/// What provider mode asks; the stub decides what actually happens.
+pub const PROVIDER_PROMPT: &str = "Look at the files in this folder with one of your tools, then reply with one word: done.";
+
+/// The read-only tool each agent is asked to call on the stub, when it offers it
+/// (else the stub picks a read-only-looking one and builds its arguments).
+fn tool_plan(cwd: &Path) -> Vec<Plan> {
+    let cwd = cwd.to_string_lossy();
+    vec![
+        // Claude Code (it offers Read, not Glob, to a session without a login)
+        Plan::new("Read", json!({ "file_path": format!("{cwd}/README.md") })),
+        // OpenCode
+        Plan::new("glob", json!({ "pattern": "*" })),
+        Plan::new("read", json!({ "filePath": format!("{cwd}/README.md") })),
+        // goose's developer extension
+        Plan::new("developer__tree", json!({ "path": cwd })),
+        Plan::new("tree", json!({ "path": cwd })),
+        Plan::new("developer__shell", json!({ "command": "ls" })),
+        Plan::new("shell", json!({ "command": "ls" })),
+    ]
+}
+
+/// Every running process from `pid` down, with its command line.
+fn argv_tree(pid: u32) -> Vec<(u32, String)> {
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+    let mut sys = System::new();
+    sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
+    let mut ids = vec![pid];
+    ids.extend(descendants(pid).into_iter().map(|(p, _)| p));
+    ids.into_iter()
+        .filter_map(|p| sys.process(Pid::from_u32(p)).map(|proc_| (p, proc_.cmd().iter().map(|a| a.to_string_lossy()).collect::<Vec<_>>().join(" "))))
+        .collect()
+}
+
+/// What the agent sent while a provider-mode prompt ran.
+#[derive(Default)]
+struct Turn {
+    updates: BTreeSet<String>,
+    tool_titles: Vec<String>,
+    text: String,
+    permissions: usize,
+}
+
+/// Provider mode: `program args…` (an installed version of `preset`) started
+/// on its translated OpenRouter route (`agent_routes::route_with`) pointed at a
+/// local stub ([`crate::provider_stub`]), in a [`Sandbox`]. Checks that:
+///
+/// - `session/new` works without asking for a login (no `-32000`);
+/// - one prompt streams, with a tool call, and ends;
+/// - the bound model id, and the route's key, reached the stub;
+/// - no secret is in the argv of the agent or anything it started.
+///
+/// Presets without a route get one failed `route` check.
+pub async fn run_provider_checks(preset: &Preset, program: &str, args: &[String]) -> Vec<Check> {
+    run_provider_checks_via(preset, program, args, crate::agent_routes::ClaudeOpenRouter::Env).await
+}
+
+/// [`run_provider_checks`], with Claude Code reaching the stub the way `via` says (env, or ACP `providers/set`).
+pub async fn run_provider_checks_via(preset: &Preset, program: &str, args: &[String], via: crate::agent_routes::ClaudeOpenRouter) -> Vec<Check> {
+    use crate::agent_routes::{Endpoints, Options, route_with};
+    use crate::provider_stub::{STUB_KEY, STUB_MODEL, Stub};
+    use crate::providers::{Binding, Kind, ResolvedProvider};
+    let sandbox = match Sandbox::new() {
+        Ok(s) => s,
+        Err(e) => return vec![Check::fail("sandbox", e)],
+    };
+    let _ = std::fs::write(sandbox.cwd().join("README.md"), "yaah conformance\n");
+    let stub = match Stub::start(tool_plan(&sandbox.cwd()), &sandbox.cwd().to_string_lossy()) {
+        Ok(s) => s,
+        Err(e) => return vec![Check::fail("stub", e)],
+    };
+    let provider = ResolvedProvider {
+        id: "stub".into(),
+        kind: Kind::Openrouter,
+        label: "conformance stub".into(),
+        bedrock: None,
+        secret: Some(crate::keychain::SecretString::new(STUB_KEY)),
+    };
+    let binding = Binding { provider_id: "stub".into(), model: STUB_MODEL.into(), small_model: None };
+    let opts = Options { endpoints: Endpoints { openrouter: stub.openrouter_base() }, claude_openrouter: via };
+    let route = match route_with(preset.id, &provider, &binding, &sandbox.root.join("profile"), &opts) {
+        Ok(r) => r,
+        Err(e) => return vec![Check::fail("route", e.0)],
+    };
+    if let Err(e) = route.write_files() {
+        return vec![Check::fail("route", e)];
+    }
+    let mut cmd = sandbox.command(program, args, Some(preset));
+    for k in &route.env_remove {
+        cmd.env_remove(k);
+    }
+    cmd.envs(&route.env);
+    let command_line: Vec<String> = std::iter::once(program.to_owned()).chain(args.iter().cloned()).collect();
+    let (mut checks, conn) = drive_on_route(preset, cmd, &route, &sandbox.cwd()).await;
+    let Some(conn) = conn else { return checks };
+
+    // What the stub saw: the bound model and the route's key.
+    let calls = stub.model_calls();
+    let models: BTreeSet<String> = calls.iter().filter_map(|s| s.model.clone()).collect();
+    let keyed = calls
+        .iter()
+        .filter(|s| s.authorization.as_deref() == Some(&format!("Bearer {STUB_KEY}")[..]) || s.x_api_key.as_deref() == Some(STUB_KEY))
+        .count();
+    let apis: BTreeSet<&str> = calls.iter().map(|s| s.api.as_str()).collect();
+    let called: Vec<&str> = calls.iter().filter_map(|s| s.called.as_deref()).collect();
+    // What credentials arrived instead, when not the route's key (the key itself redacted).
+    let auths: BTreeSet<String> =
+        calls.iter().flat_map(|s| [s.authorization.clone(), s.x_api_key.clone()]).flatten().map(|a| a.replace(STUB_KEY, "<key>")).collect();
+    checks.push(Check::new(
+        "model reached the stub",
+        models.len() == 1 && models.contains(STUB_MODEL) && keyed == calls.len() && !calls.is_empty(),
+        format!(
+            "{} call(s) over {apis:?} for {models:?} (only the bound model may be used); {keyed} with the route's key (credentials seen: {auths:?}); tools called {called:?} of {} offered",
+            calls.len(),
+            calls.iter().map(|s| s.tools.len()).max().unwrap_or(0)
+        ),
+    ));
+    checks.push(argv_check(&conn, &command_line, &[STUB_KEY]));
+    checks.push(shutdown_check(&conn).await);
+    checks
+}
+
+/// Start `cmd` (an agent on `route`), then `initialize`, the route's
+/// `providers/set`, `session/new` in `cwd` and one prompt. Returns the checks,
+/// and the agent still running unless it couldn't start or initialize.
+async fn drive_on_route(
+    preset: &Preset,
+    cmd: tokio::process::Command,
+    route: &crate::agent_routes::Route,
+    cwd: &Path,
+) -> (Vec<Check>, Option<Arc<Connection>>) {
+    const NEW: &str = "session/new on the provider";
+    const PROMPT: &str = "prompt streams a tool call";
+    let mut checks = vec![];
+    let turn = Arc::new(Mutex::new(Turn::default()));
+    let seen = turn.clone();
+    let conn = Connection::spawn(
+        cmd,
+        move |msg, responder| match msg {
+            Incoming::Notification { method, params } if method == "session/update" => {
+                let u = &params["update"];
+                let mut t = seen.lock().unwrap();
+                if let Some(kind) = u["sessionUpdate"].as_str() {
+                    t.updates.insert(kind.to_owned());
+                    if kind == "tool_call" {
+                        t.tool_titles.push(u["title"].as_str().unwrap_or("?").to_owned());
+                    }
+                    if kind == "agent_message_chunk" {
+                        t.text.push_str(u["content"]["text"].as_str().unwrap_or_default());
+                    }
+                }
+            }
+            Incoming::Notification { .. } => {}
+            // Allow what the scripted turn asks (a read-only tool in the sandbox).
+            Incoming::Request { id, method, params } if method == "session/request_permission" => {
+                seen.lock().unwrap().permissions += 1;
+                let options = params["options"].as_array().cloned().unwrap_or_default();
+                let allow = options.iter().find(|o| o["kind"] == "allow_once").or_else(|| options.iter().find(|o| o["kind"] == "allow_always"));
+                let outcome = match allow.or(options.first()).and_then(|o| o["optionId"].as_str()) {
+                    Some(o) => json!({ "outcome": { "outcome": "selected", "optionId": o } }),
+                    None => json!({ "outcome": { "outcome": "cancelled" } }),
+                };
+                responder.ok(id, outcome);
+            }
+            Incoming::Request { id, method, .. } => {
+                let _ = responder.method_not_found(id, &method);
+            }
+        },
+        |_| {},
+    );
+    let conn = match conn {
+        Ok(c) => c,
+        Err(e) => return (vec![Check::fail("starts", e)], None),
+    };
+    let init = match tokio::time::timeout(INIT_TIMEOUT, agents::initialize(&conn)).await {
+        Ok(Ok(init)) => init,
+        Ok(Err(e)) => return (vec![Check::fail("initialize", e)], None),
+        Err(_) => {
+            let _ = conn.shutdown(Duration::from_secs(1)).await;
+            return (vec![Check::fail("initialize", format!("no answer within {INIT_TIMEOUT:?}"))], None);
+        }
+    };
+    if let Err(e) = crate::agent_routes::providers_set(&conn, &init, Some(route)).await {
+        checks.push(Check::fail("providers/set", e));
+    }
+    let report = Report::from_initialize(&init);
+
+    // session/new: the provider is set, so no login is asked for.
+    let session = match tokio::time::timeout(SESSION_TIMEOUT, conn.request("session/new", session_params(cwd, preset.id, &report))).await {
+        Err(_) => Err(Check::fail(NEW, format!("no answer within {SESSION_TIMEOUT:?}"))),
+        Ok(Err(e)) if e.code == acp::AUTH_REQUIRED => Err(Check::fail(NEW, format!("asked for a login although the route sets the provider: {e}"))),
+        Ok(Err(e)) => Err(Check::fail(NEW, format!("failed: {e}{}", stderr_note(&conn)))),
+        Ok(Ok(r)) => match r["sessionId"].as_str().filter(|s| !s.is_empty()) {
+            Some(id) => {
+                checks.push(Check::pass(NEW, format!("session {id}, no login asked")));
+                Ok(id.to_owned())
+            }
+            None => Err(Check::fail(NEW, format!("answered without a sessionId: {r}"))),
+        },
+    };
+
+    // One prompt: it streams, calls a tool, ends.
+    if let Ok(sid) = session.map_err(|c| checks.push(c)) {
+        let params = json!({ "sessionId": sid, "prompt": [{ "type": "text", "text": PROVIDER_PROMPT }] });
+        let started = Instant::now();
+        let check = match tokio::time::timeout(PROMPT_TIMEOUT, conn.request("session/prompt", params)).await {
+            Err(_) => Check::fail(PROMPT, format!("no answer within {PROMPT_TIMEOUT:?}{}", stderr_note(&conn))),
+            Ok(Err(e)) => Check::fail(PROMPT, format!("failed: {e}{}", stderr_note(&conn))),
+            Ok(Ok(r)) => {
+                let t = turn.lock().unwrap();
+                let stop = r["stopReason"].as_str().unwrap_or("?");
+                let detail = format!(
+                    "{stop} in {:.1}s; tool calls {:?}; {} permission request(s); reply {:?}",
+                    started.elapsed().as_secs_f64(),
+                    t.tool_titles,
+                    t.permissions,
+                    t.text.chars().take(80).collect::<String>()
+                );
+                let streamed = t.updates.contains("tool_call") && t.updates.contains("agent_message_chunk");
+                Check::new(PROMPT, streamed && stop == "end_turn", if streamed { detail } else { format!("updates {:?}; {detail}", t.updates) })
+            }
+        };
+        checks.push(check);
+    }
+    (checks, Some(conn))
+}
+
+/// No secret on any command line: ours (`argv`), the agent's, or anything it started.
+fn argv_check(conn: &Connection, argv: &[String], secrets: &[&str]) -> Check {
+    let secrets: Vec<&str> = secrets.iter().copied().filter(|s| !s.is_empty()).collect();
+    let holds = |a: &str| secrets.iter().any(|s| a.contains(s));
+    let redact = |a: &str| secrets.iter().fold(a.to_owned(), |a, s| a.replace(s, "<key>"));
+    let mut exposed: Vec<String> = argv.iter().filter(|a| holds(a)).map(|a| redact(a)).collect();
+    let tree = conn.pid().map(argv_tree).unwrap_or_default();
+    exposed.extend(tree.iter().filter(|(_, a)| holds(a)).map(|(p, a)| {
+        let redacted = redact(a);
+        let at = redacted.find("<key>").unwrap_or(0);
+        let start = (0..=at.saturating_sub(60)).rev().find(|i| redacted.is_char_boundary(*i)).unwrap_or(0);
+        format!("process {p}: …{}…", redacted[start..].chars().take(80).collect::<String>())
+    }));
+    Check::new(
+        "no secret in argv",
+        exposed.is_empty(),
+        if exposed.is_empty() {
+            format!("checked {} process(es)", tree.len().max(1))
+        } else {
+            format!("the key is on the command line of {exposed:?}")
+        },
+    )
+}
+
+fn stderr_note(conn: &Connection) -> String {
+    let tail = conn.stderr_tail();
+    let last: Vec<&str> = tail.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect();
+    if last.is_empty() { String::new() } else { format!("\n{}", last.join("\n")) }
 }
 
 // ── npm audit ───────────────────────────────────────────────────────────────
@@ -779,9 +1079,14 @@ pub async fn run_suite(preset: &Preset, version: &str, program: &str, args: &[St
     let started = Instant::now();
     let checks = run_checks(preset, program, args).await;
     let mut report = SuiteReport { version: version.to_owned(), checks, checked_at: now(), ..SuiteReport::default() };
-    let dir = dir.to_owned();
-    let result = tokio::task::spawn_blocking(move || audit(&dir, &[])).await.unwrap_or_else(|e| Err(AuditError::Failed(e.to_string())));
-    audit_into(&mut report, result, previous);
+    if agent_install::is_binary(dir) {
+        // A release archive: no npm dependencies to audit; its sha256 was checked when it was installed.
+        report.audit_detail = Some("a release archive (sha256-checked), not an npm package: nothing to audit".into());
+    } else {
+        let dir = dir.to_owned();
+        let result = tokio::task::spawn_blocking(move || audit(&dir, &[])).await.unwrap_or_else(|e| Err(AuditError::Failed(e.to_string())));
+        audit_into(&mut report, result, previous);
+    }
     report.seconds = (started.elapsed().as_secs_f64() * 10.0).round() / 10.0;
     report
 }
@@ -794,12 +1099,13 @@ pub async fn run_suite(preset: &Preset, version: &str, program: &str, args: &[St
 /// or a held version yaah never checked, only gets its report.
 pub async fn verify(versions: &Versions, preset_id: &str, version: &str) -> Result<SuiteReport, String> {
     let preset = agents::preset(preset_id).ok_or_else(|| format!("unknown agent preset {preset_id}"))?;
-    let pinned = preset.spec().ok_or_else(|| format!("{} isn't run from an npm package", preset.label))?;
+    let pinned = preset.spec().ok_or_else(|| format!("{} isn't installed by yaah", preset.label))?;
     let spec = pinned.at(version)?;
     let root = versions.root().to_owned();
     {
-        let (root, spec) = (root.clone(), spec.clone());
-        tokio::task::spawn_blocking(move || agent_install::ensure(&root, &spec)).await.map_err(|e| e.to_string())??;
+        let (spec, archive) = (spec.clone(), versions.archive_for(&spec)?);
+        let root = root.clone();
+        tokio::task::spawn_blocking(move || agent_install::ensure_source(&root, &spec, archive.as_ref())).await.map_err(|e| e.to_string())??;
     }
     let (program, args) = versions.candidate_command(preset_id, version)?;
     let record = versions.records().get(preset_id).and_then(|r| r.get(version)).cloned();
@@ -851,7 +1157,8 @@ pub async fn audit_active(versions: &Versions, in_use: &BTreeSet<&'static str>, 
             continue;
         }
         let dir = agent_install::dir(versions.root(), &active);
-        if agent_install::installed(versions.root(), &active).is_none() {
+        // Release archives have no npm dependencies to audit.
+        if agent_install::installed(versions.root(), &active).is_none() || agent_install::is_binary(&dir) {
             continue;
         }
         let result = tokio::task::spawn_blocking(move || audit(&dir, &[])).await.unwrap_or_else(|e| Err(AuditError::Failed(e.to_string())));
@@ -1075,15 +1382,15 @@ mod tests {
     use crate::agent_install::tests::temp_dir;
 
     #[test]
-    fn every_npm_preset_has_a_row_and_rows_are_presets() {
+    fn every_installed_preset_has_a_row_and_rows_are_presets() {
         for e in EXPECTATIONS {
             let p = agents::preset(e.preset).unwrap_or_else(|| panic!("{} isn't a preset", e.preset));
-            assert!(p.spec().is_some(), "{} isn't npm-based", e.preset);
+            assert!(p.spec().is_some(), "{} isn't installed by yaah", e.preset);
         }
         for p in agents::PRESETS.iter().filter(|p| p.spec().is_some()) {
             assert_eq!(expectations(p.id).preset, p.id, "{} has no row", p.id);
         }
-        assert_eq!(expectations("goose"), Expect::default());
+        assert_eq!(expectations("kimi"), Expect::default());
     }
 
     #[test]
@@ -1258,6 +1565,15 @@ process.stdin.on("end", () => { if (mode !== "linger") process.exit(0); });
         assert_eq!(failing(&run("no-load").await), ["capability loadSession"]);
         assert_eq!(failing(&run("bad-terminal").await), ["authMethods terminal args"]);
         assert_eq!(failing(&run("crashy-session").await), ["session/new signed out"]);
+        // goose's known -32603 without a provider passes for goose only; any other code still fails it.
+        let goose = agents::preset("goose").unwrap();
+        let mut crashy = args.clone();
+        crashy[1] = "crashy-session".to_owned();
+        let checks = run_checks(goose, &program, &crashy).await;
+        assert!(failing(&checks).is_empty(), "{checks:#?}");
+        assert!(checks.iter().any(|c| c.name == "session/new signed out" && c.detail.contains("fails as known for goose")));
+        crashy[1] = "auth".to_owned();
+        assert!(failing(&run_checks(goose, &program, &crashy).await).is_empty(), "auth-required is always fine");
         assert_eq!(failing(&run("lenient").await), ["unknown method"]);
         let linger = run("linger").await;
         assert_eq!(failing(&linger), ["shutdown"]);
@@ -1324,6 +1640,65 @@ process.stdin.on("end", () => { if (mode !== "linger") process.exit(0); });
         std::fs::remove_file(dir.join("package-lock.json")).unwrap();
         assert!(matches!(audit(&dir, &env), Err(AuditError::Failed(m)) if m.contains("package-lock")));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Tier B, live: goose, OpenCode and Claude Code each run one prompt on Amazon
+    /// Bedrock through their translated route, with the AWS profile named by
+    /// `YAAH_LIVE_AWS_PROFILE` (SSO works: `aws sso login --profile P` first).
+    /// `YAAH_LIVE_AWS_REGION` (default us-east-1) and `YAAH_LIVE_BEDROCK_MODEL`
+    /// (default the US Claude Haiku 4.5 inference profile) pick the rest. The
+    /// pinned versions are installed under `~/.yaah/agents`. Spends a few cheap prompts.
+    #[test]
+    #[ignore = "live: Amazon Bedrock with the AWS profile in YAAH_LIVE_AWS_PROFILE; spends tokens"]
+    fn live_bedrock_route_runs_a_prompt_on_each_agent() {
+        use crate::agent_routes::{Options, route_with};
+        use crate::providers::{Bedrock, Binding, Kind, ResolvedProvider};
+        let profile = std::env::var("YAAH_LIVE_AWS_PROFILE").expect("set YAAH_LIVE_AWS_PROFILE to an AWS profile with Bedrock access");
+        let region = std::env::var("YAAH_LIVE_AWS_REGION").unwrap_or_else(|_| "us-east-1".into());
+        let model = std::env::var("YAAH_LIVE_BEDROCK_MODEL").unwrap_or_else(|_| "us.anthropic.claude-haiku-4-5-20251001-v1:0".into());
+        let provider = ResolvedProvider {
+            id: "live".into(),
+            kind: Kind::Bedrock,
+            label: "live Bedrock".into(),
+            bedrock: Some(Bedrock { profile, region, prefix: None }),
+            secret: None,
+        };
+        let binding = Binding { provider_id: "live".into(), model, small_model: None };
+        let mut failed = vec![];
+        for id in ["goose", "opencode", agents::CLAUDE] {
+            let preset = agents::preset(id).unwrap();
+            let installed = Versions::user().ensure(&preset.spec().unwrap()).unwrap();
+            let (program, mut args) = installed.command();
+            args.extend(preset.args.iter().map(ToString::to_string));
+            let dir = temp_dir("live-bedrock");
+            let (work, own) = (dir.join("work"), dir.join("profile"));
+            std::fs::create_dir_all(&work).unwrap();
+            std::fs::write(work.join("README.md"), "yaah live check\n").unwrap();
+            let route = route_with(id, &provider, &binding, &own, &Options::default()).unwrap();
+            route.write_files().unwrap();
+            // The user's own environment (the AWS SDK reads ~/.aws and its SSO cache), on the route; Claude's own config aside.
+            let mut cmd = crate::path_env::tokio_command(&program);
+            cmd.args(&args).current_dir(&work).env("CLAUDE_CONFIG_DIR", dir.join("claude"));
+            for k in &route.env_remove {
+                cmd.env_remove(k);
+            }
+            cmd.envs(&route.env);
+            let command_line: Vec<String> = std::iter::once(program.clone()).chain(args.iter().cloned()).collect();
+            let checks = tauri::async_runtime::block_on(async {
+                let (mut checks, conn) = drive_on_route(preset, cmd, &route, &work).await;
+                if let Some(conn) = conn {
+                    checks.push(argv_check(&conn, &command_line, &[]));
+                    checks.push(shutdown_check(&conn).await);
+                }
+                checks
+            });
+            for c in &checks {
+                println!("{id}: {} {}: {}", if c.ok { "ok  " } else { "FAIL" }, c.name, c.detail);
+            }
+            failed.extend(checks.iter().filter(|c| !c.ok).map(|c| format!("{id} {}", c.name)));
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        assert!(failed.is_empty(), "{failed:?}");
     }
 
     #[tokio::test]

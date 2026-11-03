@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use yaah_lib::agent_guide::{self, Guide};
+use yaah_lib::agent_routes;
 use yaah_lib::agents::{self, Draft, Store};
 use yaah_lib::login::Logins;
 use yaah_lib::projects::{Project, Status};
@@ -19,10 +20,20 @@ use yaah_lib::session::{ChatTarget, Emit, Entry, Hub, Transcript, random_token};
 
 const ACCOUNT: &str = "scripted";
 const PATIENCE: Duration = Duration::from_secs(20);
+/// Set to run one test (by name) in a child process.
+const INNER: &str = "YAAH_E2E_INNER";
 
 fn main() {
     if std::env::var_os(agent::ENV).is_some() {
         return agent::run();
+    }
+    // One test run on its own, in a child the parent watches (its output is checked for secrets).
+    if let Ok(name) = std::env::var(INNER) {
+        let inner: &[(&str, fn())] = &[("providers_set_inner", providers_set_inner)];
+        let (_, test) = inner.iter().find(|(n, _)| *n == name).expect("an inner test");
+        test();
+        println!("inner ok");
+        return;
     }
     let tests: &[(&str, fn())] = &[
         ("initialize_advertises_notices_and_a_turn_streams", initialize_advertises_notices_and_a_turn_streams),
@@ -55,6 +66,10 @@ fn main() {
         ),
         ("other_chats_in_the_project_pick_up_added_repos_on_their_next_prompt", other_chats_in_the_project_pick_up_added_repos_on_their_next_prompt),
         ("quick_chats_start_with_repos_chosen_up_front", quick_chats_start_with_repos_chosen_up_front),
+        (
+            "claude_on_openrouter_gets_providers_set_and_the_key_never_reaches_logs",
+            claude_on_openrouter_gets_providers_set_and_the_key_never_reaches_logs,
+        ),
     ];
     let filters: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let chosen: Vec<_> = tests.iter().filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))).collect();
@@ -998,4 +1013,127 @@ fn quick_chats_start_with_repos_chosen_up_front() {
     let err = tauri::async_runtime::block_on(f.hub.new_session_with(ChatTarget::Folder(cwd), ACCOUNT, &[bad])).unwrap_err();
     assert!(err.contains("is not a folder"), "{err}");
     assert_eq!(f.requests("session/new").len(), 1, "checked before any session starts");
+}
+
+// ── Model providers ─────────────────────────────────────────────────────────
+
+/// The OpenRouter key the provider tests use: it may reach the agent, never yaah's output, files or events.
+const LEAK_KEY: &str = "sk-or-v1-e2e-never-in-logs-5d1c9a";
+
+/// Bindings to `or` resolve to an OpenRouter provider holding [`LEAK_KEY`] (instead of the keychain).
+fn openrouter_resolver() {
+    use yaah_lib::keychain::SecretString;
+    use yaah_lib::providers::{Kind, ResolvedProvider};
+    agent_routes::set_resolver(Some(Arc::new(|id: &str| {
+        if id != "or" {
+            return Err(format!("the model provider {id} was removed"));
+        }
+        Ok(ResolvedProvider {
+            id: "or".into(),
+            kind: Kind::Openrouter,
+            label: "Test key".into(),
+            bedrock: None,
+            secret: Some(SecretString::new(LEAK_KEY)),
+        })
+    })));
+}
+
+fn bind(f: &Fixture, id: &str) {
+    let binding = yaah_lib::providers::Binding { provider_id: "or".into(), model: "anthropic/claude-sonnet-4.6".into(), small_model: None };
+    f.profiles.set_provider(id, Some(binding)).unwrap();
+}
+
+/// The agent's environment, as it wrote it (`YAAH_AGENT_ENV_DUMP`).
+fn agent_env(path: &std::path::Path) -> serde_json::Map<String, Value> {
+    serde_json::from_str::<Value>(&std::fs::read_to_string(path).unwrap()).unwrap().as_object().unwrap().clone()
+}
+
+/// Everything under `dir`, as text, to look for a secret in.
+fn all_files(dir: &std::path::Path) -> String {
+    let mut out = String::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = entry.path();
+        if p.is_dir() {
+            out.push_str(&all_files(&p));
+        } else {
+            out.push_str(&String::from_utf8_lossy(&std::fs::read(&p).unwrap_or_default()));
+        }
+    }
+    out
+}
+
+/// Runs [`providers_set_inner`] in a child, and checks nothing it printed (yaah's logs) holds the key.
+fn claude_on_openrouter_gets_providers_set_and_the_key_never_reaches_logs() {
+    let out = std::process::Command::new(std::env::current_exe().unwrap()).env(INNER, "providers_set_inner").output().unwrap();
+    let all = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success() && all.contains("inner ok"), "the inner test failed:\n{all}");
+    assert!(!all.contains(LEAK_KEY), "the key reached yaah's output:\n{all}");
+}
+
+fn providers_set_inner() {
+    use agent_routes::ClaudeOpenRouter;
+    openrouter_resolver();
+    agent_routes::set_claude_openrouter(ClaudeOpenRouter::ProvidersSet);
+    let f = Fixture::new(&[]);
+    let dump = f.dir.join("agent-env.json");
+    let dump_s = dump.to_string_lossy().into_owned();
+    let id = f.add_profile_as("Claude · OpenRouter", agents::CLAUDE, &[("YAAH_AGENT_PROVIDERS", "1"), ("YAAH_AGENT_ENV_DUMP", &dump_s)]);
+    bind(&f, &id);
+    let chat = |account: &str| tauri::async_runtime::block_on(f.hub.new_session(ChatTarget::Folder(f.dir.to_string_lossy().into_owned()), account));
+    let sid = chat(&id).unwrap().session_id;
+
+    // providers/set, right after initialize and before session/new, with the key in its Authorization header only.
+    let methods: Vec<String> = f.received().iter().filter_map(|(_, m)| m["method"].as_str().map(str::to_owned)).collect();
+    let at = |m: &str| methods.iter().position(|x| x == m).unwrap_or_else(|| panic!("no {m} in {methods:?}"));
+    assert!(at("initialize") < at("providers/set") && at("providers/set") < at("session/new"), "{methods:?}");
+    let set = f.requests("providers/set").pop().unwrap();
+    assert_eq!(
+        set,
+        json!({ "providerId": "main", "apiType": "anthropic", "baseUrl": "https://openrouter.ai/api", "headers": {
+            "Authorization": format!("Bearer {LEAK_KEY}"), "HTTP-Referer": "https://filipecabaco.github.io/yaah/", "X-OpenRouter-Title": "yaah"
+        } })
+    );
+    let env = agent_env(&dump);
+    assert!(env.values().all(|v| !v.as_str().unwrap_or_default().contains(LEAK_KEY)), "the key is not in the agent's env");
+    assert_eq!(env["ANTHROPIC_MODEL"], "anthropic/claude-sonnet-4.6");
+    assert!(!env.contains_key("ANTHROPIC_AUTH_TOKEN") && !env.contains_key("ANTHROPIC_BASE_URL"));
+    let t = f.turn(&sid, "echo over OpenRouter");
+    assert!(last_agent_text(&t).contains("echo: echo over OpenRouter"));
+
+    // An adapter that refuses it: the chat doesn't start, and the error carries the code, never the key it quoted.
+    let refusing = f.add_profile_as("Claude · refuses", agents::CLAUDE, &[("YAAH_AGENT_PROVIDERS", "refuse")]);
+    bind(&f, &refusing);
+    let err = chat(&refusing).unwrap_err();
+    assert!(err.contains("refused the model provider (code -32602)") && err.contains("<redacted>") && !err.contains(LEAK_KEY), "{err}");
+    eprintln!("[test] refused: {err}");
+
+    // An adapter without the capability: refused before anything is sent.
+    let old = f.add_profile_as("Claude · old adapter", agents::CLAUDE, &[]);
+    bind(&f, &old);
+    let before = f.requests("providers/set").len();
+    let err = chat(&old).unwrap_err();
+    assert!(err.contains("`providers` capability"), "{err}");
+    assert_eq!(f.requests("providers/set").len(), before);
+
+    // The env route (the default): the key goes in the agent's env, no providers/set.
+    agent_routes::set_claude_openrouter(ClaudeOpenRouter::Env);
+    let env_dump = f.dir.join("agent-env-2.json");
+    let via_env =
+        f.add_profile_as("Claude · env", agents::CLAUDE, &[("YAAH_AGENT_PROVIDERS", "1"), ("YAAH_AGENT_ENV_DUMP", &env_dump.to_string_lossy())]);
+    bind(&f, &via_env);
+    let before = f.requests("providers/set").len();
+    chat(&via_env).unwrap();
+    assert_eq!(f.requests("providers/set").len(), before);
+    let env = agent_env(&env_dump);
+    assert_eq!((env["ANTHROPIC_AUTH_TOKEN"].as_str(), env["ANTHROPIC_BASE_URL"].as_str()), (Some(LEAK_KEY), Some("https://openrouter.ai/api")));
+    assert_eq!(env["ANTHROPIC_API_KEY"], "");
+
+    // Nothing yaah keeps or shows holds the key: chats, profiles, UI events.
+    f.hub.flush();
+    let mut kept = all_files(&f.dir.join("sessions"));
+    kept.push_str(&std::fs::read_to_string(f.dir.join("agents.json")).unwrap());
+    assert!(!kept.contains(LEAK_KEY), "a file yaah wrote holds the key");
+    let events = serde_json::to_string(&*f.events.lock().unwrap()).unwrap();
+    assert!(!events.contains(LEAK_KEY), "a UI event holds the key");
+    agent_routes::set_resolver(None);
 }

@@ -40,7 +40,17 @@ import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import type { Yaah } from "@/hooks/use-yaah";
 import type { SettingsTab } from "@/components/agent-setup";
-import { api, canChat, PROJECT_STATUSES, type AgentProfile, type ConnectionInfo, type Project, type SessionInfo } from "@/lib/api";
+import {
+  agentDetail,
+  api,
+  canChat,
+  needsProviderFix,
+  PROJECT_STATUSES,
+  type AgentProfile,
+  type ConnectionInfo,
+  type Project,
+  type SessionInfo,
+} from "@/lib/api";
 import { baseName } from "@/lib/format";
 import { fuzzyBest, rankTop } from "@/lib/fuzzy";
 import { formatKeys, SHORTCUTS, type ShortcutId } from "@/lib/shortcuts";
@@ -318,7 +328,7 @@ function PaletteBody({
             key={a.id}
             id={`agent-${a.id}`}
             label={a.label}
-            detail={a.loggedIn === false ? "not logged in" : (a.email ?? a.presetLabel)}
+            detail={agentDetail(a) || a.presetLabel}
             checked={a.id === y.agentId}
             onSelect={() => {
               y.setAgentId(a.id);
@@ -339,7 +349,7 @@ function PaletteBody({
             id={`quick-${a.id}`}
             icon={<Bot />}
             label={a.label}
-            detail={a.loggedIn === false ? "not logged in" : (a.email ?? a.presetLabel)}
+            detail={agentDetail(a) || a.presetLabel}
             shortcut={a.id === y.agentId && !project ? "newChat" : undefined}
             onSelect={() => (canChat(a) ? run(() => y.newQuickChat(undefined, a.id)) : close(() => onLogin(a)))}
           />
@@ -476,13 +486,23 @@ function PaletteBody({
         onSelect: () => close(onNewProjectFromItem),
       },
       !account && { id: "first-agent", icon: <Bot />, label: "Add agent…", detail: "needed to chat", onSelect: () => close(onAddAgent) },
-      account && {
-        id: "login",
-        icon: <LogIn />,
-        label: `Log in “${account.label}”…`,
-        detail: account.loggedIn === false ? "needed" : undefined,
-        onSelect: () => close(() => onLogin(account)),
-      },
+      // A profile on a model provider has no login of its own: its provider is fixed in Settings.
+      account &&
+        !account.provider && {
+          id: "login",
+          icon: <LogIn />,
+          label: `Log in “${account.label}”…`,
+          detail: account.loggedIn === false ? "needed" : undefined,
+          onSelect: () => close(() => onLogin(account)),
+        },
+      needsProviderFix(account) &&
+        account && {
+          id: "fix-provider",
+          icon: <LogIn />,
+          label: `Fix “${account.label}” in Settings → Model providers…`,
+          detail: "its provider's check failed",
+          onSelect: () => close(() => onLogin(account)),
+        },
       chat &&
         y.agents.length > 1 && {
           id: "switch-chat-agent",
@@ -846,7 +866,7 @@ function ChatAgentPage({
             id={`chat-agent-${a.id}`}
             icon={busy === a.id ? <Loader2 className="animate-spin" /> : <Bot />}
             label={a.label}
-            detail={a.id === chat.accountId ? "this chat's agent" : a.loggedIn === false ? "not logged in" : (a.email ?? a.presetLabel)}
+            detail={a.id === chat.accountId ? "this chat's agent" : agentDetail(a) || a.presetLabel}
             checked={a.id === chat.accountId}
             onSelect={() => pick(a)}
           />

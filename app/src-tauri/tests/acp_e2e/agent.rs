@@ -6,7 +6,9 @@
 //! `YAAH_AGENT_NO_LOAD` (no `session/load`), `YAAH_AGENT_SESSION_ID` (a fixed id
 //! for `session/new`), `YAAH_AGENT_MCP_HTTP` (reaches HTTP MCP servers, so it gets
 //! yaah's UI server), `YAAH_AGENT_SYSTEM_PROMPT` (advertises the ACP `systemPrompt`),
-//! `YAAH_AGENT_NAME` (echo replies start with it, so a test sees which agent answered).
+//! `YAAH_AGENT_NAME` (echo replies start with it, so a test sees which agent answered),
+//! `YAAH_AGENT_PROVIDERS` (advertises ACP `providers`; `refuse` answers `providers/set` with an
+//! error quoting what it got), `YAAH_AGENT_ENV_DUMP` (a file it writes its environment to).
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -140,6 +142,10 @@ impl Agent {
                 if std::env::var_os("YAAH_AGENT_SYSTEM_PROMPT").is_some() {
                     session_caps["systemPrompt"] = json!({});
                 }
+                if let Some(path) = std::env::var_os("YAAH_AGENT_ENV_DUMP") {
+                    let env: serde_json::Map<String, Value> = std::env::vars().map(|(k, v)| (k, json!(v))).collect();
+                    let _ = std::fs::write(path, Value::Object(env).to_string());
+                }
                 Self::respond(
                     id,
                     &json!({
@@ -149,7 +155,8 @@ impl Agent {
                             "loadSession": std::env::var_os("YAAH_AGENT_NO_LOAD").is_none(),
                             "promptCapabilities": { "embeddedContext": true },
                             "mcpCapabilities": { "http": std::env::var_os("YAAH_AGENT_MCP_HTTP").is_some(), "sse": false },
-                            "sessionCapabilities": session_caps
+                            "sessionCapabilities": session_caps,
+                            "providers": if std::env::var_os("YAAH_AGENT_PROVIDERS").is_some() { json!({}) } else { Value::Null }
                         },
                         "authMethods": [
                             { "id": "agent-login", "name": "Log in" },
@@ -161,6 +168,11 @@ impl Agent {
                 );
             }
             "authenticate" => Self::respond(id, &json!({})),
+            "providers/set" if std::env::var("YAAH_AGENT_PROVIDERS").as_deref() == Ok("refuse") => {
+                let msg = format!("Gateway refused: {}", params["headers"]["Authorization"].as_str().unwrap_or_default());
+                send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": msg } }));
+            }
+            "providers/set" if std::env::var_os("YAAH_AGENT_PROVIDERS").is_some() => Self::respond(id, &json!({})),
             "session/new" => {
                 self.sessions += 1;
                 let sid = std::env::var("YAAH_AGENT_SESSION_ID").unwrap_or_else(|_| format!("s{}-{}", self.sessions, std::process::id()));

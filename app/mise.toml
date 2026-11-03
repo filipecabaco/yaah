@@ -27,7 +27,7 @@ dir = "{{config_root}}"
 run = ["pnpm install --frozen-lockfile", "pnpm check", "pnpm build"]
 
 [tasks."ci:conformance"]
-description = "Tier A adapter conformance for every npm preset, pinned and latest versions (extra args go to examples/conformance.rs, e.g. --fail-on-latest)"
+description = "Adapter conformance, pinned and latest: tier A for every preset yaah installs (npm packages; goose and OpenCode from the ACP registry, sha256-checked), then provider mode (Claude Code, goose, OpenCode on their OpenRouter routes against a local stub). Extra args go to examples/conformance.rs, e.g. --fail-on-latest"
 dir = "{{config_root}}/src-tauri"
 run = "cargo run --locked --example conformance --"
 

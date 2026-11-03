@@ -3,6 +3,7 @@
 Screenshots and notes from experiments and visual checks, one folder per experiment (`YYYY-MM-DD-topic/`), each with a
 README saying what was tried and what each image shows.
 
+- [2026-11-03-model-providers](2026-11-03-model-providers/): Settings → Model providers (OpenRouter with a keychain key, Bedrock on an AWS profile with the expired-SSO sign-in), binding agent profiles with the model picker, and readiness in the sidebar, light, dark and 420 px
 - [2026-11-03-split-panes](2026-11-03-split-panes/): Ghostty-style split panes (picker, focus, per-pane chats, dividers, saved layout) and the sidebar that resizes and hides to a title bar, in the browser mock at 1440 and 1920 and in the real macOS app with its traffic lights
 - [2026-11-03-chat-layout](2026-11-03-chat-layout/): the chat using the window's width (before/after at 800–2560 px), tool cards named from their input, command output and diffs in tool cards, and switching a chat's agent
 - [2026-11-03-installer](2026-11-03-installer/): `install.sh` and the release pipeline tested for real: macOS arm64 and Linux arm64/x86_64 bundles built locally (Linux in the CI container, x86_64 emulated), served as a fake release; installs, reinstalls, uninstalls, tampered checksums, unsupported CPUs, timings

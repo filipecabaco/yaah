@@ -1497,6 +1497,7 @@ mod tests {
             env: BTreeMap::new(),
             config_dir: None,
             report: r,
+            provider: None,
         };
         let profiles = [profile("Gemini", Some(report(true))), profile("Old", Some(report(false))), profile("Untested", None)];
         let http = http_draft("remote", "https://x.example/mcp").to_server().unwrap();

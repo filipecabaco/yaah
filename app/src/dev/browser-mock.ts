@@ -11,6 +11,7 @@ import { integrationReplies } from "./mock/integrations";
 import { libraryReplies, pickFolder } from "./mock/library";
 import { mcpReplies } from "./mock/mcp";
 import { projectReplies } from "./mock/projects";
+import { providerReplies } from "./mock/providers";
 import { settingsReplies } from "./mock/settings";
 import { skillReplies } from "./mock/skills";
 import { sourceReplies } from "./mock/sources";
@@ -61,6 +62,7 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     ...settingsReplies(m),
     ...skillReplies(m),
     ...mcpReplies(m),
+    ...providerReplies(m),
     ...workItemReplies(m),
     // Plugins: a folder picker (a sample folder on the library screens, cancelled elsewhere), and links and folders that open nowhere.
     "plugin:dialog|open": (args: unknown) => pickFolder(args),

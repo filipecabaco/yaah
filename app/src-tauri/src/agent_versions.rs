@@ -23,7 +23,7 @@
 //! or on an error the last known state stays; nothing here blocks startup or an
 //! agent start.
 
-use crate::agent_install::{self, Spec};
+use crate::agent_install::{self, Archive, Installed, Spec};
 use crate::agents::{self, Preset};
 use crate::json_file::JsonFile;
 use serde::{Deserialize, Serialize};
@@ -36,6 +36,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Where `dist-tags` come from.
 pub const REGISTRY: &str = "https://registry.npmjs.org";
+/// The ACP registry's index: the latest version, and its downloads, of each agent it ships as release archives.
+pub const ACP_REGISTRY: &str = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json";
 /// A check is due when the last one is older than this.
 pub const CHECK_EVERY: Duration = Duration::from_hours(24);
 /// How often the background loop asks whether a check is due.
@@ -129,6 +131,9 @@ pub struct Latest {
     pub latest: String,
     /// Unix seconds.
     pub checked_at: u64,
+    /// A binary agent: the registry's download of `latest` for this platform (its sha256 is what the install checks).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive: Option<Archive>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,10 +227,10 @@ pub fn set_verifier(v: Box<dyn Verifier>) -> bool {
     VERIFIER.set(v).is_ok()
 }
 
-/// The npm-based preset `id` and its pinned package.
+/// The preset `id` yaah installs itself (from npm or a release archive) and its pin.
 fn npm_preset(id: &str) -> Result<(&'static Preset, Spec), String> {
     let preset = agents::preset(id).ok_or_else(|| format!("unknown agent preset {id}"))?;
-    let spec = preset.spec().ok_or_else(|| format!("{} isn't run from an npm package", preset.label))?;
+    let spec = preset.spec().ok_or_else(|| format!("{} isn't installed by yaah (no npm package or release archive)", preset.label))?;
     Ok((preset, spec))
 }
 
@@ -286,7 +291,7 @@ impl Versions {
     pub fn install_candidate(&self, preset: &str, version: &str) -> Result<PathBuf, String> {
         let (_, pinned) = npm_preset(preset)?;
         let spec = pinned.at(version)?;
-        agent_install::ensure(&self.root, &spec)?;
+        self.ensure(&spec)?;
         self.update(preset, version, |old| {
             Ok(match old {
                 Some(r) if r.status == Status::Verified => None,
@@ -304,6 +309,49 @@ impl Versions {
         let (program, mut args) = installed.command();
         args.extend(p.args.iter().map(ToString::to_string));
         Ok((program, args))
+    }
+
+    /// Where a binary agent's version comes from: the pin's archive, or the
+    /// registry's for the latest version it reported. `None` for npm packages.
+    pub fn archive_for(&self, spec: &Spec) -> Result<Option<Archive>, String> {
+        let Some(pin) = agent_install::BINARIES.iter().find(|b| b.registry_id == spec.name) else { return Ok(None) };
+        if spec.version == pin.version {
+            let here = agent_install::platform().unwrap_or("this platform");
+            return pin.archive().map(Some).ok_or_else(|| format!("{spec} has no download for {here}"));
+        }
+        self.latest()
+            .get(&spec.name)
+            .filter(|l| l.latest == spec.version)
+            .and_then(|l| l.archive.clone())
+            .map(Some)
+            .ok_or_else(|| format!("no download is known for {spec}: only the pin and the registry's latest version can be installed"))
+    }
+
+    /// Install `spec` under this root if it isn't there, from npm or its release archive. Blocks.
+    pub fn ensure(&self, spec: &Spec) -> Result<Installed, String> {
+        let archive = self.archive_for(spec)?;
+        agent_install::ensure_source(&self.root, spec, archive.as_ref())
+    }
+
+    /// Read the ACP registry index at `url` and cache the latest version (and
+    /// this platform's download) of each binary agent. Returns the agents it didn't list.
+    pub async fn refresh_binaries(&self, url: &str) -> Result<Vec<String>, String> {
+        let index = fetch_registry(url).await?;
+        let mut found = BTreeMap::new();
+        let mut errors = vec![];
+        for pin in agent_install::BINARIES {
+            match registry_entry(&index, pin.registry_id) {
+                Ok((latest, archive)) => {
+                    found.insert(pin.registry_id.to_owned(), Latest { latest, checked_at: now(), archive });
+                }
+                Err(e) => errors.push(format!("{}: {e}", pin.registry_id)),
+            }
+        }
+        self.latest.update(|all: &mut BTreeMap<String, Latest>| {
+            all.extend(found);
+            Ok(())
+        })?;
+        Ok(errors)
     }
 
     /// Record `version` as an installed candidate, as [`Self::install_candidate`] leaves it (without npm).
@@ -392,7 +440,7 @@ impl Versions {
         while let Some(done) = tasks.join_next().await {
             match done {
                 Ok((pkg, Ok(v))) => {
-                    found.insert(pkg, Latest { latest: v, checked_at: now() });
+                    found.insert(pkg, Latest { latest: v, checked_at: now(), archive: None });
                 }
                 Ok((pkg, Err(e))) => errors.push(format!("{pkg}: {e}")),
                 Err(e) => errors.push(e.to_string()),
@@ -422,8 +470,13 @@ impl Versions {
         if !force && !self.check_due() {
             return Ok(());
         }
-        let packages: Vec<String> = agents::PRESETS.iter().filter_map(Preset::spec).map(|s| s.name).collect();
-        for e in self.refresh_latest(base, &packages).await? {
+        let packages: Vec<String> = agents::PRESETS.iter().filter(|p| p.npx.is_some()).filter_map(Preset::spec).map(|s| s.name).collect();
+        let (npm, binaries) = tokio::join!(self.refresh_latest(base, &packages), self.refresh_binaries(ACP_REGISTRY));
+        match binaries {
+            Ok(errors) => errors.iter().for_each(|e| eprintln!("[agents] version check: {e}")),
+            Err(e) => eprintln!("[agents] version check (ACP registry): {e}"),
+        }
+        for e in npm? {
             eprintln!("[agents] version check: {e}");
         }
         let holds = crate::settings::agent_versions();
@@ -478,6 +531,36 @@ pub async fn fetch_latest(base: &str, pkg: &str) -> Result<String, String> {
 fn latest_tag(doc: &Value) -> Result<String, String> {
     let v = doc["dist-tags"]["latest"].as_str().ok_or("no `latest` tag")?;
     Version::parse(v).map(|_| v.to_owned()).ok_or_else(|| format!("`latest` is `{v}`, not a version"))
+}
+
+/// The ACP registry index (`{ agents: [agent.json…] }`).
+pub async fn fetch_registry(url: &str) -> Result<Value, String> {
+    let resp = crate::integrations::http().get(url).timeout(Duration::from_secs(30)).send().await.map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let body = crate::integrations::read_capped(resp, MAX_DOC).await?;
+    serde_json::from_slice(&body).map_err(|_| "the ACP registry's answer wasn't JSON".to_owned())
+}
+
+/// One agent's version in the registry index, and its release archive for this
+/// platform (`None` when the registry has none for it).
+pub fn registry_entry(index: &Value, id: &str) -> Result<(String, Option<Archive>), String> {
+    let agent = index["agents"].as_array().into_iter().flatten().find(|a| a["id"] == id).ok_or("not in the ACP registry")?;
+    let version = agent["version"].as_str().ok_or("no version")?;
+    Version::parse(version).ok_or_else(|| format!("`{version}` isn't a version"))?;
+    let target = agent_install::platform().map_or(&Value::Null, |p| &agent["distribution"]["binary"][p]);
+    let archive = match (target["archive"].as_str(), target["sha256"].as_str(), target["cmd"].as_str()) {
+        (Some(url), Some(sha256), Some(cmd)) => {
+            let a = Archive { url: url.to_owned(), sha256: sha256.to_ascii_lowercase(), cmd: cmd.to_owned() };
+            a.validate()?;
+            Some(a)
+        }
+        // The registry may omit the digest; yaah only installs what it can check.
+        (Some(_), None, _) => return Err(format!("{version} has no sha256 for its download")),
+        _ => None,
+    };
+    Ok((version.to_owned(), archive))
 }
 
 /// The daily check, in the background for as long as the app runs.
@@ -703,7 +786,7 @@ mod tests {
             versions
                 .latest
                 .update(|m: &mut BTreeMap<String, Latest>| {
-                    m.insert(pkg.to_owned(), Latest { latest: latest.into(), checked_at: now() });
+                    m.insert(pkg.to_owned(), Latest { latest: latest.into(), checked_at: now(), archive: None });
                     Ok(())
                 })
                 .unwrap();
@@ -720,6 +803,77 @@ mod tests {
         set(&claude.name, "0.0.1");
         assert!(versions.candidates(&none, &in_use).is_empty(), "never below the pin");
         assert!(versions.check_due(), "the other npm presets were never checked");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The ACP registry (a stand-in serving an index and a release archive): the latest
+    /// goose and its download are cached, installed as a candidate after a sha256 check,
+    /// and started as their own program.
+    #[test]
+    fn binary_agents_come_from_the_acp_registry_with_their_sha256() {
+        use crate::agent_install::tests::{file_server, sha256_hex, tar_gz};
+        let root = temp_dir("acp-registry");
+        let versions = Versions::at(root.clone());
+        let goose = agents::preset("goose").unwrap();
+        let pinned = goose.spec().unwrap();
+        let tgz = tar_gz(&root, &[("goose", "#!/bin/sh\necho goose-999\n")]);
+        let platform = agent_install::platform().unwrap();
+        let (base, hits) = file_server(vec![("/goose-999.tar.bz2".into(), tgz.clone())]);
+        let entry = |version: &str, sha: Option<&str>| {
+            let mut target = json!({ "archive": format!("{base}/goose-999.tar.bz2"), "cmd": "./goose", "args": ["acp"] });
+            if let Some(sha) = sha {
+                target["sha256"] = json!(sha);
+            }
+            json!({ "id": "goose", "version": version, "distribution": { "binary": { platform: target } } })
+        };
+        let index =
+            |e: Value| json!({ "version": "1.0.0", "agents": [{ "id": "claude-acp", "version": "1.0.0", "distribution": { "npx": {} } }, e] });
+        let (reg, _) = file_server(vec![
+            ("/registry.json".into(), index(entry("999.0.0", Some(&sha256_hex(&tgz)))).to_string().into_bytes()),
+            ("/no-sha.json".into(), index(entry("999.0.0", None)).to_string().into_bytes()),
+            ("/bad-sha.json".into(), index(entry("999.0.0", Some(&"0".repeat(64)))).to_string().into_bytes()),
+        ]);
+
+        // A registry entry without a digest is refused; nothing is cached for it.
+        let errors = tauri::async_runtime::block_on(versions.refresh_binaries(&format!("{reg}/no-sha.json"))).unwrap();
+        assert!(errors.iter().any(|e| e.starts_with("goose: ") && e.contains("sha256")), "{errors:?}");
+        assert!(!versions.latest().contains_key("goose"));
+
+        let errors = tauri::async_runtime::block_on(versions.refresh_binaries(&format!("{reg}/registry.json"))).unwrap();
+        assert!(errors.iter().any(|e| e.starts_with("opencode-v2: ")), "the index lists no OpenCode: {errors:?}");
+        let cached = &versions.latest()["goose"];
+        assert_eq!((cached.latest.as_str(), cached.archive.as_ref().map(|a| a.cmd.as_str())), ("999.0.0", Some("./goose")));
+
+        // The pin comes from the code, the latest from the registry, anything else from nowhere.
+        assert_eq!(versions.archive_for(&pinned).unwrap(), goose.binary().unwrap().archive());
+        let next = pinned.at("999.0.0").unwrap();
+        assert_eq!(versions.archive_for(&next).unwrap().unwrap().url, format!("{base}/goose-999.tar.bz2"));
+        assert!(versions.archive_for(&pinned.at("998.0.0").unwrap()).unwrap_err().contains("no download is known"));
+        assert_eq!(versions.archive_for(&agents::preset(agents::CLAUDE).unwrap().spec().unwrap()).unwrap(), None, "npm packages have none");
+
+        // In use, so the newer version is a candidate: installed (checked), started as itself, not active until verified.
+        let in_use = BTreeSet::from(["goose"]);
+        let none = BTreeMap::new();
+        assert_eq!(versions.candidates(&none, &in_use), [("goose", "999.0.0".to_owned())]);
+        let dir = versions.install_candidate("goose", "999.0.0").unwrap();
+        assert!(dir.ends_with("goose@999.0.0") && agent_install::is_binary(&dir));
+        assert_eq!(hits.lock().unwrap()["/goose-999.tar.bz2"], 1);
+        let (program, args) = versions.candidate_command("goose", "999.0.0").unwrap();
+        assert!(program.ends_with("goose@999.0.0/goose") && args == ["acp"], "{program} {args:?}");
+        let out = std::process::Command::new(&program).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "goose-999");
+        assert_eq!(versions.active(goose, &none), Some(pinned.clone()), "installed isn't verified");
+        versions.begin_verification("goose", "999.0.0").unwrap();
+        versions.record_result("goose", "999.0.0", &Outcome::default()).unwrap();
+        versions.promote("goose", "999.0.0").unwrap();
+        assert_eq!(versions.active(goose, &none), Some(next.clone()));
+        assert!(versions.keep(&none).contains(&next.folder()));
+
+        // The registry changing its digest for a version: the download no longer matches, and isn't installed.
+        std::fs::remove_dir_all(&dir).unwrap();
+        tauri::async_runtime::block_on(versions.refresh_binaries(&format!("{reg}/bad-sha.json"))).unwrap();
+        assert!(versions.ensure(&next).unwrap_err().contains("sha256"));
+        assert!(agent_install::installed(&root, &next).is_none());
         std::fs::remove_dir_all(root).unwrap();
     }
 }

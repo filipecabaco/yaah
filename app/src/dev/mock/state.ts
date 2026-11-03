@@ -5,6 +5,7 @@ import { seedIntegrations } from "./integrations";
 import { seedLibrary } from "./library";
 import { seedMcp } from "./mcp";
 import { seedProjects } from "./projects";
+import { seedProviders } from "./providers";
 import { seedSettings } from "./settings";
 import { seedSkills } from "./skills";
 import { seedSources } from "./sources";
@@ -21,6 +22,7 @@ export function createState({ firstRun }: { firstRun: boolean }) {
     ...seedSettings(),
     ...seedSkills(),
     ...seedMcp(),
+    ...seedProviders(),
   };
   linkSeededProjects(state);
   return state;
