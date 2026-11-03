@@ -2,6 +2,8 @@
 //! `cargo run --example source_read -- '{"kind":"docker.stats"}'`
 //! What is connected (no tokens):
 //! `cargo run --example source_read -- --integrations`
+//! A git source in a folder (the app uses the chat's):
+//! `cargo run --example source_read -- --in ~/code/app '{"kind":"git.diff","range":"main...HEAD"}'`
 //! Save a database connection (tested first), as the app's dialog does:
 //! `cargo run --example source_read -- --add-connection shop postgres://…`
 #[tokio::main(flavor = "current_thread")]
@@ -20,10 +22,14 @@ async fn main() {
         }
         return;
     }
+    let (cwd, args) = match args.first().map(String::as_str) {
+        Some("--in") => (args.get(1).map(std::path::PathBuf::from), args.get(2..).unwrap_or_default().to_vec()),
+        _ => (None, args),
+    };
     let arg = args.first().cloned().unwrap_or_else(|| r#"{"kind":"system"}"#.into());
     let source: serde_json::Value = serde_json::from_str(&arg).expect("a JSON source");
     let s = yaah_lib::sources::Sources::new();
-    match s.read(&source).await {
+    match s.read_in(&source, cwd.as_deref()).await {
         Ok(v) => println!("{}", serde_json::to_string_pretty(&v).unwrap()),
         Err(e) => eprintln!("error: {e}"),
     }

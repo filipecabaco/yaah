@@ -850,5 +850,110 @@
    "updatedAt": "2026-10-04T11:27:36Z",
    "url": "https://github.com/supabase/realtime/pull/2329"
   }
- ]
+ ],
+  "git.diff": {
+    "additions": 38,
+    "deletions": 14,
+    "files": [
+      {
+        "additions": 1,
+        "binary": false,
+        "deletions": 1,
+        "oldPath": "docs/refunds.md",
+        "path": "docs/billing/refunds.md",
+        "status": "renamed"
+      },
+      {
+        "additions": 14,
+        "binary": false,
+        "deletions": 7,
+        "path": "internal/billing/refund.go",
+        "status": "modified"
+      },
+      {
+        "additions": 14,
+        "binary": false,
+        "deletions": 2,
+        "path": "internal/billing/refund_test.go",
+        "status": "modified"
+      },
+      {
+        "additions": 0,
+        "binary": false,
+        "deletions": 2,
+        "path": "scripts/old-migrate.sh",
+        "status": "deleted"
+      },
+      {
+        "additions": 0,
+        "binary": true,
+        "deletions": 0,
+        "path": "web/public/receipt.png",
+        "status": "added"
+      },
+      {
+        "additions": 9,
+        "binary": false,
+        "deletions": 2,
+        "path": "web/src/refund-form.tsx",
+        "status": "modified"
+      }
+    ],
+    "range": "main...HEAD",
+    "staged": false,
+    "text": "diff --git a/docs/refunds.md b/docs/billing/refunds.md\nsimilarity index 62%\nrename from docs/refunds.md\nrename to docs/billing/refunds.md\nindex 2bf8e8f..1bdf042 100644\n--- a/docs/refunds.md\n+++ b/docs/billing/refunds.md\n@@ -1,6 +1,6 @@\n # Refunds\n \n-A refund gives back the whole order.\n+A refund gives back the items asked for, never more than is left on the order.\n \n Refunds are stored in the `refunds` table.\n Each refund belongs to one order.\ndiff --git a/internal/billing/refund.go b/internal/billing/refund.go\nindex e677a15..29110ca 100644\n--- a/internal/billing/refund.go\n+++ b/internal/billing/refund.go\n@@ -3,23 +3,30 @@ package billing\n import (\n \t\"context\"\n \t\"database/sql\"\n+\t\"errors\"\n )\n \n-// refundQuery finds what an order can still give back.\n+// ErrOverRefund is returned when the items asked for are worth more than is left to refund.\n+var ErrOverRefund = errors.New(\"billing: refund is larger than what is left on the order\")\n+\n+// refundQuery finds what an order can still give back, and what the given items are worth.\n const refundQuery = `\n-\tSELECT o.id, o.total_cents, COALESCE(SUM(r.amount_cents), 0) AS refunded_cents\n+\tSELECT o.id, o.total_cents, COALESCE(SUM(r.amount_cents), 0) AS refunded_cents, COALESCE((SELECT SUM(i.price_cents * i.quantity) FROM order_items i WHERE i.order_id = o.id AND i.id = ANY($2)), 0) AS items_cents\n \tFROM orders o\n \tLEFT JOIN refunds r ON r.order_id = o.id\n \tWHERE o.id = $1\n \tGROUP BY o.id, o.total_cents\n `\n \n-// Refund gives back the whole order.\n-func Refund(ctx context.Context, db *sql.DB, orderID string) (int64, error) {\n+// Refund gives back the given items of an order, never more than is left.\n+func Refund(ctx context.Context, db *sql.DB, orderID string, itemIDs []string) (int64, error) {\n \tvar id string\n-\tvar total, refunded int64\n-\tif err := db.QueryRowContext(ctx, refundQuery, orderID).Scan(&id, &total, &refunded); err != nil {\n+\tvar total, refunded, items int64\n+\tif err := db.QueryRowContext(ctx, refundQuery, orderID, itemIDs).Scan(&id, &total, &refunded, &items); err != nil {\n \t\treturn 0, err\n \t}\n-\treturn total - refunded, nil\n+\tif items > total-refunded {\n+\t\treturn 0, ErrOverRefund\n+\t}\n+\treturn items, nil\n }\ndiff --git a/internal/billing/refund_test.go b/internal/billing/refund_test.go\nindex 1e3891f..5b2bb20 100644\n--- a/internal/billing/refund_test.go\n+++ b/internal/billing/refund_test.go\n@@ -2,6 +2,18 @@ package billing\n \n import \"testing\"\n \n-func TestRefundWholeOrder(t *testing.T) {\n-\tt.Skip(\"needs a database\")\n+func TestRefundOnlyTheGivenItems(t *testing.T) {\n+\tcases := []struct {\n+\t\tname  string\n+\t\titems []string\n+\t\twant  int64\n+\t}{\n+\t\t{\"one mug\", []string{\"mug\"}, 1499},\n+\t\t{\"nothing\", nil, 0},\n+\t}\n+\tfor _, c := range cases {\n+\t\tt.Run(c.name, func(t *testing.T) {\n+\t\t\tt.Skip(\"needs a database\")\n+\t\t})\n+\t}\n }\ndiff --git a/scripts/old-migrate.sh b/scripts/old-migrate.sh\ndeleted file mode 100644\nindex 2139a98..0000000\n--- a/scripts/old-migrate.sh\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-#!/bin/sh\n-psql \"$DATABASE_URL\" -f migrations/001_refunds.sql\ndiff --git a/web/public/receipt.png b/web/public/receipt.png\nnew file mode 100644\nindex 0000000..5b7d1ca\nBinary files /dev/null and b/web/public/receipt.png differ\ndiff --git a/web/src/refund-form.tsx b/web/src/refund-form.tsx\nindex 70801c9..5cbeffa 100644\n--- a/web/src/refund-form.tsx\n+++ b/web/src/refund-form.tsx\n@@ -1,10 +1,17 @@\n import { useState } from \"react\";\n \n-export function RefundForm({ orderId }: { orderId: string }) {\n+export function RefundForm({ orderId, items }: { orderId: string; items: { id: string; name: string }[] }) {\n   const [busy, setBusy] = useState(false);\n+  const [picked, setPicked] = useState<string[]>([]);\n   return (\n     <form onSubmit={() => setBusy(true)}>\n-      <button disabled={busy}>Refund order {orderId}</button>\n+      {items.map((i) => (\n+        <label key={i.id}>\n+          <input type=\"checkbox\" onChange={(e) => setPicked(e.target.checked ? [...picked, i.id] : picked.filter((p) => p !== i.id))} />\n+          {i.name}\n+        </label>\n+      ))}\n+      <button disabled={busy || picked.length === 0}>Refund {picked.length} items</button>\n     </form>\n   );\n }\n",
+    "truncated": false
+  },
+  "git.log": [
+    {
+      "author": "Grace Hopper",
+      "body": "Partial refunds: Refund takes item ids and refuses more than is left.",
+      "date": "2026-11-03T12:19:58Z",
+      "email": "grace@example.com",
+      "sha": "8dc36bfa977d8c6cf2c284c76f7f3d78c34086d0",
+      "short": "8dc36bf",
+      "subject": "Refund only the given items"
+    },
+    {
+      "author": "Grace Hopper",
+      "body": "",
+      "date": "2026-11-03T12:19:58Z",
+      "email": "grace@example.com",
+      "sha": "d8bcd145a6f2e1e7c089cc828def40c5df35cd49",
+      "short": "d8bcd14",
+      "subject": "Refund whole orders"
+    }
+  ],
+  "git.status": {
+    "ahead": 0,
+    "behind": 0,
+    "branch": "feat/partial-refunds",
+    "clean": false,
+    "detached": false,
+    "files": [
+      {
+        "index": "modified",
+        "path": "internal/billing/refund_test.go",
+        "worktree": null
+      },
+      {
+        "index": null,
+        "path": "web/src/refund-form.tsx",
+        "worktree": "modified"
+      },
+      {
+        "index": null,
+        "path": "TODO.md",
+        "worktree": "untracked"
+      }
+    ],
+    "oid": "8dc36bfa977d8c6cf2c284c76f7f3d78c34086d0",
+    "upstream": null
+  },
+  "git.show": {
+    "binary": false,
+    "rev": "HEAD",
+    "text": "commit 8dc36bfa977d8c6cf2c284c76f7f3d78c34086d0\nAuthor:     Grace Hopper <grace@example.com>\nAuthorDate: Tue Nov 3 12:19:58 2026 +0000\nCommit:     Grace Hopper <grace@example.com>\nCommitDate: Tue Nov 3 12:19:58 2026 +0000\n\n    Refund only the given items\n    \n    Partial refunds: Refund takes item ids and refuses more than is left.\n\ndiff --git a/docs/refunds.md b/docs/billing/refunds.md\nsimilarity index 62%\nrename from docs/refunds.md\nrename to docs/billing/refunds.md\nindex 2bf8e8f..1bdf042 100644\n--- a/docs/refunds.md\n+++ b/docs/billing/refunds.md\n@@ -1,6 +1,6 @@\n # Refunds\n \n-A refund gives back the whole order.\n+A refund gives back the items asked for, never more than is left on the order.\n \n Refunds are stored in the `refunds` table.\n Each refund belongs to one order.\ndiff --git a/internal/billing/refund.go b/internal/billing/refund.go\nindex e677a15..29110ca 100644\n--- a/internal/billing/refund.go\n+++ b/internal/billing/refund.go\n@@ -3,23 +3,30 @@ package billing\n import (\n \t\"context\"\n \t\"database/sql\"\n+\t\"errors\"\n )\n \n-// refundQuery finds what an order can still give back.\n+// ErrOverRefund is returned when the items asked for are worth more than is left to refund.\n+var ErrOverRefund = errors.New(\"billing: refund is larger than what is left on the order\")\n+\n+// refundQuery finds what an order can still give back, and what the given items are worth.\n const refundQuery = `\n-\tSELECT o.id, o.total_cents, COALESCE(SUM(r.amount_cents), 0) AS refunded_cents\n+\tSELECT o.id, o.total_cents, COALESCE(SUM(r.amount_cents), 0) AS refunded_cents, COALESCE((SELECT SUM(i.price_cents * i.quantity) FROM order_items i WHERE i.order_id = o.id AND i.id = ANY($2)), 0) AS items_cents\n \tFROM orders o\n \tLEFT JOIN refunds r ON r.order_id = o.id\n \tWHERE o.id = $1\n \tGROUP BY o.id, o.total_cents\n `\n \n-// Refund gives back the whole order.\n-func Refund(ctx context.Context, db *sql.DB, orderID string) (int64, error) {\n+// Refund gives back the given items of an order, never more than is left.\n+func Refund(ctx context.Context, db *sql.DB, orderID string, itemIDs []string) (int64, error) {\n \tvar id string\n-\tvar total, refunded int64\n-\tif err := db.QueryRowContext(ctx, refundQuery, orderID).Scan(&id, &total, &refunded); err != nil {\n+\tvar total, refunded, items int64\n+\tif err := db.QueryRowContext(ctx, refundQuery, orderID, itemIDs).Scan(&id, &total, &refunded, &items); err != nil {\n \t\treturn 0, err\n \t}\n-\treturn total - refunded, nil\n+\tif items > total-refunded {\n+\t\treturn 0, ErrOverRefund\n+\t}\n+\treturn items, nil\n }\ndiff --git a/internal/billing/refund_test.go b/internal/billing/refund_test.go\nindex 1e3891f..5b2bb20 100644\n--- a/internal/billing/refund_test.go\n+++ b/internal/billing/refund_test.go\n@@ -2,6 +2,18 @@ package billing\n \n import \"testing\"\n \n-func TestRefundWholeOrder(t *testing.T) {\n-\tt.Skip(\"needs a database\")\n+func TestRefundOnlyTheGivenItems(t *testing.T) {\n+\tcases := []struct {\n+\t\tname  string\n+\t\titems []string\n+\t\twant  int64\n+\t}{\n+\t\t{\"one mug\", []string{\"mug\"}, 1499},\n+\t\t{\"nothing\", nil, 0},\n+\t}\n+\tfor _, c := range cases {\n+\t\tt.Run(c.name, func(t *testing.T) {\n+\t\t\tt.Skip(\"needs a database\")\n+\t\t})\n+\t}\n }\ndiff --git a/scripts/old-migrate.sh b/scripts/old-migrate.sh\ndeleted file mode 100644\nindex 2139a98..0000000\n--- a/scripts/old-migrate.sh\n+++ /dev/null\n@@ -1,2 +0,0 @@\n-#!/bin/sh\n-psql \"$DATABASE_URL\" -f migrations/001_refunds.sql\ndiff --git a/web/public/receipt.png b/web/public/receipt.png\nnew file mode 100644\nindex 0000000..5b7d1ca\nBinary files /dev/null and b/web/public/receipt.png differ\ndiff --git a/web/src/refund-form.tsx b/web/src/refund-form.tsx\nindex 70801c9..5cbeffa 100644\n--- a/web/src/refund-form.tsx\n+++ b/web/src/refund-form.tsx\n@@ -1,10 +1,17 @@\n import { useState } from \"react\";\n \n-export function RefundForm({ orderId }: { orderId: string }) {\n+export function RefundForm({ orderId, items }: { orderId: string; items: { id: string; name: string }[] }) {\n   const [busy, setBusy] = useState(false);\n+  const [picked, setPicked] = useState<string[]>([]);\n   return (\n     <form onSubmit={() => setBusy(true)}>\n-      <button disabled={busy}>Refund order {orderId}</button>\n+      {items.map((i) => (\n+        <label key={i.id}>\n+          <input type=\"checkbox\" onChange={(e) => setPicked(e.target.checked ? [...picked, i.id] : picked.filter((p) => p !== i.id))} />\n+          {i.name}\n+        </label>\n+      ))}\n+      <button disabled={busy || picked.length === 0}>Refund {picked.length} items</button>\n     </form>\n   );\n }\n",
+    "truncated": false
+  }
 }

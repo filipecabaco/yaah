@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
@@ -46,6 +46,8 @@ const QUERY_TIMEOUT_MS: u32 = 15_000;
 const DEFAULT_ROW_LIMIT: u64 = 1_000;
 const MAX_ROW_LIMIT: u64 = 10_000;
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+mod git;
 
 /// A reading shared by concurrent callers: the first runs it, the rest wait and
 /// reuse it while it is fresh (when it was taken, for how long, the answer).
@@ -216,9 +218,19 @@ impl Sources {
         self
     }
 
-    /// Read a source. Errors are written for the agent or user to act on.
+    /// Read a source outside any chat (git sources need one). Errors are written for the agent or user to act on.
     pub async fn read(&self, source: &Value) -> Result<Value, String> {
+        self.read_in(source, None).await
+    }
+
+    /// Read a source for a chat whose folder is `cwd`: git sources read that
+    /// folder (yaah supplies it from the session; a source never names one).
+    pub async fn read_in(&self, source: &Value, cwd: Option<&Path>) -> Result<Value, String> {
         let kind = source["kind"].as_str().ok_or("a source needs a `kind`")?;
+        if git::is_git(kind) {
+            let cwd = cwd.ok_or_else(|| format!("{kind} reads the chat's folder: show it inside a chat"))?;
+            return self.git_shared(kind, source, cwd).await;
+        }
         match kind {
             "system" => {
                 // Refreshing reads every process: off the async threads.
@@ -244,9 +256,28 @@ impl Sources {
                 postgres_query(&self.pool, &self.connection(&source["connection"])?, sql, limit).await
             }
             other => Err(format!(
-                "unknown source kind `{other}`; known: system, docker.containers, docker.stats, docker.logs, github.pr, github.pr.diff, github.prs, github.issue, github.issues, gitlab.issue, gitlab.issues, linear.issue, linear.issues, linear.project, linear.board, linear.cycle, postgres.schema, postgres.query"
+                "unknown source kind `{other}`; known: system, docker.containers, docker.stats, docker.logs, github.pr, github.pr.diff, github.prs, github.issue, github.issues, gitlab.issue, gitlab.issues, linear.issue, linear.issues, linear.project, linear.board, linear.cycle, postgres.schema, postgres.query, git.diff, git.log, git.status, git.show"
             )),
         }
+    }
+
+    /// A git source in `cwd`, shared like the others: identical reads in flight
+    /// run git once, and the answer is reused while fresh (at least [`FRESH`],
+    /// and as long as the run took, so a slow diff isn't run back to back).
+    async fn git_shared(&self, kind: &str, source: &Value, cwd: &Path) -> Result<Value, String> {
+        let slot = shared_slot(&self.api, format!("git\u{1f}{}\u{1f}{}", cwd.display(), canonical(source)));
+        let arrived = Instant::now();
+        let mut slot = slot.lock().await;
+        if let Some((at, fresh, out)) = &*slot
+            && (at.elapsed() < *fresh || (out.is_err() && *at >= arrived))
+        {
+            return out.clone();
+        }
+        let started = Instant::now();
+        let out = git::read(kind, source, cwd).await;
+        let fresh = if out.is_ok() { started.elapsed().max(FRESH) } else { Duration::ZERO };
+        *slot = Some((Instant::now(), fresh, out.clone()));
+        out
     }
 
     /// A GitHub, Linear or GitLab source, shared: identical reads in flight make

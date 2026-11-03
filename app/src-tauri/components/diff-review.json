@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "changeNote": "First release in the yaah pack.",
+  "name": "diff-review",
+  "description": "Review a change in this chat's git repository, read live with git.diff (no diff text goes through you): a file list with status, +/− and viewed ticks, one file at a time (tabs when narrow), j/k files, n/p hunks, v viewed. Per file and hunk the user can ask about it or ask for a change or revert (drafted into their message box, never applied), copy, and open the file in their editor. Use it to show what you changed, a branch against main, or the staged changes, instead of pasting a diff or a --stat.",
+  "props": {
+    "type": "object",
+    "properties": {
+      "range": {
+        "type": "string",
+        "description": "What to compare, e.g. \"main...HEAD\" (this branch) or \"HEAD~1\". Omit for the working tree (staged and not) against HEAD."
+      },
+      "staged": {
+        "type": "boolean",
+        "description": "Only the staged changes (index against HEAD)."
+      },
+      "paths": {
+        "type": "array",
+        "description": "Only these paths, relative to the chat's folder."
+      },
+      "title": {
+        "type": "string",
+        "description": "What the change is, e.g. \"Refunds: this branch against main\"."
+      }
+    }
+  },
+  "tree": {
+    "type": "live",
+    "props": {
+      "source": {
+        "kind": "git.diff",
+        "range": "{{range}}",
+        "staged": "{{staged}}",
+        "paths": "{{paths}}"
+      },
+      "every": 15000,
+      "as": "diff"
+    },
+    "children": [
+      {
+        "type": "diffreview",
+        "props": {
+          "name": "viewed",
+          "text": "{{diff.text}}",
+          "files": "{{diff.files}}",
+          "range": "{{diff.range}}",
+          "truncated": "{{diff.truncated}}",
+          "title": "{{title}}"
+        }
+      }
+    ]
+  },
+  "examples": [
+    {
+      "title": "This branch against main",
+      "props": {
+        "range": "main...HEAD",
+        "title": "feat/refunds against main"
+      }
+    },
+    {
+      "title": "What is staged, in src/",
+      "props": {
+        "staged": true,
+        "paths": ["src"],
+        "title": "Staged changes"
+      }
+    },
+    {
+      "title": "Uncommitted work",
+      "props": {}
+    }
+  ]
+}
