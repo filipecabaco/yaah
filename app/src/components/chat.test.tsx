@@ -130,8 +130,8 @@ describe("a form the user and the agent fill together", () => {
   });
 });
 
-describe("the Assembling UI card", () => {
-  it("spins while ui_render is pending and in progress, then takes the UI's title", async () => {
+describe("the ui_render card", () => {
+  it("spins while ui_render is pending and in progress, says what it builds, then that it rendered it", async () => {
     // Real (short) waits between the recorded steps, so each state is on screen for a moment.
     const { user } = renderApp({ delay: 0.3 });
     const statuses: (string | null)[] = [];
@@ -141,18 +141,20 @@ describe("the Assembling UI card", () => {
     });
     const log = await sendInQuickChat(user, "show the deploys");
 
-    // Pending, then in progress: the card says the UI is being put together, with a spinner.
-    const card = (await within(log).findByText("Assembling UI")).closest('[data-slot="collapsible-trigger"]')?.parentElement as HTMLElement;
+    // Pending, then in progress: the card says the UI is being built (its title once known), with a spinner.
+    const card = (await within(log).findByText(/^Building (the UI…|Deploys)$/)).closest('[data-slot="collapsible-trigger"]')
+      ?.parentElement as HTMLElement;
     expect(within(card).getByText("in progress")).toHaveClass("sr-only");
     expect(card.querySelector(".animate-spin")).not.toBeNull();
     expect(within(card).queryByText("done")).toBeNull();
 
-    // Completed: the UI's own title, no spinner, and the UI itself below.
-    expect(await within(log).findByText("Deploys", { selector: "span" })).toBeInTheDocument();
-    await waitFor(() => expect(within(log).queryByText("Assembling UI")).toBeNull());
-    const done = within(log).getByText("Deploys", { selector: "span" }).closest('[data-slot="collapsible-trigger"]')?.parentElement as HTMLElement;
+    // Completed: "Rendered" and the UI's title, with what's in it, no spinner, and the UI itself below.
+    expect(await within(log).findByText("Rendered Deploys")).toBeInTheDocument();
+    await waitFor(() => expect(within(log).queryByText(/^Building/)).toBeNull());
+    const done = within(log).getByText("Rendered Deploys").closest('[data-slot="collapsible-trigger"]')?.parentElement as HTMLElement;
     expect(done.querySelector(".animate-spin")).toBeNull();
     expect(within(done).getByText("done")).toBeInTheDocument();
+    expect(within(done).getByText("table")).toBeInTheDocument();
     expect(await within(log).findByRole("table")).toHaveTextContent("rolling out");
     expect(statuses).toEqual(["pending", "in_progress", "in_progress", "completed"]);
     off();

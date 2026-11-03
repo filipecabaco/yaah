@@ -74,19 +74,19 @@ describe("Settings → Chat", () => {
     render(<Probe />);
     const dialog = await openSettings(user, "Chat");
 
-    await user.type(await within(dialog).findByRole("textbox", { name: "Kind of tool" }), "kind:execute");
+    await user.type(await within(dialog).findByRole("textbox", { name: "Kind of tool" }), "kind:delete");
     await user.click(within(dialog).getByRole("combobox", { name: "How its cards open" }));
     await user.click(await screen.findByRole("option", { name: "Expanded" }));
     await user.click(within(dialog).getByRole("button", { name: /add rule/i }));
 
     // Listed under its readable name, stored by Rust, and in effect for every card.
-    expect(await within(dialog).findByText("Commands (any)")).toBeInTheDocument();
-    await waitFor(async () => expect((await api.generalSettings()).toolCards.rules["kind:execute"]).toBe("expanded"));
-    await waitFor(() => expect(live["kind:execute"]).toBe("expanded"));
+    expect(await within(dialog).findByText("Deletions (any)")).toBeInTheDocument();
+    await waitFor(async () => expect((await api.generalSettings()).toolCards.rules["kind:delete"]).toBe("expanded"));
+    await waitFor(() => expect(live["kind:delete"]).toBe("expanded"));
 
-    await user.click(within(dialog).getByRole("button", { name: "Reset kind:execute" }));
-    await waitFor(async () => expect((await api.generalSettings()).toolCards.rules["kind:execute"]).toBeUndefined());
-    await waitFor(() => expect(live["kind:execute"]).toBeUndefined());
+    await user.click(within(dialog).getByRole("button", { name: "Reset kind:delete" }));
+    await waitFor(async () => expect((await api.generalSettings()).toolCards.rules["kind:delete"]).toBeUndefined());
+    await waitFor(() => expect(live["kind:delete"]).toBeUndefined());
   });
 });
 

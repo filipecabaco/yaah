@@ -2,7 +2,7 @@
 // either fetched from a Rust command or applied from a Rust event.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { api, events, type AgentProfile, type Project, type SessionInfo, type WorkItem } from "@/lib/api";
+import { api, events, type AgentProfile, type NewProjectOptions, type Project, type SessionInfo, type WorkItem } from "@/lib/api";
 import { TranscriptStore } from "@/lib/transcripts";
 
 /** Sidebar order: archived projects sink to the bottom; otherwise newest first. */
@@ -71,8 +71,8 @@ export function useYaah() {
   }, []);
 
   const createProject = useCallback(
-    async (name: string, dirs: string[]) => {
-      const p = await api.createProject(name, dirs);
+    async (name: string, dirs: string[], options?: NewProjectOptions) => {
+      const p = await api.createProject(name, dirs, options);
       putProject(p);
       setSelection({ kind: "project", id: p.id });
     },
@@ -85,15 +85,25 @@ export function useYaah() {
     setSelection(null);
   }, []);
 
+  /** The agent a project's new chats start with: its own while it still exists, else the sidebar's. */
+  const agentFor = useCallback(
+    (projectId: string | null | undefined) => {
+      const own = projects.find((p) => p.id === projectId)?.agentId;
+      return own && agents.some((a) => a.id === own) ? own : agentId;
+    },
+    [projects, agents, agentId],
+  );
+
+  /** A chat in a project, with `agent` when the user picked one, else the project's. */
   const newChat = useCallback(
-    async (projectId: string) => {
-      const info = await api.newSession(projectId, agentId);
+    async (projectId: string, agent?: string) => {
+      const info = await api.newSession(projectId, agent || agentFor(projectId));
       transcripts.created(info.sessionId);
       setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
       setSelection({ kind: "chat", id: info.sessionId });
       return info.sessionId;
     },
-    [agentId, transcripts],
+    [agentFor, transcripts],
   );
 
   /**
@@ -101,8 +111,8 @@ export function useYaah() {
    * new chat when Rust started one (else the project); the caller drafts its prompt.
    */
   const startFromItem = useCallback(
-    async (item: WorkItem) => {
-      const started = await api.startProjectFromItem(item.service, item.id, agentId);
+    async (item: WorkItem, agent?: string) => {
+      const started = await api.startProjectFromItem(item.service, item.id, agent || agentId);
       putProject(started.project);
       if (started.chatId) {
         const id = started.chatId;
@@ -116,10 +126,10 @@ export function useYaah() {
     [agentId, putProject],
   );
 
-  /** A chat outside any project, in `dir` or a fresh scratch folder. */
+  /** A chat outside any project, in `dir` or a fresh scratch folder, with `agent` or the sidebar's. */
   const newQuickChat = useCallback(
-    async (dir?: string) => {
-      const info = await api.newQuickChat(agentId, dir);
+    async (dir?: string, agent?: string) => {
+      const info = await api.newQuickChat(agent || agentId, dir);
       transcripts.created(info.sessionId);
       setSessions((prev) => ({ ...prev, [info.sessionId]: info }));
       setSelection({ kind: "chat", id: info.sessionId });
@@ -214,6 +224,7 @@ export function useYaah() {
     /** Every chat's transcript; a chat reads its own with `useTranscript`. */
     transcripts,
     activeProject: projects.find((p) => p.id === activeProjectId) ?? null,
+    agentFor,
     newChat,
     newQuickChat,
     newChatInFolder,

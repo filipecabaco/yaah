@@ -1,5 +1,6 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { FolderGit2, MessageSquarePlus } from "lucide-react";
+import { ChevronDown, FolderGit2, MessageSquarePlus } from "lucide-react";
+import { AgentMenu } from "@/components/agent-choice";
 import { Mark } from "@/components/brand/mark";
 import { Chat } from "@/components/chat";
 import { focusComposer } from "@/components/chat-context";
@@ -18,7 +19,7 @@ import { useShortcuts } from "@/hooks/use-shortcuts";
 import { useYaah, type Selection } from "@/hooks/use-yaah";
 import { TranscriptsContext } from "@/hooks/use-transcript";
 import { api, canChat, type AgentProfile, type SessionInfo } from "@/lib/api";
-import { onOpenComponent, onOpenSettings } from "@/lib/app-events";
+import { onOpenAgentSwitch, onOpenComponent, onOpenSettings } from "@/lib/app-events";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
 import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
 
@@ -62,14 +63,15 @@ export default function App() {
   const agents = y.agents;
   // Stable, so finished chat entries (which get it) don't re-render with the app.
   const loginById = useCallback((id: string) => setLoginFor(agents.find((a) => a.id === id) ?? null), [agents]);
-  /** Start a chat if the agent can; otherwise log it in, or add one. */
+  /** Start a chat if its agent (`id`, else the sidebar's) can; otherwise log it in, or add one. */
   const withAgent = useCallback(
-    (start: () => Promise<unknown>) => {
-      if (!agent) return setSetup({ kind: "add" });
-      if (!canChat(agent)) return setLoginFor(agent);
+    (start: () => Promise<unknown>, id?: string) => {
+      const a = id ? agents.find((x) => x.id === id) : agent;
+      if (!a) return setSetup({ kind: "add" });
+      if (!canChat(a)) return setLoginFor(a);
       start().catch(console.error);
     },
-    [agent],
+    [agent, agents],
   );
   const select = y.setSelection;
   const openChat = (id: string) => select({ kind: "chat", id });
@@ -99,6 +101,7 @@ export default function App() {
     onManageAgents: useCallback(() => setSetup({ kind: "manage", id: agentId || undefined }), [agentId]),
     onSettings: useCallback(() => setSetup({ kind: "settings" }), []),
     onNewQuickChat: useCallback(() => withAgent(() => newQuickChat()), [withAgent, newQuickChat]),
+    onNewQuickChatWith: useCallback((id: string) => withAgent(() => newQuickChat(undefined, id), id), [withAgent, newQuickChat]),
     onNewChatInFolder: useCallback(() => withAgent(() => newChatInFolder()), [withAgent, newChatInFolder]),
     onNewProject: useCallback(() => setCreatingProject("name"), []),
     onPalette: useCallback(() => setPalette({ kind: "root" }), []),
@@ -137,6 +140,8 @@ export default function App() {
 
   // Cards in a chat (e.g. MCP notices) can open Settings on a tab.
   useEffect(() => onOpenSettings((tab) => setSetup({ kind: "settings", tab: tab as SettingsTab })), []);
+  // A chat's agent badge and its /agent command open the agent picker for that chat.
+  useEffect(() => onOpenAgentSwitch((sessionId) => setPalette({ kind: "chatAgent", sessionId })), []);
   // A rendered UI's menu can open its component in the library.
   useEffect(
     () =>
@@ -162,7 +167,7 @@ export default function App() {
       setSetup((s) => (s ? null : { kind: "settings" }));
     },
     // In a project: a chat there. Anywhere else: a quick chat outside any project.
-    newChat: () => withAgent(() => (project ? y.newChat(project.id) : y.newQuickChat())),
+    newChat: () => (project ? withAgent(() => y.newChat(project.id), y.agentFor(project.id)) : withAgent(() => y.newQuickChat())),
     newProject: () => setCreatingProject("name"),
     focusComposer,
     stop: () => {
@@ -269,13 +274,14 @@ export default function App() {
                   <ProjectView
                     project={project}
                     chats={y.chatsByProject[project.id] ?? []}
-                    account={agent}
+                    agents={y.agents}
+                    account={y.agents.find((a) => a.id === y.agentFor(project.id))}
                     onChange={y.putProject}
                     onDelete={y.deleteProject}
                     onOpenChat={openChat}
-                    onNewChat={(id) => {
+                    onNewChat={(id, agentId) => {
                       setStartNote(null);
-                      return y.newChat(id);
+                      return y.newChat(id, agentId);
                     }}
                     onLogin={setLoginFor}
                     askDelete={askDelete === project.id}
@@ -297,9 +303,24 @@ export default function App() {
                       Start a quick chat for something small, or a project when the work spans several repos.
                     </p>
                     <div className="flex flex-wrap justify-center gap-2">
-                      <Button onClick={() => withAgent(() => y.newQuickChat())}>
-                        <MessageSquarePlus /> Quick chat <Kbd className="ml-1">{formatKeys(SHORTCUTS.newChat.keys)}</Kbd>
-                      </Button>
+                      <div className="flex">
+                        <Button className={y.agents.length > 1 ? "rounded-r-none" : undefined} onClick={() => withAgent(() => y.newQuickChat())}>
+                          <MessageSquarePlus /> Quick chat <Kbd className="ml-1">{formatKeys(SHORTCUTS.newChat.keys)}</Kbd>
+                        </Button>
+                        {y.agents.length > 1 && (
+                          <AgentMenu
+                            agents={y.agents}
+                            heading="Quick chat with…"
+                            current={y.agentId}
+                            currentHint={formatKeys(SHORTCUTS.newChat.keys)}
+                            onPick={sidebar.onNewQuickChatWith}
+                          >
+                            <Button className="rounded-l-none border-l-primary-foreground/20 px-2" aria-label="Start a quick chat with…">
+                              <ChevronDown />
+                            </Button>
+                          </AgentMenu>
+                        )}
+                      </div>
                       <Button variant="outline" onClick={() => setCreatingProject("name")}>
                         <FolderGit2 /> New project <Kbd className="ml-1">{formatKeys(SHORTCUTS.newProject.keys)}</Kbd>
                       </Button>
@@ -328,10 +349,12 @@ export default function App() {
                   <NewProjectDialog
                     open={creatingProject != null}
                     mode={creatingProject ?? "name"}
+                    agents={y.agents}
+                    agentId={y.agentId}
                     onClose={() => setCreatingProject(null)}
                     onCreate={y.createProject}
-                    onStart={async (item) => {
-                      const started = await y.startFromItem(item);
+                    onStart={async (item, agentId) => {
+                      const started = await y.startFromItem(item, agentId);
                       setStartNote(started.chatError ? { projectId: started.project.id, message: started.chatError } : null);
                       return started;
                     }}

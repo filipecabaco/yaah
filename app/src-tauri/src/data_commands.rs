@@ -112,9 +112,83 @@ pub async fn export_library(
 
 // ── Sources and data connections ────────────────────────────────────────────
 
+/// Read a source for the UI. `session` is the chat the UI is in: git sources
+/// read that chat's folder (looked up here, so the page never names a path).
 #[tauri::command]
-pub async fn read_source(sources: State<'_, Arc<sources::Sources>>, source: serde_json::Value) -> Result<serde_json::Value, String> {
-    sources.read(&source).await
+pub async fn read_source(
+    sources: State<'_, Arc<sources::Sources>>,
+    hub: State<'_, Arc<Hub>>,
+    source: serde_json::Value,
+    session: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let cwd = session.and_then(|id| hub.session_roots(&id).into_iter().next());
+    sources.read_in(&source, cwd.as_deref()).await
+}
+
+/// Kinds of file the system would run, install or follow rather than show:
+/// "Open in editor" refuses them (an agent can write any file into the chat's folder).
+const RUNNABLE: &[&str] = &[
+    "app",
+    "command",
+    "tool",
+    "terminal",
+    "workflow",
+    "action",
+    "pkg",
+    "mpkg",
+    "dmg",
+    "scpt",
+    "scptd",
+    "applescript",
+    "prefpane",
+    "webloc",
+    "inetloc",
+    "fileloc",
+    "desktop",
+    "appimage",
+    "deb",
+    "rpm",
+    "jar",
+    "exe",
+    "bat",
+    "cmd",
+];
+
+/// `path` (relative to the chat's folder, or absolute) as a regular file inside
+/// one of the chat's `roots` that opening won't run.
+pub(crate) fn editable_file(roots: &[std::path::PathBuf], path: &str) -> Result<std::path::PathBuf, String> {
+    let root = roots.first().ok_or("this chat has no folder")?;
+    let wanted = std::path::Path::new(path);
+    let full = if wanted.is_absolute() { wanted.to_path_buf() } else { root.join(wanted) };
+    let real = full.canonicalize().map_err(|_| format!("{path} doesn't exist in the chat's folder (deleted, or not checked out)"))?;
+    let inside = roots.iter().filter_map(|r| r.canonicalize().ok()).any(|r| real.starts_with(r));
+    if !inside {
+        return Err(format!("{path} isn't in the chat's folders"));
+    }
+    let meta = std::fs::metadata(&real).map_err(|e| e.to_string())?;
+    if !meta.is_file() {
+        return Err(format!("{path} isn't a file"));
+    }
+    let ext = real.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+    #[cfg(unix)]
+    let executable = {
+        use std::os::unix::fs::PermissionsExt;
+        meta.permissions().mode() & 0o111 != 0
+    };
+    #[cfg(not(unix))]
+    let executable = false;
+    if executable || RUNNABLE.contains(&ext.as_str()) {
+        return Err(format!("{path} would run rather than open; open it from your editor"));
+    }
+    Ok(real)
+}
+
+/// Open a file from a chat (a diff's "Open in editor") with the system's app for it.
+#[tauri::command]
+pub fn open_in_editor(app: AppHandle, hub: State<'_, Arc<Hub>>, session: String, path: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let file = editable_file(&hub.session_roots(&session), &path)?;
+    app.opener().open_path(file.to_string_lossy(), None::<&str>).map_err(|e| e.to_string())
 }
 
 // ── Settings → General ───────────────────────────────────────────────────────
@@ -225,16 +299,25 @@ pub async fn start_project_from_item(
 ) -> Result<Started, String> {
     let hub = hub.inner().clone();
     let account = account_id.filter(|a| !a.is_empty()).or_else(|| agents::Store::user().load().default_id());
+    // The project keeps the agent its first chat starts with.
+    let keep = account.clone();
     let chat = |project: Project| async move {
         let account = account.ok_or("no agent is set up: add one in Settings → Agents, then start a chat in the project")?;
         hub.new_session(ChatTarget::Project(&project), &account).await.map(|info| info.session_id)
     };
     let roots = tauri::async_runtime::spawn_blocking(repos::roots).await.map_err(|e| e.to_string())?;
-    let started = work_items::start(Integrations::user(), &projects, &service, &id, roots, chat).await?;
+    let started = work_items::start(Integrations::user(), &projects, &service, &id, roots, keep, chat).await?;
     if !started.existing {
         projects_changed(&app, &started.project.id);
     }
     Ok(started)
+}
+
+/// The agent new chats in a project start with; none (or empty) leaves it to the sidebar's.
+#[tauri::command]
+pub fn set_project_agent(projects: State<'_, Projects>, id: String, agent_id: Option<String>) -> Result<Project, String> {
+    let agent = crate::projects::agent_choice(agent_id.as_deref(), |a| agents::Store::user().find(a).is_some())?;
+    projects.set_agent(&id, agent)
 }
 
 /// Fetch the item again and rewrite the brief's block (never the status or name).
@@ -333,4 +416,35 @@ pub fn mcp_import_candidates() -> Vec<mcp_servers::Candidate> {
 #[tauri::command]
 pub fn import_mcp_servers(picks: Vec<mcp_servers::ImportPick>) -> Result<Vec<mcp_servers::ServerInfo>, String> {
     Ok(mcp_servers::import(&picks)?.into_iter().map(mcp_servers::info_now).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opens_only_plain_files_inside_the_chat() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("yaah-open-{}", crate::session::random_token()));
+        let other = root.with_extension("other");
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(root.join("src/main.go"), "package main\n").unwrap();
+        std::fs::write(root.join("run.command"), "echo hi\n").unwrap();
+        std::fs::write(root.join("tool"), "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(root.join("tool"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(other.join("secret.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(other.join("secret.txt"), root.join("link.txt")).unwrap();
+        let roots = vec![root.clone()];
+        assert!(editable_file(&roots, "src/main.go").unwrap().ends_with("src/main.go"));
+        assert!(editable_file(&roots, &root.join("src/main.go").to_string_lossy()).is_ok());
+        assert!(editable_file(&roots, "../yaah-open-x.other/secret.txt").is_err());
+        assert!(editable_file(&roots, &other.join("secret.txt").to_string_lossy()).unwrap_err().contains("isn't in the chat"));
+        assert!(editable_file(&roots, "link.txt").unwrap_err().contains("isn't in the chat"), "a link out is followed, then refused");
+        assert!(editable_file(&roots, "run.command").unwrap_err().contains("would run"));
+        assert!(editable_file(&roots, "tool").unwrap_err().contains("would run"));
+        assert!(editable_file(&roots, "src").unwrap_err().contains("isn't a file"));
+        assert!(editable_file(&roots, "missing.go").unwrap_err().contains("doesn't exist"));
+        assert!(editable_file(&[], "a").is_err());
+    }
 }

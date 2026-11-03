@@ -1,5 +1,7 @@
 import { memo, useState, type ReactElement } from "react";
 import {
+  Bot,
+  ChevronDown,
   ChevronRight,
   CircleDot,
   Copy,
@@ -18,6 +20,7 @@ import {
   Trash2,
   Settings,
 } from "lucide-react";
+import { AgentMenu } from "@/components/agent-choice";
 import { Wordmark } from "@/components/brand/mark";
 import { ChatMenu, CopyMenuItem } from "@/components/menus";
 import { Hint } from "@/components/shortcuts";
@@ -44,6 +47,7 @@ import { Separator } from "@/components/ui/separator";
 import { api, canChat, PROJECT_STATUSES, type AgentProfile, type Project, type ProjectStatus, type SessionInfo } from "@/lib/api";
 import { baseName } from "@/lib/format";
 import type { Selection } from "@/hooks/use-yaah";
+import { useTrafficLights } from "@/hooks/use-titlebar";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +65,8 @@ type Props = {
   /** Chats outside any project, newest first. */
   quickChats: SessionInfo[];
   onNewQuickChat: () => void;
+  /** A quick chat with this agent rather than the one picked above. */
+  onNewQuickChatWith: (agentId: string) => void;
   onNewChatInFolder: () => void;
   selection: Selection;
   /** The project ⌘N starts a chat in: the open one, or the open chat's. */
@@ -82,12 +88,16 @@ type Props = {
 export const Sidebar = memo(function Sidebar(props: Props) {
   const { agents, agentId, projects, chatsByProject, selection, onSelect, onNewProject } = props;
   const account = agents.find((a) => a.id === agentId);
+  const trafficLights = useTrafficLights();
 
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="flex flex-col gap-2 p-3">
-        <div className="flex items-center justify-between gap-2">
-          <Wordmark className="px-1 text-sm" />
+        {/* Drags the window (the logo and Search stay clickable); on macOS it leaves room for the traffic lights. */}
+        <div data-tauri-drag-region="deep" className={cn("flex items-center justify-between gap-2", trafficLights && "pl-[68px]")}>
+          <span data-tauri-drag-region="false" className="inline-flex">
+            <Wordmark className="px-1 text-sm" />
+          </span>
           <Button variant="outline" size="sm" className="h-7 gap-2 px-2 text-muted-foreground" onClick={props.onPalette}>
             <Search /> Search
             <Kbd>{formatKeys(SHORTCUTS.palette.keys)}</Kbd>
@@ -128,17 +138,35 @@ export const Sidebar = memo(function Sidebar(props: Props) {
       <NewMenu
         quickChatShortcut={!props.activeProjectId}
         onNewQuickChat={props.onNewQuickChat}
+        agents={agents}
+        onNewQuickChatWith={props.onNewQuickChatWith}
         onNewChatInFolder={props.onNewChatInFolder}
         onNewProject={onNewProject}
       >
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex items-center justify-between px-3 pt-3 pb-1">
             <span className="px-1 text-xs font-medium text-muted-foreground">Chats</span>
-            <Hint label="New quick chat (no project)" shortcut="newChat">
-              <Button variant="ghost" size="icon-xs" onClick={props.onNewQuickChat} aria-label="New quick chat">
-                <Plus />
-              </Button>
-            </Hint>
+            <div className="flex items-center">
+              <Hint label="New quick chat (no project)" shortcut="newChat">
+                <Button variant="ghost" size="icon-xs" onClick={props.onNewQuickChat} aria-label="New quick chat">
+                  <Plus />
+                </Button>
+              </Hint>
+              {agents.length > 1 && (
+                <AgentMenu
+                  agents={agents}
+                  heading="Quick chat with…"
+                  current={agentId}
+                  currentHint={!props.activeProjectId && formatKeys(SHORTCUTS.newChat.keys)}
+                  align="end"
+                  onPick={props.onNewQuickChatWith}
+                >
+                  <Button variant="ghost" size="icon-xs" aria-label="Start a quick chat with…" title="Quick chat with…">
+                    <ChevronDown />
+                  </Button>
+                </AgentMenu>
+              )}
+            </div>
           </div>
           <QuickChats chats={props.quickChats} selection={selection} onSelect={onSelect} onNew={props.onNewQuickChat} />
 
@@ -171,7 +199,8 @@ export const Sidebar = memo(function Sidebar(props: Props) {
                   chats={chatsByProject[p.id] ?? []}
                   selection={selection}
                   onSelect={onSelect}
-                  account={account}
+                  // Its own agent while that exists, else the one picked above (use-yaah `agentFor`).
+                  account={agents.find((a) => a.id === p.agentId) ?? account}
                   active={p.id === props.activeProjectId}
                   onNewChat={props.onNewChat}
                   onChange={props.onProjectChange}
@@ -303,6 +332,8 @@ function ProjectNode({
 function NewMenu({
   quickChatShortcut,
   onNewQuickChat,
+  agents,
+  onNewQuickChatWith,
   onNewChatInFolder,
   onNewProject,
   children,
@@ -310,6 +341,9 @@ function NewMenu({
   /** ⌘N starts a quick chat (no project is open). */
   quickChatShortcut?: boolean;
   onNewQuickChat?: () => void;
+  /** With `onNewQuickChatWith`: a "Quick chat with" submenu of these agents. */
+  agents?: AgentProfile[];
+  onNewQuickChatWith?: (agentId: string) => void;
   onNewChatInFolder?: () => void;
   onNewProject: () => void;
   children: ReactElement;
@@ -323,6 +357,21 @@ function NewMenu({
             <MessageSquarePlus /> New quick chat
             {quickChatShortcut && <ContextMenuShortcut>{formatKeys(SHORTCUTS.newChat.keys)}</ContextMenuShortcut>}
           </ContextMenuItem>
+        )}
+        {onNewQuickChatWith && agents && agents.length > 1 && (
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <Bot /> Quick chat with
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {agents.map((a) => (
+                <ContextMenuItem key={a.id} onSelect={() => onNewQuickChatWith(a.id)}>
+                  {a.label}
+                  {a.loggedIn === false && <span className="text-xs text-muted-foreground">not logged in</span>}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
         )}
         {onNewChatInFolder && (
           <ContextMenuItem onSelect={onNewChatInFolder}>

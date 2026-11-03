@@ -51,3 +51,6 @@ function guessHome(path: string): string | null {
 
 /** The last segment of a path: `~/src/app` → `app`. */
 export const baseName = (path: string) => path.replace(/\/+$/, "").split("/").pop() ?? path;
+
+/** How long something has been running: `12 s`, `2 min 5 s`, `3 min`. */
+export const elapsedText = (s: number) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}`);

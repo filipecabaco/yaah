@@ -5,7 +5,8 @@
 //! Knobs (environment): `YAAH_AGENT_PROTOCOL` (the version it answers with),
 //! `YAAH_AGENT_NO_LOAD` (no `session/load`), `YAAH_AGENT_SESSION_ID` (a fixed id
 //! for `session/new`), `YAAH_AGENT_MCP_HTTP` (reaches HTTP MCP servers, so it gets
-//! yaah's UI server), `YAAH_AGENT_SYSTEM_PROMPT` (advertises the ACP `systemPrompt`).
+//! yaah's UI server), `YAAH_AGENT_SYSTEM_PROMPT` (advertises the ACP `systemPrompt`),
+//! `YAAH_AGENT_NAME` (echo replies start with it, so a test sees which agent answered).
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -277,7 +278,10 @@ impl Agent {
             "auth" => {
                 return send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": "Authentication required" } }));
             }
-            _ => chunk(&sid, &format!("echo: {text}")),
+            _ => {
+                let name = std::env::var("YAAH_AGENT_NAME").map(|n| format!("{n} ")).unwrap_or_default();
+                chunk(&sid, &format!("{name}echo: {text}"));
+            }
         }
         Self::respond(id, &json!({ "stopReason": stop }));
     }

@@ -2,7 +2,7 @@
 // only draw it. Every entry is memoised on the entry object itself (Rust sends
 // a new object only for the entry that changed), so a streaming reply
 // re-renders one entry, not the whole chat.
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Brain,
@@ -20,6 +20,7 @@ import {
   Paperclip,
   Pencil,
   Quote,
+  Repeat,
   Search,
   ShieldQuestion,
   SquareTerminal,
@@ -34,14 +35,15 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { CopyMenu, type MenuAction } from "@/components/menus";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
-import { TextDiff, UiTree } from "@/components/ui-render";
+import { PatchView, TextDiff, UiTree } from "@/components/ui-render";
 import type { FormHost } from "@/components/ui-form-host";
 import { api, type Entry, type ToolContent } from "@/lib/api";
 import { openComponent, openSettings } from "@/lib/app-events";
-import { plural } from "@/lib/format";
+import { elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
+import { readToolText } from "@/lib/tool-output";
 import { cn } from "@/lib/utils";
-import { uiToolLabel } from "@/lib/ui-tool-label";
+import { toolLabel } from "@/lib/ui-tool-label";
 
 type Of<T extends Entry["type"]> = Extract<Entry, { type: T }>;
 
@@ -78,6 +80,8 @@ export const TranscriptEntry = memo(function TranscriptEntry({ entry, index, inT
       return <ErrorEntry entry={entry} onLogin={onLogin} />;
     case "notices":
       return <NoticesEntry entry={entry} />;
+    case "switch":
+      return <SwitchEntry entry={entry} />;
   }
 });
 
@@ -91,12 +95,12 @@ const quoted = (text: string) =>
 
 function UserMessage({ entry }: { entry: Of<"user"> }) {
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex max-w-[75ch] flex-col items-end gap-1 text-sm">
       <CopyMenu
         act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }) }]}
         actions={[{ label: "Copy text", text: () => entry.text }]}
       >
-        <div className="max-w-[80%] rounded-lg bg-muted px-3 py-2 text-sm whitespace-pre-wrap">{entry.text}</div>
+        <div className="max-w-[85%] rounded-lg bg-muted px-3 py-2 whitespace-pre-wrap">{entry.text}</div>
       </CopyMenu>
       {entry.attachments.length > 0 && (
         <div className="flex gap-1">
@@ -118,7 +122,7 @@ function AgentMessage({ entry }: { entry: Of<"agent"> }) {
       act={(t) => [{ label: "Quote in reply", icon: <Quote />, onSelect: () => draftIntoComposer({ text: quoted(t.ownSelection || entry.text) }) }]}
       actions={[{ label: "Copy text", text: () => entry.text }]}
     >
-      <div className="text-sm">
+      <div className="max-w-[75ch] text-sm">
         <Markdown>{entry.text}</Markdown>
       </div>
     </CopyMenu>
@@ -134,7 +138,7 @@ function Thought({ entry, live }: { entry: Of<"thought">; live: boolean }) {
         {live ? "Thinking…" : "Thought"}
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mt-1 border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground">{entry.text}</div>
+        <div className="mt-1 max-w-[85ch] border-l-2 pl-3 text-xs whitespace-pre-wrap text-muted-foreground">{entry.text}</div>
       </CollapsibleContent>
     </Collapsible>
   );
@@ -176,19 +180,28 @@ function StatusBadge({ status }: { status: Of<"tool">["status"] }) {
   }
 }
 
-/** MCP tools arrive as `mcp__<server>__<tool>`; yaah's own UI tools get plain names. */
-const UI_TOOL_TITLES: Record<string, string> = {
-  ui_catalog: "Read the UI catalog",
-  ui_get_component: "Read a UI component",
-  ui_render: "Rendered UI",
-  ui_save_component: "Saved a UI component",
-};
+/** When each running UI tool call was first seen, so its time so far survives re-renders and remounts. */
+const firstSeen = new Map<string, number>();
 
-function toolTitle(title: string): string {
-  const m = /^mcp__([^_]+(?:-[^_]+)*)__(.+)$/.exec(title);
-  if (!m) return title;
-  const [, server, tool] = m;
-  return server === "yaah-ui" && UI_TOOL_TITLES[tool] ? UI_TOOL_TITLES[tool] : `${server} › ${tool}`;
+/** "12 s", "2 min 5 s": how long a UI tool call has been running, ticking each second. */
+export function Elapsed({ id }: { id: string }) {
+  const [started] = useState(() => {
+    const t = firstSeen.get(id) ?? Date.now();
+    firstSeen.set(id, t);
+    return t;
+  });
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const s = Math.floor((now - started) / 1000);
+  if (s < 1) return null;
+  return (
+    <span className="shrink-0 text-xs text-muted-foreground tabular-nums" aria-label={`running for ${elapsedText(s)}`}>
+      {elapsedText(s)}
+    </span>
+  );
 }
 
 const RULE_ACTIONS: { mode: CardMode; label: (like: string) => string; icon: typeof Wrench }[] = [
@@ -210,11 +223,11 @@ function ToolCall({ entry, turnActive }: { entry: Of<"tool">; turnActive: boolea
     setOpen(wanted);
   }
   const Icon = TOOL_ICONS[entry.kind ?? ""] ?? Wrench;
-  const ui = uiToolLabel(entry.title, entry.status, entry.rawInput);
+  const output = toolOutput(entry.content);
+  const label = toolLabel({ title: entry.title, status: entry.status, rawInput: entry.rawInput, output });
   const hasBody = entry.content.length > 0 || entry.rawInput != null;
   const copyActions = [{ label: "Copy title", text: () => entry.title }];
   if (entry.rawInput != null) copyActions.push({ label: "Copy input", text: () => JSON.stringify(entry.rawInput, null, 2) });
-  const output = toolOutput(entry.content);
   if (output) copyActions.push({ label: "Copy output", text: () => output });
   const paths = toolPaths(entry);
   if (paths.length) copyActions.push({ label: paths.length === 1 ? "Copy file path" : "Copy file paths", text: () => paths.join("\n") });
@@ -231,15 +244,23 @@ function ToolCall({ entry, turnActive }: { entry: Of<"tool">; turnActive: boolea
     <CopyMenu actions={copyActions} extra={extra}>
       <Collapsible open={open && hasBody} onOpenChange={setOpen} className="rounded-lg border bg-card">
         <CollapsibleTrigger disabled={!hasBody} className="group flex w-full items-center gap-2 px-3 py-2 text-left text-sm">
-          {ui?.busy ? (
+          {label?.busy ? (
             <Loader2 className="size-4 shrink-0 animate-spin text-brand" aria-hidden />
           ) : (
             <Icon className="size-4 shrink-0 text-muted-foreground" />
           )}
-          <span className={cn("min-w-0 flex-1 truncate text-xs", !ui && "font-mono")} title={entry.title}>
-            {ui ? ui.text : toolTitle(entry.title)}
+          <span className="flex min-w-0 flex-1 items-baseline gap-2 text-xs" title={entry.title}>
+            <span className={cn("truncate", !label && "font-mono")}>{label ? label.text : entry.title}</span>
+            {label?.detail && <span className="truncate text-muted-foreground">{label.detail}</span>}
           </span>
-          {ui?.busy ? <span className="sr-only">in progress</span> : <StatusBadge status={entry.status} />}
+          {label?.busy ? (
+            <>
+              <Elapsed id={entry.toolCallId} />
+              <span className="sr-only">in progress</span>
+            </>
+          ) : (
+            <StatusBadge status={entry.status} />
+          )}
           {hasBody && <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />}
         </CollapsibleTrigger>
         <CollapsibleContent>
@@ -270,7 +291,7 @@ function toolPaths(entry: Of<"tool">): string[] {
 function ToolContentView({ content }: { content: ToolContent }) {
   switch (content.type) {
     case "content":
-      return <Pre>{content.content.text ?? `[${content.content.type}]`}</Pre>;
+      return content.content.text == null ? <Pre>{`[${content.content.type}]`}</Pre> : <ToolText raw={content.content.text} />;
     case "diff":
       return <TextDiff path={content.path} oldText={content.oldText ?? ""} newText={content.newText} />;
     case "terminal":
@@ -278,8 +299,26 @@ function ToolContentView({ content }: { content: ToolContent }) {
   }
 }
 
+/** A tool's text: a code fence shows as code (no fence markers), a unified diff in the diff view (with the raw text a click away). */
+export function ToolText({ raw }: { raw: string }) {
+  const shown = useMemo(() => readToolText(raw), [raw]);
+  const [asText, setAsText] = useState(false);
+  if (!shown.diff) return <Pre>{shown.text}</Pre>;
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex justify-end">
+        <Button size="xs" variant="ghost" aria-pressed={asText} onClick={() => setAsText((v) => !v)}>
+          {asText ? "Diff view" : "Raw"}
+        </Button>
+      </div>
+      {asText ? <Pre>{shown.text}</Pre> : <PatchView text={shown.text} />}
+    </div>
+  );
+}
+
+/** Code or command output as printed: one line per line (scroll sideways), tabs 4 wide. */
 function Pre({ children }: { children: string }) {
-  return <pre className="max-h-72 overflow-auto rounded-md bg-muted p-2 font-mono text-xs break-all whitespace-pre-wrap">{children}</pre>;
+  return <pre className="max-h-96 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre [tab-size:4]">{children}</pre>;
 }
 
 function Plan({ entry }: { entry: Of<"plan"> }) {
@@ -483,5 +522,20 @@ function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
         <UiTree tree={entry.tree} props={entry.props} form={form} />
       </figure>
     </CopyMenu>
+  );
+}
+
+/** The chat moved to another agent: the next message goes to it, with the conversation so far. */
+function SwitchEntry({ entry }: { entry: Of<"switch"> }) {
+  return (
+    <div role="status" aria-label="Agent switched" className="flex items-center gap-3 py-1 text-xs text-muted-foreground">
+      <span className="h-px flex-1 bg-border" aria-hidden />
+      <Repeat className="size-3 shrink-0" aria-hidden />
+      <span className="shrink-0">
+        Switched to <span className="font-medium text-foreground">{entry.label}</span>
+        {entry.from && <> from {entry.from}</>}
+      </span>
+      <span className="h-px flex-1 bg-border" aria-hidden />
+    </div>
   );
 }

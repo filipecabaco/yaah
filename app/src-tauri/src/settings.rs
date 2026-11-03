@@ -241,9 +241,26 @@ pub fn set_theme(light: &str, dark: &str) -> Result<(), String> {
 /// `mcp__fetch__fetch`) or a whole MCP server (`mcp__yaah-ui`).
 pub const TOOL_CARD_MODES: &[&str] = &["auto", "collapsed", "expanded"];
 
-/// Noisy ones start collapsed: their bodies are inputs nobody needs to read.
-const TOOL_CARD_DEFAULTS: &[(&str, &str)] =
-    &[("ToolSearch", "collapsed"), ("Load skill", "collapsed"), ("Skill", "collapsed"), ("TodoWrite", "collapsed"), ("mcp__yaah-ui", "collapsed")];
+/// Noisy ones start collapsed: their bodies are inputs (or pages, search hits, command
+/// output) nobody needs to read in the flow of a chat. Keys are what the cards'
+/// `cardKey` (src/lib/tool-cards.ts) makes of a tool call:
+/// - `mcp__fetch`: every tool of the fetch MCP server (`mcp__fetch__fetch`);
+/// - `kind:fetch`: Claude's `WebFetch` (`Fetch https://…`) and `WebSearch` (`Search "…"`);
+///   `Fetch`, `WebFetch` and `WebSearch` are the same calls before their input arrives;
+/// - `kind:execute`: shell commands (Claude's Bash, titled by the command itself).
+const TOOL_CARD_DEFAULTS: &[(&str, &str)] = &[
+    ("ToolSearch", "collapsed"),
+    ("Load skill", "collapsed"),
+    ("Skill", "collapsed"),
+    ("TodoWrite", "collapsed"),
+    ("mcp__yaah-ui", "collapsed"),
+    ("mcp__fetch", "collapsed"),
+    ("kind:fetch", "collapsed"),
+    ("Fetch", "collapsed"),
+    ("WebFetch", "collapsed"),
+    ("WebSearch", "collapsed"),
+    ("kind:execute", "collapsed"),
+];
 
 /// Every rule in effect: the defaults, then the user's own on top.
 fn tool_cards_in(s: &Map<String, Value>) -> Value {
@@ -370,6 +387,23 @@ mod tests {
         assert!(!teach_agents_in(&serde_json::from_value(json!({ "teachAgents": false })).unwrap()));
         assert!(teach_agents_in(&serde_json::from_value(json!({ "teachAgents": "no" })).unwrap()), "only a real false turns it off");
         assert!(set_tool_card(" ", Some("auto")).is_err() && set_tool_card("Bash", Some("sideways")).is_err());
+    }
+
+    #[test]
+    fn web_fetches_searches_and_commands_start_collapsed_unless_the_user_says_otherwise() {
+        let rules = &tool_cards_in(&Map::new())["rules"];
+        for key in ["mcp__fetch", "kind:fetch", "Fetch", "WebFetch", "WebSearch", "kind:execute", "ToolSearch", "mcp__yaah-ui"] {
+            assert_eq!(rules[key], "collapsed", "{key}");
+        }
+        let defaults = tool_cards_in(&Map::new())["defaults"].as_array().unwrap().len();
+        assert_eq!(defaults, TOOL_CARD_DEFAULTS.len(), "every default is listed for Settings");
+
+        let mine: Map<String, Value> =
+            serde_json::from_value(json!({ "toolCards": { "kind:execute": "expanded", "mcp__fetch": "auto", "kind:fetch": "bogus" } })).unwrap();
+        let rules = &tool_cards_in(&mine)["rules"];
+        assert_eq!(rules["kind:execute"], "expanded", "the user's rule wins");
+        assert_eq!(rules["mcp__fetch"], "auto");
+        assert_eq!(rules["kind:fetch"], "collapsed", "an invalid rule leaves the default");
     }
 
     #[test]

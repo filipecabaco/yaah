@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, FileText, SquareSlash, Square } from "lucide-react";
+import { ArrowUp, ChevronDown, FileText, Repeat, SquareSlash, Square } from "lucide-react";
 import { Hint } from "@/components/shortcuts";
 import { ErrorText } from "@/components/error-text";
 import { Badge } from "@/components/ui/badge";
@@ -8,6 +8,7 @@ import { Command, CommandGroup, CommandItem, CommandList, CommandShortcut } from
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type AgentProfile, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
+import { openAgentSwitch } from "@/lib/app-events";
 import { compactPath } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { ChatContext, onDraft } from "@/components/chat-context";
@@ -34,7 +35,8 @@ export function Chat({ session, agents, project, onOpenProject, onLogin }: Props
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
-      <header className="flex items-center gap-2 border-b px-4 py-2.5 text-sm">
+      {/* Drags the window (its buttons stay buttons): there's no title bar on macOS. */}
+      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm">
         {project && (
           <>
             <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onOpenProject(project.id)}>
@@ -46,9 +48,18 @@ export function Chat({ session, agents, project, onOpenProject, onLogin }: Props
           </>
         )}
         <h1 className="min-w-0 truncate font-medium">{session.title}</h1>
-        <Badge variant="outline" title={agent ? (agent.email ?? agent.commandLine) : undefined}>
-          {agent?.label ?? session.accountId}
-        </Badge>
+        <button
+          type="button"
+          className="shrink-0 rounded-4xl focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          onClick={() => openAgentSwitch(session.sessionId)}
+          aria-label={`Agent: ${agent?.label ?? session.accountId}. Switch the agent for the next message`}
+          title={agent ? `${agent.email ?? agent.commandLine}\nClick to switch the agent for the next message` : undefined}
+        >
+          <Badge variant="outline" className="gap-1 hover:bg-muted">
+            {agent?.label ?? session.accountId}
+            <ChevronDown className="size-3 text-muted-foreground" aria-hidden />
+          </Badge>
+        </button>
         {agent?.report && !agent.report.mcpHttp && (
           <Badge
             variant="secondary"
@@ -151,7 +162,12 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
           Show earlier messages
         </button>
       )}
-      <div className="mx-auto flex max-w-3xl flex-col gap-3 px-4 py-6" role="log" aria-label="Conversation" aria-busy={running || !transcript}>
+      <div
+        className="mx-auto flex w-full max-w-[min(100%,1400px)] flex-col gap-3 px-4 py-6"
+        role="log"
+        aria-label="Conversation"
+        aria-busy={running || !transcript}
+      >
         {transcript?.error ? (
           <TranscriptEntry
             entry={{ type: "error", message: transcript.error, loginAccount: null }}
@@ -203,7 +219,28 @@ function findTrigger(text: string, caret: number): Trigger | null {
   return null;
 }
 
-type Suggestion = { id: string; label: string; detail?: string; hint?: string; insert: string; path?: string };
+type Suggestion = {
+  id: string;
+  label: string;
+  detail?: string;
+  hint?: string;
+  insert: string;
+  path?: string;
+  /** One of yaah's own commands: runs here, never sent to the agent. */
+  local?: () => void;
+};
+
+/** yaah's own slash commands, listed before the agent's. */
+const localCommands = (sessionId: string): (Suggestion & { name: string })[] => [
+  {
+    id: "yaah:agent",
+    name: "agent",
+    label: "/agent",
+    detail: "Switch the agent for the next message",
+    insert: "",
+    local: () => openAgentSwitch(sessionId),
+  },
+];
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** `@label` still standing as its own word in the text. */
@@ -270,17 +307,20 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
   const files = fileQuery != null && found?.start === openStart ? found.files : null;
 
   const items: Suggestion[] = useMemo(() => {
-    if (openKind === "command")
-      return fuzzyRank(session.commands, openQuery, (c) => [c.name, c.description]).map((c) => ({
+    if (openKind === "command") {
+      const own = fuzzyRank(localCommands(session.sessionId), openQuery, (c) => [c.name, c.detail ?? ""]);
+      const agents = fuzzyRank(session.commands, openQuery, (c) => [c.name, c.description]).map((c) => ({
         id: c.name,
         label: `/${c.name}`,
         detail: c.description,
         hint: c.input?.hint,
         insert: `/${c.name} `,
       }));
+      return [...own, ...agents];
+    }
     if (openKind === "file") return (files ?? []).map((f) => ({ id: f.path, label: f.label, insert: `@${f.label} `, path: f.path }));
     return [];
-  }, [openKind, openQuery, session.commands, files]);
+  }, [openKind, openQuery, session.commands, session.sessionId, files]);
 
   // A new list starts at its first item.
   const listKey = `${openKind}:${openQuery}`;
@@ -298,8 +338,16 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
     moveCaret.current = null;
   }, [text]);
 
+  /** One of yaah's own commands: it runs here; the command goes, and what was typed after it stays. */
+  function runLocal(run: () => void) {
+    setText(text.slice(caret).replace(/^\S*/, "").replace(/^ /, ""));
+    setCaret(0);
+    run();
+  }
+
   function accept(s: Suggestion) {
     if (!open) return;
+    if (s.local) return runLocal(s.local);
     // Replace the whole token under the caret, plus one following space.
     const rest = text.slice(caret).replace(/^\S*/, "").replace(/^ /, "");
     const pos = open.start + s.insert.length;
@@ -312,7 +360,14 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
 
   async function send() {
     const prompt = text.trim();
-    if (!prompt || session.running) return;
+    if (!prompt) return;
+    const own = localCommands(session.sessionId).find((c) => prompt === c.label);
+    if (own) {
+      setText("");
+      own.local?.();
+      return;
+    }
+    if (session.running) return;
     setError(null);
     const paths = Object.entries(mentions)
       .filter(([label]) => mentioned(prompt, label))
@@ -359,9 +414,19 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
   }
 
   const showList = open != null && focused;
+  // yaah's own commands, then the agent's; files in one group.
+  const groups = (
+    openKind === "command"
+      ? [
+          { heading: "yaah", list: items.filter((s) => s.local) },
+          { heading: `Commands from ${agentLabel ?? "the agent"}`, list: items.filter((s) => !s.local) },
+        ]
+      : [{ heading: "Files in this chat's folders", list: items }]
+  ).filter((g) => g.list.length > 0);
   return (
-    <div className="border-t p-3">
-      <div className="relative mx-auto flex max-w-3xl items-end gap-2">
+    // The composer lines up with the transcript's column: the same edges as the cards and UI above it.
+    <div className="border-t py-3">
+      <div className="relative mx-auto flex w-full max-w-[min(100%,1400px)] items-end gap-2 px-4">
         {showList && (
           <Command
             ref={list}
@@ -378,7 +443,7 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
             }
             // Keep focus in the textarea when an item is clicked.
             onMouseDown={(e) => e.preventDefault()}
-            className="absolute inset-x-0 bottom-full z-10 mb-2 h-auto shadow-md ring-1 ring-foreground/10"
+            className="absolute bottom-full left-4 z-10 mb-2 h-auto w-[min(42rem,calc(100%-2rem))] shadow-md ring-1 ring-foreground/10"
           >
             <CommandList id={listId}>
               {items.length === 0 ? (
@@ -392,16 +457,25 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
                       : "No file matches."}
                 </p>
               ) : (
-                <CommandGroup heading={open.kind === "command" ? "Commands" : "Files in this chat's folders"}>
-                  {items.map((s) => (
-                    <CommandItem key={s.id} value={s.id} onSelect={() => accept(s)}>
-                      {open.kind === "command" ? <SquareSlash /> : <FileText />}
-                      {s.path ? <FileLabel label={s.label} /> : <span className="shrink-0 font-mono">{s.label}</span>}
-                      {s.detail && <span className="truncate text-muted-foreground">{s.detail}</span>}
-                      {s.hint && <CommandShortcut className="shrink-0 tracking-normal italic">‹{s.hint}›</CommandShortcut>}
-                    </CommandItem>
+                <>
+                  {groups.map((g) => (
+                    <CommandGroup key={g.heading} heading={g.heading}>
+                      {g.list.map((s) => (
+                        <CommandItem key={s.id} value={s.id} onSelect={() => accept(s)}>
+                          {s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : <FileText />}
+                          {s.path ? <FileLabel label={s.label} /> : <span className="shrink-0 font-mono">{s.label}</span>}
+                          {s.local && (
+                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px]" title="yaah's own command, not sent to the agent">
+                              yaah
+                            </Badge>
+                          )}
+                          {s.detail && <span className="truncate text-muted-foreground">{s.detail}</span>}
+                          {s.hint && <CommandShortcut className="shrink-0 tracking-normal italic">‹{s.hint}›</CommandShortcut>}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
                   ))}
-                </CommandGroup>
+                </>
               )}
             </CommandList>
             <footer className="flex items-center gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
@@ -453,7 +527,7 @@ function Composer({ session, agentLabel }: { session: SessionInfo; agentLabel?: 
           </Hint>
         )}
       </div>
-      <ErrorText error={error} className="mx-auto mt-1 max-w-3xl" />
+      <ErrorText error={error} className="mx-auto mt-1 w-full max-w-[min(100%,1400px)] px-4" />
     </div>
   );
 }

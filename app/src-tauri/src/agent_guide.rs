@@ -5,7 +5,7 @@
 //! an agent's habit is to `open` files or write standalone HTML. So yaah
 //! teaches them, with text it owns (reviewable as Markdown in `agent-guide/`):
 //!
-//! - **the guide** (`guide.md`): about 350 tokens on when and how to use the UI,
+//! - **the guide** (`guide.md`): about 550 tokens on when and how to use the UI,
 //!   ending with an index of the components available now;
 //! - **two skills** in the open Agent Skills format (`SKILL.md` with `name` and
 //!   `description` frontmatter): `yaah-ui` (patterns, errors, a primitive index)
@@ -521,6 +521,9 @@ mod tests {
             "ui_save_component",
             "source_read",
             "`live`",
+            "Never paste large data",
+            "diff-review",
+            "`git.log`",
             "ui_ask",
             "ui_guide",
             "`mcp__yaah-ui__ui_catalog`",
@@ -528,10 +531,29 @@ mod tests {
         ] {
             assert!(text.contains(must), "the guide mentions {must}");
         }
-        // About 4 characters a token: 250-460 tokens for the guide itself.
+        // About 4 characters a token: 250-560 tokens for the guide itself (raised from 460 for the "reference, don't paste" rule).
         let own = guide_text(&[]).len() / 4;
-        assert!((250..=460).contains(&own), "the guide is about {own} tokens");
+        assert!((250..=560).contains(&own), "the guide is about {own} tokens");
         assert!(!text.contains("{{"), "every placeholder is filled");
+    }
+
+    #[test]
+    fn the_ui_skill_shows_referencing_data_beside_pasting_it() {
+        let skill = SKILLS.iter().find(|s| s.name == "yaah-ui").unwrap();
+        let text = skill_text(skill, &[]);
+        let section = text.split("## Reference data, don't paste it").nth(1).expect("the section is there");
+        let section = section.split("\n## ").next().unwrap();
+        let bad = section.find(r#"{ "type": "patch""#).expect("the pasted diff, as the slow example");
+        let good = section.find(r#"{ "type": "diff-review", "props": { "range": "main...HEAD""#).expect("diff-review, as the fast one");
+        assert!(bad < good, "bad first, then good");
+        for source in ["`git.diff`", "`git.log`", "`git.status`", "`git.show`", "`postgres.query`", "`docker.logs`", "`textfile` with its `path`"] {
+            assert!(section.contains(source), "the table names {source}");
+        }
+        // Each example is valid JSON as written (the pasted diff is cut short on purpose).
+        for block in section.split("```json\n").skip(1) {
+            let json = block.split("\n```").next().unwrap();
+            assert!(serde_json::from_str::<Value>(json).is_ok(), "{json}");
+        }
     }
 
     #[test]
@@ -598,7 +620,7 @@ mod tests {
             text.split("```json\n").skip(1).map(|b| serde_json::from_str(b.split("\n```").next().unwrap()).expect("a JSON example")).collect()
         };
         let ui = blocks(skill_text(skill("ui").unwrap(), &[]).as_str());
-        assert_eq!(ui.len(), 3);
+        assert_eq!(ui.len(), 5, "three patterns, and the pasted diff beside diff-review");
         for tree in ui {
             lib.prepare(None, json!({}), Some(tree.clone())).unwrap_or_else(|e| panic!("{tree}: {e:?}"));
         }
