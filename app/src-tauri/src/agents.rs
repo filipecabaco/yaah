@@ -15,6 +15,7 @@ use crate::acp::{self, Connection};
 use crate::agent_conformance::{Results, SuiteReport};
 use crate::agent_install::{self, Spec};
 use crate::agent_versions::{self, Advisory, Latest, Record, Status, Versions};
+use crate::providers::{self, Binding};
 use crate::session::INITIALIZE_TIMEOUT;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -46,6 +47,10 @@ pub struct Profile {
     /// What the agent said in its last `initialize`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report: Option<Report>,
+    /// A model provider (Bedrock, OpenRouter) and model to run on. Turned into
+    /// the agent's env at spawn (`agent_routes.rs`), never written into `env`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<Binding>,
 }
 
 impl Profile {
@@ -81,6 +86,20 @@ impl Profile {
         cmd
     }
 
+    /// [`Self::process`] on its model provider's route (`agent_routes`): the
+    /// route's removals, then its env, after the profile's own (the binding wins).
+    /// Secrets only ever go in the env, never in argv.
+    pub fn process_routed(&self, route: Option<&crate::agent_routes::Route>) -> tokio::process::Command {
+        let mut cmd = self.process();
+        if let Some(r) = route {
+            for k in &r.env_remove {
+                cmd.env_remove(k);
+            }
+            cmd.envs(&r.env);
+        }
+        cmd
+    }
+
     /// The preset whose npm package this profile runs through npx
     /// (`npx -y <its package>@<exact version> …`), and the args after the package.
     fn preset_package(&self) -> Option<(&'static Preset, &[String])> {
@@ -101,11 +120,37 @@ impl Profile {
         let holds = crate::settings::agent_versions();
         // Unit tests build commands with `process()`; they never install anything for real.
         let install: fn(Spec) = if cfg!(test) { |_| {} } else { agent_install::ensure_in_background };
-        self.launch_in(versions.root(), |p| versions.active(p, &holds), install)
+        self.launch_in(versions.root(), |p| versions.active(p, &holds), install, |c| which(c).is_some())
     }
 
-    fn launch_in(&self, root: &Path, active: impl FnOnce(&Preset) -> Option<Spec>, install: impl FnOnce(Spec)) -> (String, Vec<String>) {
+    /// The preset whose release archive yaah installs (goose, OpenCode), when
+    /// this profile starts it by its bare program name and that isn't on PATH.
+    /// A binary on PATH, or any other command, is left alone.
+    fn binary_preset(&self, on_path: impl Fn(&str) -> bool) -> Option<&'static Preset> {
+        let preset = preset(&self.preset)?;
+        preset.binary()?;
+        (preset.bins.contains(&self.command.as_str()) && !on_path(&self.command)).then_some(preset)
+    }
+
+    fn launch_in(
+        &self,
+        root: &Path,
+        active: impl FnOnce(&Preset) -> Option<Spec>,
+        install: impl FnOnce(Spec),
+        on_path: impl Fn(&str) -> bool,
+    ) -> (String, Vec<String>) {
         let saved = || (self.command.clone(), self.args.clone());
+        if let Some(preset) = self.binary_preset(on_path) {
+            let Some(spec) = active(preset) else { return saved() };
+            if let Some(installed) = agent_install::installed(root, &spec) {
+                let (program, mut args) = installed.command();
+                args.extend(self.args.iter().cloned());
+                return (program, args);
+            }
+            // Not there yet: `prepare` installs it before a start; this start fails with "not found".
+            install(spec);
+            return saved();
+        }
         let Some((preset, rest)) = self.preset_package() else { return saved() };
         let Some(spec) = active(preset) else { return saved() };
         if let Some(installed) = agent_install::installed(root, &spec) {
@@ -120,7 +165,7 @@ impl Profile {
 
     /// Whether `other` starts the same agent the same way (so what it reported still holds).
     pub fn same_command(&self, other: &Profile) -> bool {
-        self.command == other.command && self.args == other.args && self.env == other.env
+        self.command == other.command && self.args == other.args && self.env == other.env && self.provider == other.provider
     }
 
     pub fn command_line(&self) -> String {
@@ -140,6 +185,7 @@ impl Profile {
             env: BTreeMap::new(),
             config_dir: a.config_dir.clone(),
             report: None,
+            provider: None,
         }
     }
 }
@@ -192,6 +238,7 @@ impl Draft {
             env: self.env.iter().filter(|(k, _)| !k.is_empty()).map(|(k, v)| (k.clone(), v.clone())).collect(),
             config_dir,
             report: None,
+            provider: None,
         })
     }
 }
@@ -209,7 +256,7 @@ fn expand_home(p: &str) -> String {
     }
 }
 
-fn unique_id(label: &str, taken: &[String]) -> String {
+pub(crate) fn unique_id(label: &str, taken: &[String]) -> String {
     let mut slug = String::new();
     for c in label.to_lowercase().chars() {
         if c.is_ascii_alphanumeric() {
@@ -340,8 +387,10 @@ impl Store {
             let existing = file.profiles.iter().position(|p| p.id == profile.id);
             match existing {
                 Some(i) => {
-                    // Same command: what the agent reported still holds.
+                    // The setup form doesn't carry the model provider; `set_provider` changes it.
                     let old = &file.profiles[i];
+                    profile.provider.clone_from(&old.provider);
+                    // Same command: what the agent reported still holds.
                     if old.same_command(&profile) {
                         profile.report.clone_from(&old.report);
                     }
@@ -380,6 +429,30 @@ impl Store {
         })
     }
 
+    /// Bind a saved profile to a model provider, or unbind it (`None`). A new
+    /// binding drops what the agent reported (it starts differently now).
+    pub fn set_provider(&self, id: &str, binding: Option<Binding>) -> Result<Profile, String> {
+        let binding = match binding {
+            Some(b) => {
+                let model = b.model.trim().to_owned();
+                if b.provider_id.trim().is_empty() || model.is_empty() {
+                    return Err("choose a model provider and a model".into());
+                }
+                let small_model = b.small_model.map(|m| m.trim().to_owned()).filter(|m| !m.is_empty());
+                Some(Binding { provider_id: b.provider_id, model, small_model })
+            }
+            None => None,
+        };
+        self.update(|file| {
+            let p = file.profiles.iter_mut().find(|p| p.id == id).ok_or_else(|| format!("no agent {id}"))?;
+            if p.provider != binding {
+                p.provider = binding;
+                p.report = None;
+            }
+            Ok(p.clone())
+        })
+    }
+
     /// Remember what the agent reported. A profile that isn't saved (a Claude
     /// fallback) is left alone.
     pub fn record_report(&self, id: &str, report: &Report) {
@@ -414,26 +487,101 @@ pub struct ProfileInfo {
     pub email: Option<String>,
     /// `Some(false)` when the agent needs a login; `None` when we can't tell yet.
     pub logged_in: Option<bool>,
+    /// What it runs on, where the email would go: "Bedrock · us-east-1 · work",
+    /// "OpenRouter · my key", or what the agent reported ("AWS Bedrock").
+    pub detail: Option<String>,
     /// The command was found on PATH.
     pub installed: bool,
 }
 
-pub fn info(profile: Profile, needs_login: bool) -> ProfileInfo {
+/// `needs_login`: the agent answered "authentication required" since its last
+/// login. `reported`: the agent's last `_auth/status_update`.
+pub fn info(profile: Profile, needs_login: bool, reported: Option<&AuthStatus>) -> ProfileInfo {
+    let bound = profile.provider.is_some();
+    let providers = if bound { providers::Store::user().load().providers } else { vec![] };
+    info_with(profile, needs_login, reported, &providers)
+}
+
+fn info_with(profile: Profile, needs_login: bool, reported: Option<&AuthStatus>, providers: &[providers::Provider]) -> ProfileInfo {
     let email = profile.is_claude().then(|| accounts::email_for(profile.config_dir.as_deref())).flatten();
-    let logged_in = if needs_login {
-        Some(false)
-    } else if profile.is_claude() {
-        Some(email.is_some())
-    } else {
-        None
-    };
+    let (logged_in, detail) = readiness(&profile, email.is_some(), needs_login, reported, providers);
     ProfileInfo {
         command_line: profile.command_line(),
         preset_label: preset(&profile.preset).map_or("Custom", |p| p.label).to_owned(),
         installed: which(&profile.command).is_some(),
         email,
         logged_in,
+        detail,
         profile,
+    }
+}
+
+/// Whether the profile can chat, and what it runs on.
+/// - Bound to a provider: ready once the provider's last check passed, not
+///   ready when it failed (or the provider is gone), unknown until it's tested.
+/// - Otherwise an agent that reported external, gateway or API-key auth is ready.
+/// - Otherwise Claude needs a logged-in account; other agents are unknown.
+///
+/// An "authentication required" from the agent (`-32000`) wins over all of it.
+fn readiness(
+    profile: &Profile,
+    has_email: bool,
+    needs_login: bool,
+    reported: Option<&AuthStatus>,
+    providers: &[providers::Provider],
+) -> (Option<bool>, Option<String>) {
+    if let Some(binding) = &profile.provider {
+        let Some(p) = providers.iter().find(|p| p.id == binding.provider_id) else {
+            return (Some(false), Some("its model provider was removed".into()));
+        };
+        let ready = if needs_login { Some(false) } else { p.check.as_ref().map(|c| c.ok) };
+        return (ready, Some(p.summary()));
+    }
+    if needs_login {
+        return (Some(false), None);
+    }
+    if let Some(r) = reported.filter(|r| r.ready()) {
+        return (Some(true), Some(r.describe()));
+    }
+    (profile.is_claude().then_some(has_email), None)
+}
+
+/// What an agent says it is signed in with: claude-agent-acp's
+/// `_auth/status_update` notification, `{ authStatus: { kind, label, detail? } }`.
+/// `kind` is `account` (a claude.ai login), `api_key`, `gateway`, `external`
+/// (cloud credentials such as Bedrock) or `none`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStatus {
+    pub kind: String,
+    pub label: Option<String>,
+    pub detail: Option<String>,
+}
+
+impl AuthStatus {
+    /// The notification's method (and the unstable spec's name for it).
+    pub fn is_update(method: &str) -> bool {
+        matches!(method, "_auth/status_update" | "auth/status_update")
+    }
+
+    pub fn from_update(params: &Value) -> Option<Self> {
+        let s = params.get("authStatus").unwrap_or(params);
+        let text = |k: &str| s[k].as_str().map(str::trim).filter(|v| !v.is_empty()).map(str::to_owned);
+        Some(Self { kind: text("kind")?, label: text("label"), detail: text("detail") })
+    }
+
+    /// Signed in without an account login yaah can see: cloud credentials, a gateway, an API key.
+    pub fn ready(&self) -> bool {
+        matches!(self.kind.as_str(), "external" | "gateway" | "api_key")
+    }
+
+    /// "AWS Bedrock", "Anthropic API key · env".
+    pub fn describe(&self) -> String {
+        let label = self.label.clone().unwrap_or_else(|| self.kind.replace('_', " "));
+        match &self.detail {
+            Some(d) => format!("{label} · {d}"),
+            None => label,
+        }
     }
 }
 
@@ -502,7 +650,7 @@ pub const PRESETS: &[Preset] = &[
         npx: None,
         env: &[],
         docs: "https://opencode.ai/docs/acp/",
-        install: "See opencode.ai for install options.",
+        install: "yaah downloads OpenCode from the ACP registry on first run (sha256-checked), unless it's on your PATH.",
     },
     Preset {
         id: "goose",
@@ -513,7 +661,7 @@ pub const PRESETS: &[Preset] = &[
         npx: None,
         env: &[],
         docs: "https://github.com/block/goose/blob/main/documentation/docs/guides/goose-cli-commands.md",
-        install: "See block.github.io/goose for install options.",
+        install: "yaah downloads goose from the ACP registry on first run (sha256-checked), unless it's on your PATH.",
     },
     Preset {
         id: "copilot",
@@ -542,7 +690,8 @@ pub const PRESETS: &[Preset] = &[
         label: "Kiro CLI",
         blurb: "Amazon's Kiro CLI in ACP mode.",
         bins: &["kiro-cli"],
-        args: &["acp"],
+        // As the ACP registry runs it (kiro/agent.json, 2.37.1).
+        args: &["acp", "--agent-engine=v3"],
         npx: None,
         env: &[],
         docs: "https://kiro.dev/docs/cli/acp/",
@@ -610,9 +759,15 @@ pub fn preset(id: &str) -> Option<&'static Preset> {
 }
 
 impl Preset {
-    /// The pinned npm package, for presets that have one.
+    /// What yaah installs and pins for it: its npm package, or the release
+    /// archive the ACP registry lists for it (`agent_install::BINARIES`).
     pub fn spec(&self) -> Option<Spec> {
-        self.npx.and_then(|s| Spec::parse(s).ok())
+        self.npx.and_then(|s| Spec::parse(s).ok()).or_else(|| self.binary().map(agent_install::BinaryPin::spec))
+    }
+
+    /// The pinned release archive, for agents yaah downloads from the ACP registry.
+    pub fn binary(&self) -> Option<&'static agent_install::BinaryPin> {
+        agent_install::binary_pin(self.id)
     }
 
     /// The command a profile saves: an installed binary first, then npx, else
@@ -638,13 +793,19 @@ pub struct PresetInfo {
     pub blurb: &'static str,
     pub docs: &'static str,
     pub install: &'static str,
-    /// "binary" (found on PATH), "installed" (yaah installed its npm package),
-    /// "npx" (runs through npx until yaah has installed it), "missing", or "custom".
+    /// "binary" (found on PATH), "installed" (yaah installed its npm package or release archive),
+    /// "npx" (runs through npx until yaah has installed it), "download" (yaah downloads its
+    /// release archive on first start), "missing", or "custom".
     pub via: &'static str,
     /// Where the binary, yaah's install of the package, or npx is.
     pub path: Option<String>,
     /// A draft to start the setup form from.
     pub draft: Draft,
+    /// The model providers it can run on (`agent_routes`): "openrouter", "bedrock"; empty when none.
+    pub providers: Vec<&'static str>,
+    /// Why it can't run on a model provider, when it can't.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub providers_note: Option<String>,
     #[serde(flatten)]
     pub versions: NpmVersions,
 }
@@ -736,7 +897,28 @@ fn npm_versions(
 /// The presets a saved profile runs from their npm package: the ones worth
 /// installing newer versions of.
 pub fn presets_in_use(file: &AgentsFile) -> std::collections::BTreeSet<&'static str> {
-    file.profiles.iter().filter_map(|p| p.preset_package().map(|(preset, _)| preset.id)).collect()
+    file.profiles
+        .iter()
+        .filter_map(|p| p.preset_package().map(|(preset, _)| preset.id).or_else(|| p.binary_preset(|c| which(c).is_some()).map(|b| b.id)))
+        .collect()
+}
+
+/// Before a profile's agent starts: a binary agent yaah installs (goose,
+/// OpenCode) that isn't on PATH is downloaded now, so the first start waits
+/// for it instead of failing.
+pub async fn prepare(profile: &Profile) -> Result<(), String> {
+    let Some(preset) = profile.binary_preset(|c| which(c).is_some()) else { return Ok(()) };
+    let versions = Versions::user();
+    let Some(spec) = versions.active(preset, &crate::settings::agent_versions()) else { return Ok(()) };
+    if agent_install::installed(versions.root(), &spec).is_some() {
+        return Ok(());
+    }
+    let label = preset.label;
+    tokio::task::spawn_blocking(move || versions.ensure(&spec))
+        .await
+        .map_err(|e| e.to_string())?
+        .map(|_| ())
+        .map_err(|e| format!("couldn't install {label}: {e}"))
 }
 
 /// Every preset plus "custom", with what's installed here.
@@ -755,6 +937,8 @@ pub fn presets() -> Vec<PresetInfo> {
                 (Some((_, path)), ..) => ("binary", Some(path.clone())),
                 (None, Some(ours), _) => ("installed", Some(ours)),
                 (None, None, Some(npx)) => ("npx", Some(npx)),
+                // yaah downloads it from the ACP registry when it first starts.
+                (None, None, None) if p.binary().and_then(agent_install::BinaryPin::archive).is_some() => ("download", None),
                 (None, None, None) => ("missing", None),
             };
             let (command, args) = p.command(found.as_ref().map(|(b, _)| *b));
@@ -774,6 +958,8 @@ pub fn presets() -> Vec<PresetInfo> {
                     env: p.env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
                     config_dir: None,
                 },
+                providers: crate::agent_routes::providers(p.id),
+                providers_note: crate::agent_routes::unsupported(p.id),
                 versions,
             }
         })
@@ -787,6 +973,8 @@ pub fn presets() -> Vec<PresetInfo> {
         via: "custom",
         path: None,
         draft: Draft { label: "My agent".into(), preset: CUSTOM.into(), ..Draft::default() },
+        providers: crate::agent_routes::providers(CUSTOM),
+        providers_note: crate::agent_routes::unsupported(CUSTOM),
         versions: NpmVersions::default(),
     });
     out
@@ -991,14 +1179,32 @@ pub fn spawn(
     on_exit: impl FnOnce(String) + Send + 'static,
     extra_env: &[(&str, String)],
 ) -> Result<std::sync::Arc<Connection>, String> {
-    let mut cmd = profile.process();
+    spawn_routed(profile, on_incoming, on_exit, extra_env).map(|(conn, _)| conn)
+}
+
+/// [`spawn`], on the profile's model provider when it's bound to one: its
+/// route is resolved now (the provider's secret read from the keychain), its
+/// files written, its env set. Returns the route too, for what goes over ACP
+/// after `initialize` (`providers/set`).
+pub fn spawn_routed(
+    profile: &Profile,
+    on_incoming: impl Fn(acp::Incoming, &acp::Responder) + Send + Sync + 'static,
+    on_exit: impl FnOnce(String) + Send + 'static,
+    extra_env: &[(&str, String)],
+) -> Result<(std::sync::Arc<Connection>, Option<crate::agent_routes::Route>), String> {
+    let route = crate::agent_routes::for_profile(profile)?;
+    if let Some(r) = &route {
+        r.write_files()?;
+    }
+    let mut cmd = profile.process_routed(route.as_ref());
     cmd.envs(extra_env.iter().map(|(k, v)| (k, v)));
-    Connection::spawn(cmd, on_incoming, on_exit)
+    Ok((Connection::spawn(cmd, on_incoming, on_exit)?, route))
 }
 
 /// "Test connection": start the agent, run `initialize`, report, stop it.
 /// Never logs in or opens a session.
 pub async fn test(profile: &Profile) -> Result<Report, String> {
+    prepare(profile).await?;
     let conn = spawn(
         profile,
         // We advertise nothing the agent could call; refuse anything it asks.
@@ -1180,7 +1386,13 @@ mod tests {
         assert_eq!((claude["package"].as_str(), claude["pinned"].as_str()), (Some(pinned.name.as_str()), Some(pinned.version.as_str())));
         assert!(claude["active"].is_string() && claude["activeStatus"].is_string() && claude["advisories"].is_array(), "{claude}");
         let goose = by_id("goose");
-        assert!(goose["pinned"].is_null() && goose["active"].is_null() && goose["installed"] == false, "{goose}");
+        assert_eq!(goose["pinned"], json!(agent_install::binary_pin("goose").unwrap().version), "binary agents are pinned too: {goose}");
+        let kimi = by_id("kimi");
+        assert!(kimi["pinned"].is_null() && kimi["active"].is_null() && kimi["installed"] == false, "{kimi}");
+        // Which can run on a model provider, from agent_routes.
+        assert_eq!((goose["providers"].clone(), goose.get("providersNote")), (json!(["openrouter", "bedrock"]), None));
+        assert_eq!(kimi["providers"], json!([]));
+        assert!(kimi["providersNote"].as_str().unwrap().contains("Kimi CLI can't run on a model provider"));
     }
 
     #[test]
@@ -1195,7 +1407,7 @@ mod tests {
         let pin = |_: &Preset| Some(pinned.clone());
         let launch = |p: &Profile, active: &dyn Fn(&Preset) -> Option<Spec>| {
             let mut asked = None;
-            let cmd = p.launch_in(&root, active, |s| asked = Some(s));
+            let cmd = p.launch_in(&root, active, |s| asked = Some(s), |c| c == "gemini");
             (cmd, asked)
         };
 
@@ -1241,6 +1453,85 @@ mod tests {
     }
 
     #[test]
+    fn binary_agents_start_from_path_then_yaahs_install() {
+        let root = std::env::temp_dir().join(format!("yaah-launch-bin-{}", crate::random::token()));
+        let goose = preset("goose").unwrap();
+        let pinned = goose.spec().unwrap();
+        assert_eq!((pinned.name.as_str(), goose.command(None)), ("goose", ("goose".into(), vec!["acp".into()])));
+        let p = draft("goose", "goose", "goose acp").to_profile(&[]).unwrap();
+        let pin = |_: &Preset| Some(pinned.clone());
+
+        // Not on PATH and not installed: the saved command, and the install starts.
+        let mut asked = None;
+        let cmd = p.launch_in(&root, pin, |s| asked = Some(s), |_| false);
+        assert_eq!((cmd, asked), (("goose".into(), vec!["acp".into()]), Some(pinned.clone())));
+
+        // Installed: its program, with the profile's args.
+        crate::agent_install::tests::fake_binary_install(&root, &pinned, "goose", "#!/bin/sh\necho hi\n");
+        let (program, args) = p.launch_in(&root, pin, |_| panic!("already installed"), |_| false);
+        assert!(program.ends_with("goose@1.57.0/goose") && args == ["acp"], "{program} {args:?}");
+
+        // A goose on PATH wins, and a custom path or another command is left alone.
+        assert_eq!(p.launch_in(&root, pin, |_| panic!("no install"), |c| c == "goose"), ("goose".into(), vec!["acp".into()]));
+        for line in ["/opt/goose/bin/goose acp", "goose-dev acp"] {
+            let other = draft("g", "goose", line).to_profile(&[]).unwrap();
+            assert_eq!(other.launch_in(&root, pin, |_| panic!("no install"), |_| false), (other.command.clone(), other.args.clone()), "{line}");
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_bound_profile_starts_on_its_route_with_no_secret_in_argv() {
+        use crate::agent_routes::{Options, route_with};
+        use crate::providers::{Bedrock, Binding, Kind, ResolvedProvider};
+        const KEY: &str = "sk-or-v1-launch-test";
+        let envs = |c: &tokio::process::Command| -> BTreeMap<String, Option<String>> {
+            c.as_std().get_envs().map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned()))).collect()
+        };
+        let argv = |c: &tokio::process::Command| -> String {
+            std::iter::once(c.as_std().get_program())
+                .chain(c.as_std().get_args())
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let mut p = draft("Goose · OpenRouter", "goose", "goose acp").to_profile(&[]).unwrap();
+        p.env.insert("GOOSE_MODEL".into(), "set-by-hand".into());
+        p.env.insert("OPENROUTER_API_KEY".into(), "an-old-key-in-the-profile".into());
+        let binding = Binding { provider_id: "or".into(), model: "anthropic/claude-sonnet-4.6".into(), small_model: None };
+        let openrouter = ResolvedProvider {
+            id: "or".into(),
+            kind: Kind::Openrouter,
+            label: "k".into(),
+            bedrock: None,
+            secret: Some(crate::keychain::SecretString::new(KEY)),
+        };
+        let dir = std::path::PathBuf::from("/tmp/yaah-profile");
+        let route = route_with("goose", &openrouter, &binding, &dir, &Options::default()).unwrap();
+        let cmd = p.process_routed(Some(&route));
+        let e = envs(&cmd);
+        assert_eq!(e["OPENROUTER_API_KEY"].as_deref(), Some(KEY), "the binding wins over the profile's env");
+        assert_eq!(e["GOOSE_MODEL"].as_deref(), Some("anthropic/claude-sonnet-4.6"));
+        assert_eq!(e["GOOSE_PATH_ROOT"].as_deref(), Some("/tmp/yaah-profile"));
+        assert!(!argv(&cmd).contains(KEY), "{}", argv(&cmd));
+        assert_eq!(envs(&p.process_routed(None)), envs(&p.process()), "unbound: as before");
+
+        // Bedrock: no OpenRouter key reaches it, not even one the profile or yaah has.
+        let aws = ResolvedProvider {
+            id: "aws".into(),
+            kind: Kind::Bedrock,
+            label: "AWS".into(),
+            bedrock: Some(Bedrock { profile: "work".into(), region: "us-east-1".into(), prefix: Some("us".into()) }),
+            secret: None,
+        };
+        let route = route_with("goose", &aws, &binding, &dir, &Options::default()).unwrap();
+        let e = envs(&p.process_routed(Some(&route)));
+        assert_eq!(e["OPENROUTER_API_KEY"], None, "removed from the child");
+        assert_eq!((e["AWS_PROFILE"].as_deref(), e["GOOSE_PROVIDER"].as_deref()), (Some("work"), Some("aws_bedrock")));
+        assert!(e.values().flatten().all(|v| !v.contains(KEY)));
+    }
+
+    #[test]
     fn command_lines_split_and_join() {
         assert_eq!(split_args("npx -y pkg@1 --acp").unwrap(), ["npx", "-y", "pkg@1", "--acp"]);
         assert_eq!(split_args(r#"run "a b" 'c d' e\ f ''"#).unwrap(), ["run", "a b", "c d", "e f", ""]);
@@ -1276,5 +1567,94 @@ mod tests {
 
         let bare = Report::from_initialize(&json!({ "protocolVersion": 2, "agentCapabilities": {} }));
         assert!(!bare.compatible && !bare.mcp_http && bare.auth_methods.is_empty());
+    }
+
+    fn provider(id: &str, check: Option<bool>) -> providers::Provider {
+        providers::Provider {
+            id: id.into(),
+            kind: providers::Kind::Bedrock,
+            label: "Work AWS".into(),
+            bedrock: Some(providers::Bedrock { profile: "work".into(), region: "us-east-1".into(), prefix: None }),
+            checked_at: check.map(|_| 1),
+            check: check.map(|ok| providers::Check { ok, detail: String::new(), identity: None, action: None }),
+        }
+    }
+
+    fn bound_to(preset: &str, provider_id: &str) -> Profile {
+        let mut p = draft("x", preset, "agent acp").to_profile(&[]).unwrap();
+        p.provider = Some(Binding { provider_id: provider_id.into(), model: "us.anthropic.claude-sonnet-4-6".into(), small_model: None });
+        p
+    }
+
+    #[test]
+    fn a_bound_profile_is_ready_once_its_provider_checks_out() {
+        let providers = [provider("ok", Some(true)), provider("bad", Some(false)), provider("new", None)];
+        let ready = |p: &Profile, needs_login: bool| readiness(p, false, needs_login, None, &providers);
+        // Claude with no claude.ai login: ready through Bedrock.
+        assert_eq!(ready(&bound_to(CLAUDE, "ok"), false), (Some(true), Some("Bedrock · us-east-1 · work".into())));
+        assert_eq!(ready(&bound_to("goose", "ok"), false).0, Some(true));
+        assert_eq!(ready(&bound_to(CLAUDE, "bad"), false).0, Some(false), "a failed check isn't ready");
+        assert_eq!(ready(&bound_to(CLAUDE, "new"), false).0, None, "never tested: can't tell yet");
+        assert_eq!(ready(&bound_to(CLAUDE, "gone"), false).0, Some(false));
+        assert_eq!(ready(&bound_to(CLAUDE, "ok"), true).0, Some(false), "the agent's -32000 is the backstop");
+        // Unbound: as before.
+        let claude = draft("c", CLAUDE, "npx -y x").to_profile(&[]).unwrap();
+        assert_eq!(readiness(&claude, false, false, None, &providers), (Some(false), None));
+        assert_eq!(readiness(&claude, true, false, None, &providers), (Some(true), None));
+        let gemini = draft("g", "gemini", "gemini --acp").to_profile(&[]).unwrap();
+        assert_eq!(readiness(&gemini, false, false, None, &providers), (None, None));
+        // Through info(): the detail goes beside the profile.
+        let info = info_with(bound_to(CLAUDE, "ok"), false, None, &providers);
+        let v = serde_json::to_value(&info).unwrap();
+        assert_eq!((v["loggedIn"].clone(), v["detail"].clone()), (json!(true), json!("Bedrock · us-east-1 · work")));
+        assert_eq!(v["provider"], json!({ "providerId": "ok", "model": "us.anthropic.claude-sonnet-4-6" }));
+    }
+
+    #[test]
+    fn auth_status_updates_external_gateway_and_api_key_mean_ready() {
+        let status = |kind: &str| AuthStatus::from_update(&json!({ "authStatus": { "kind": kind, "label": "L" } })).unwrap();
+        for kind in ["external", "gateway", "api_key"] {
+            assert!(status(kind).ready(), "{kind}");
+        }
+        for kind in ["none", "account", "something-new"] {
+            assert!(!status(kind).ready(), "{kind}");
+        }
+        assert!(AuthStatus::from_update(&json!({ "authStatus": {} })).is_none());
+        assert!(AuthStatus::is_update("_auth/status_update") && !AuthStatus::is_update("session/update"));
+        let bedrock = AuthStatus::from_update(&json!({ "authStatus": { "kind": "external", "label": "AWS Bedrock" } })).unwrap();
+        let key = AuthStatus::from_update(&json!({ "authStatus": { "kind": "api_key", "label": "Anthropic API key", "detail": "env" } })).unwrap();
+        assert_eq!((bedrock.describe(), key.describe()), ("AWS Bedrock".to_owned(), "Anthropic API key · env".to_owned()));
+
+        // A Claude profile with no claude.ai login is ready once the agent says it runs on Bedrock.
+        let claude = draft("c", CLAUDE, "npx -y x").to_profile(&[]).unwrap();
+        assert_eq!(readiness(&claude, false, false, Some(&bedrock), &[]), (Some(true), Some("AWS Bedrock".into())));
+        assert_eq!(readiness(&claude, false, false, Some(&status("none")), &[]).0, Some(false));
+        assert_eq!(readiness(&claude, false, true, Some(&bedrock), &[]).0, Some(false), "-32000 still wins");
+    }
+
+    #[test]
+    fn the_binding_is_kept_by_edits_and_compared_as_part_of_the_command() {
+        let (store, dir) = temp_store();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("agents.json"), r#"{ "profiles": [] }"#).unwrap();
+        let (g, _) = store.save(&draft("Goose · Bedrock", "goose", "goose acp")).unwrap();
+        assert!(store.set_provider(&g.id, Some(Binding { provider_id: " ".into(), model: "m".into(), small_model: None })).is_err());
+        assert!(store.set_provider("nope", None).is_err());
+        let binding = Binding { provider_id: "work".into(), model: " us.anthropic.claude-sonnet-4-6 ".into(), small_model: Some(" ".into()) };
+        store.record_report(&g.id, &Report { name: Some("goose".into()), ..Report::default() });
+        let bound = store.set_provider(&g.id, Some(binding)).unwrap();
+        let b = bound.provider.clone().unwrap();
+        assert_eq!((b.model.as_str(), b.small_model), ("us.anthropic.claude-sonnet-4-6", None));
+        assert!(bound.report.is_none(), "it starts differently now");
+        assert!(!bound.same_command(&g) && bound.same_command(&bound.clone()));
+        // An edit from the setup form (which doesn't carry it) keeps the binding.
+        let (edited, _) = store.save(&Draft { id: Some(g.id.clone()), ..draft("Goose (work)", "goose", "goose acp") }).unwrap();
+        assert_eq!(edited.provider, bound.provider);
+        assert!(store.set_provider(&g.id, None).unwrap().provider.is_none());
+        // Saved as camelCase, with nothing secret in it.
+        store.set_provider(&g.id, bound.provider.clone()).unwrap();
+        let raw = std::fs::read_to_string(dir.join("agents.json")).unwrap();
+        assert!(raw.contains(r#""providerId": "work""#), "{raw}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
