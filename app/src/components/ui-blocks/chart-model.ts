@@ -1,5 +1,6 @@
 // The `chart` primitive's props, read from untrusted JSON into fixed shapes. Pure, so the
 // rules (defaults per kind, sorting, folding, caps) are tested without a renderer.
+import { scaleLinear } from "d3-scale";
 import { asArray, asNumber, isObj, optText, show } from "@/lib/narrow";
 
 export type Kind = "bar" | "line" | "area" | "dumbbell";
@@ -81,17 +82,32 @@ export function fold(data: Point[], series: Series[], stacked: boolean): { data:
 }
 
 const CURRENCY = new Set(["$", "€", "£", "¥"]);
+/** Symbols and magnitude suffixes that attach to the number: 16k, 2.5M, 77%, 30°, 21°C, 3x. */
+const ATTACHED = /^(?:[kKMBT]|bn|%|‰|°[CFK]?|x|×)$/;
+const MAGNITUDE = /^(?:[kKMBT]|bn)$/;
 
-/** Compact big numbers (1.2M), keep small ones readable, and place the unit. */
+/**
+ * Where a unit goes. A currency symbol leads ($12); a symbol or magnitude suffix attaches (16k,
+ * 77%, 30°); a unit the agent wrote with its own leading space keeps it (" pts" → 12 pts); any
+ * other word gets one space (ms → 42 ms).
+ */
+export function withUnit(n: string, unit: string | undefined, negative = false): string {
+  if (!unit) return n;
+  if (CURRENCY.has(unit)) return negative ? `-${unit}${n.slice(1)}` : `${unit}${n}`;
+  // Nothing of a magnitude is just 0 ("0k" reads as a typo).
+  if (n === "0" && MAGNITUDE.test(unit)) return n;
+  if (unit.startsWith(" ") || ATTACHED.test(unit)) return `${n}${unit}`;
+  return `${n} ${unit}`;
+}
+
+/** Compact big numbers (1.2M), keep small ones readable, and place the unit (withUnit). */
 export function formatter(unit?: string) {
   const compact = new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 });
   const plain = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
   return (v: unknown) => {
     if (typeof v !== "number") return show(v);
     const n = Math.abs(v) >= 10_000 ? compact.format(v) : plain.format(v);
-    if (!unit) return n;
-    if (CURRENCY.has(unit)) return v < 0 ? `-${unit}${n.slice(1)}` : `${unit}${n}`;
-    return `${n}${unit.startsWith(" ") || unit === "%" ? unit : ` ${unit}`}`;
+    return withUnit(n, unit, v < 0);
   };
 }
 
@@ -150,4 +166,63 @@ export function sortRows(data: Point[], series: Series[], sort: Sort, kind: Kind
     .map((r, i) => [r, i] as const)
     .sort(([p, i], [q, j]) => key(q) - key(p) || i - j)
     .map(([r]) => r);
+}
+
+/** `domain: [low, high]`, two finite numbers with low < high, else none. */
+export function readDomain(raw: unknown): [number, number] | undefined {
+  const d = asArray(raw).map(asNumber);
+  return d.length === 2 && d[0] != null && d[1] != null && d[0] < d[1] ? [d[0], d[1]] : undefined;
+}
+
+/**
+ * The value axis. Bars, stacks and `zero: true` start at zero: their length or height is the
+ * value. Lines and unstacked areas fit the data (with any reference lines and the agent's
+ * `domain`), padded out to the next nice tick, so a trend from 100 to 118 runs 100–120 instead of
+ * being squashed into the top of a chart that starts at 0 (95–120 when a ref sits at 100, so the
+ * line isn't on the plot's border); data that crosses zero includes it.
+ */
+export function valueAxis(o: {
+  kind: Kind;
+  stacked: boolean;
+  data: Point[];
+  series: Series[];
+  refs: Ref[];
+  zero?: boolean;
+  domain?: [number, number];
+  ticks?: number;
+}): { domain: [number, number]; ticks: number[]; zeroBased: boolean } {
+  const count = o.ticks ?? 5;
+  const values: number[] = [];
+  for (const r of o.data) {
+    if (o.stacked) {
+      let up = 0;
+      let down = 0;
+      for (const s of o.series) {
+        const v = num(r[s.key]);
+        if (v < 0) down += v;
+        else up += v;
+      }
+      values.push(up, down);
+    } else for (const s of o.series) if (typeof r[s.key] === "number") values.push(r[s.key] as number);
+  }
+  for (const r of o.refs) if (r.axis === "y" && typeof r.value === "number") values.push(r.value);
+  if (o.domain) values.push(...o.domain);
+  const zeroBased = o.kind === "bar" || o.stacked || !!o.zero;
+  let lo = values.length ? Math.min(...values) : 0;
+  let hi = values.length ? Math.max(...values) : 1;
+  if (zeroBased) {
+    lo = Math.min(lo, 0);
+    hi = Math.max(hi, 0);
+  }
+  // A flat series still gets a range around it.
+  if (lo === hi) [lo, hi] = lo === 0 ? [0, 1] : [lo - Math.abs(lo) * 0.05, hi + Math.abs(hi) * 0.05];
+  const scale = scaleLinear().domain([lo, hi]).nice(count);
+  let [a, b] = scale.domain();
+  let ticks = scale.ticks(count);
+  // A reference line on the plot's edge would sit on its border (Start 100 under the first point): one more step.
+  const step = ticks.length > 1 ? ticks[1] - ticks[0] : 0;
+  const onEdge = (v: number) => o.refs.some((r) => r.axis === "y" && r.value === v);
+  if (step && !o.domain && !(zeroBased && a === 0) && onEdge(a)) [a, ticks] = [a - step, [a - step, ...ticks]];
+  if (step && !o.domain && !(zeroBased && b === 0) && onEdge(b)) [b, ticks] = [b + step, [...ticks, b + step]];
+  return { domain: [a, b], ticks, zeroBased };
 }

@@ -1,5 +1,5 @@
 //! The `chart` primitive's rules beyond its prop types: what each `kind` takes, the shape of
-//! `refs` and `scale`, and the caps (rows, refs, bins). In step with
+//! `refs`, `scale` and `domain`, and the caps (rows, refs, bins). In step with
 //! `src/components/ui-blocks/chart-model.ts` and `scale.ts`, which read the same props.
 //! Bound values (`{{…}}`) are only known at render time, so they pass; the renderer
 //! clamps them to the same caps.
@@ -61,11 +61,32 @@ pub(crate) fn check(props: &Map<String, Value>, path: &str, errs: &mut Vec<Strin
     if kind == Some("dumbbell") && given("stacked").is_some_and(|v| v == true) {
         errs.push(format!("{}: a dumbbell doesn't stack; its two series are dots on one axis", at("stacked")));
     }
+    for k in ["zero", "domain"] {
+        if let (Some(kind @ ("bar" | "dumbbell")), Some(_)) = (kind, given(k)) {
+            let why = if kind == "bar" { "bars always start at 0, their length is the value" } else { "a dumbbell fits its dots" };
+            errs.push(format!("{}: `{k}` sets a line or area's value axis; {why}", at(k)));
+        }
+    }
+    if let Some(d) = given("domain") {
+        check_domain(d, &at("domain"), errs);
+    }
     if let Some(scale) = given("scale") {
         match kind {
             Some("dumbbell") | None => check_scale(scale, &at("scale"), errs),
             Some(k) => errs.push(format!("{}: `scale` colours a dumbbell; a {k} takes its colours from the series slots", at("scale"))),
         }
+    }
+}
+
+/// `[low, high]`: two finite numbers with low < high (bound ends pass).
+fn check_domain(d: &Value, path: &str, errs: &mut Vec<String>) {
+    let ok = match d.as_array().map(Vec::as_slice) {
+        Some([lo, hi]) if is_binding(lo) || is_binding(hi) => true,
+        Some([lo, hi]) => matches!((lo.as_f64(), hi.as_f64()), (Some(lo), Some(hi)) if lo < hi),
+        _ => false,
+    };
+    if !ok {
+        errs.push(format!("{path}: [low, high], two numbers with low < high, got {}", shown(d)));
     }
 }
 
@@ -241,6 +262,19 @@ mod tests {
         assert!(errors(json!({ "kind": "bar", "sort": "gap" }))[0].contains("`gap` sorts a dumbbell"));
         assert!(errors(json!({ "kind": "area", "sort": "value" }))[0].contains("keeps its x order"));
         assert_eq!(errors(json!({ "kind": "line", "sort": "none" })), NONE);
+    }
+
+    #[test]
+    fn zero_and_domain_set_a_line_or_area_axis() {
+        assert_eq!(errors(json!({ "kind": "line", "zero": true, "domain": [0, 100] })), NONE);
+        assert_eq!(errors(json!({ "kind": "area", "domain": [-1.5, 2] })), NONE);
+        assert_eq!(errors(json!({ "kind": "line", "domain": ["{{lo}}", 10] })), NONE, "bound ends are the renderer's");
+        assert!(errors(json!({ "kind": "bar", "zero": true }))[0].contains("bars always start at 0"));
+        assert!(errors(json!({ "kind": "dumbbell", "domain": [0, 1] }))[0].contains("fits its dots"));
+        for bad in [json!([5, 1]), json!([1, 1]), json!([0, 1, 2]), json!(["a", 1]), json!([0])] {
+            let errs = errors(json!({ "kind": "line", "domain": bad }));
+            assert!(errs.iter().any(|e| e.contains("$.props.domain: [low, high]")), "{bad}: {errs:?}");
+        }
     }
 
     #[test]

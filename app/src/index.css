@@ -276,6 +276,15 @@
 /* Charts draw the 2px gap between touching marks and the ring round each dot in the colour they sit on. */
 .ui-chart {
   --chart-surface: var(--background);
+  /* Stacked bands (chart.tsx): strong enough to tell neighbours apart, not a saturated block. Light
+     surfaces wash a hue out sooner than dark ones muddy it, so each mode has its own. */
+  --chart-band-opacity: 0.45;
+}
+.dark .ui-chart {
+  --chart-band-opacity: 0.55;
+}
+.ui-chart .ui-band .recharts-area-area {
+  fill-opacity: var(--chart-band-opacity);
 }
 [data-slot="card"] .ui-chart {
   --chart-surface: var(--card);

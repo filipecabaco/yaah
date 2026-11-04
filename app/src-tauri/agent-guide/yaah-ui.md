@@ -94,9 +94,11 @@ Pick the form from what the reader must do, before anything else:
 
 No pie or donut: ranked bars compare parts better. No dual axes: two charts, or index both series to 100.
 
-Colours are not yours to set. Series take the theme's chart colours in order, checked for colour-blind safety on its surface; past 5 series the rest fold into "Other". A dumbbell is two shades of one hue unless `scale` says otherwise: `diverging` (with its `midpoint`) only when the data has a meaningful middle, such as a margin or a change; `sequential` for magnitude; `categorical` for two unrelated series. At most 7 `bins` (a dumbbell's dots carry 5); the legend shows them.
+Colours are not yours to set. Series take the theme's chart colours in order, checked for colour-blind safety on its surface; past 5 series the rest fold into "Other". A dumbbell is two shades of one hue unless `scale` says otherwise: `diverging` (with its `midpoint`) colours each dot by its own value, so use it only for signed values with a meaningful middle, such as margins; for before → after of raw values (points, prices) keep the default or `categorical`; `sequential` for magnitude. At most 7 `bins` (a dumbbell's dots carry 5); the legend shows them.
 
-`refs` draws reference lines (`axis: "y"` is a value, `"x"` a category). `labels`: `ends` (default for line, area and dumbbell) labels the last values or the gaps; `none` (default for bar); avoid `all`. `orientation` overrides bar and dumbbell. `sort`: `value`, or `gap` for a dumbbell. A dumbbell takes exactly 2 series, and any chart at most 2,000 rows. There are no format strings or expressions; `unit` is a short suffix.
+`refs` draws reference lines (`axis: "y"` is a value, `"x"` a category). `labels`: `ends` (default for line, area and dumbbell) labels the last values or the gaps; `none` (default for bar); avoid `all`. `orientation` overrides bar and dumbbell. `sort`: `value`, or `gap` for a dumbbell. A dumbbell takes exactly 2 series, and any chart at most 2,000 rows. There are no format strings or expressions; `unit` is a short suffix: symbols attach (`"k"` → 16k, `"%"`, `"°C"`, `"$"` leads), words get a space (`"ms"` → 42 ms), and a leading space you write is kept (`" pts"`).
+
+Bars and stacks start at 0. Lines and unstacked areas fit their data (with any refs), so a trend from 100 to 118 fills the chart; `zero: true` starts them at 0, `domain: [low, high]` sets the range (widened to fit the data). End labels and ref labels sit outside the plot, nudged apart when close; one that can't fit leaves its series to the legend.
 
 ```json
 { "type": "chart", "props": {

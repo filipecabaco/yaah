@@ -13,8 +13,14 @@ describe("the chart gallery mock", () => {
       const title = (tree.props as { title: string }).title;
       expect(await within(log).findByText(title, {}, { timeout: 10_000 })).toBeInTheDocument();
     }
-    // At least eight charts (one per subject, one with two), loaded on first use.
-    await waitFor(() => expect(log.querySelectorAll("[data-chart-kind]").length).toBeGreaterThanOrEqual(8), { timeout: 15_000 });
+    // One chart per subject, loaded on first use: eight `.ui-chart` wrappers, and a ninth `data-chart-kind`
+    // on the dumbbell's own <svg> (it draws itself; the others are Recharts).
+    const kinds = () => [...log.querySelectorAll(".ui-chart[data-chart-kind]")].map((c) => c.getAttribute("data-chart-kind"));
+    await waitFor(() => expect(kinds()).toEqual(["line", "bar", "area", "dumbbell", "bar", "line", "bar", "area"]), { timeout: 15_000 });
+    expect(log.querySelectorAll("[data-chart-kind]")).toHaveLength(9);
+    expect(log.querySelectorAll("svg[data-chart-kind='dumbbell']")).toHaveLength(1);
+    // The logistics card's map.
+    expect(await within(log).findByRole("region", { name: "Map, 8 places" }, { timeout: 10_000 })).toBeInTheDocument();
     expect(within(log).queryAllByRole("alert")).toHaveLength(0);
   }, 30_000);
 });

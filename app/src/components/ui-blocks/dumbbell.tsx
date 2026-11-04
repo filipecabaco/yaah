@@ -7,11 +7,12 @@ import { scaleLinear } from "d3-scale";
 import { X, formatter, num, signed, type Labels, type Orientation, type Point, type Ref, type Series } from "@/components/ui-blocks/chart-model";
 import { binColors, binRange, colorOf, domainOf, forMarks, type Scale } from "@/components/ui-blocks/scale";
 import { cn } from "@/lib/utils";
+import { placeTip, type Box } from "@/components/ui-blocks/chart-layout";
+import { useChartFont } from "@/components/ui-blocks/chart-font";
 
 const ROW = 28;
 const TOP = 22;
 const AXIS = 22;
-const CHAR = 6.6;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 /** The container's width, followed as it resizes (a fixed guess until it has one). */
@@ -82,6 +83,10 @@ export function Dumbbell(props: {
   const tipId = useId();
   const gapFmt = useMemo(() => signed(fmt), [fmt]);
   const horizontal = orientation === "horizontal";
+  const font = useChartFont();
+  const CHAR = font * 0.62;
+  const tipRef = useRef<HTMLDivElement>(null);
+  const [tipSize, setTipSize] = useState<Box>({ w: 180, h: 84 });
 
   const values = data.flatMap((r) => [r[a.key], r[b.key]]).filter((v): v is number => typeof v === "number");
   const refValues = refs.filter((r) => r.axis === "y" && typeof r.value === "number").map((r) => r.value as number);
@@ -129,7 +134,16 @@ export function Dumbbell(props: {
     `${r[X]}: ${a.label} ${r[a.key] == null ? "no value" : fmt(r[a.key])}, ${b.label} ${r[b.key] == null ? "no value" : fmt(r[b.key])}, gap ${gapText(r)}`;
   const tip = active != null ? data[active] : null;
   const tipAt = tip ? [tip[a.key], tip[b.key]].filter((x): x is number => typeof x === "number").map((x) => v(x)) : [];
-  const tipPos = tip && active != null ? at(centre(active), tipAt.length ? (horizontal ? Math.max(...tipAt) : Math.min(...tipAt)) : valueLo) : null;
+  // Anchored on the row's outer dot; kept inside the plot (above the axis), so the card never clips it.
+  const anchor = tip && active != null ? at(centre(active), tipAt.length ? (horizontal ? Math.max(...tipAt) : Math.min(...tipAt)) : valueLo) : null;
+  const plotBox: Box = { w: width, h: horizontal ? TOP + n * ROW : height - AXIS };
+  const tipPos = anchor ? placeTip(anchor, tipSize, plotBox) : null;
+  useLayoutEffect(() => {
+    const el = tipRef.current;
+    if (!el) return;
+    const next = { w: el.offsetWidth, h: el.offsetHeight };
+    if (next.w > 0 && next.h > 0 && (next.w !== tipSize.w || next.h !== tipSize.h)) setTipSize(next);
+  }, [active, tipSize]);
 
   return (
     <div className="flex flex-col gap-2">
@@ -148,7 +162,8 @@ export function Dumbbell(props: {
           height={height}
           role="list"
           aria-label={`${a.label} and ${b.label} by ${props.xName}`}
-          className="block overflow-visible text-xs"
+          className="block overflow-visible tabular-nums"
+          style={{ fontSize: font }}
           data-chart-kind="dumbbell"
         >
           {/* Gridlines: solid hairlines one step off the surface. */}
@@ -307,13 +322,12 @@ export function Dumbbell(props: {
         </svg>
         {tip && tipPos && (
           <div
+            ref={tipRef}
             id={tipId}
             role="tooltip"
+            data-place={`${tipPos.x} ${tipPos.y}`}
             className="pointer-events-none absolute z-10 grid min-w-36 gap-1 rounded-lg border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md"
-            style={{
-              left: clamp(tipPos.x + 12, 0, Math.max(0, width - 180)),
-              top: horizontal ? clamp(tipPos.y - 10, 0, height - 60) : clamp(tipPos.y, 0, height - 60),
-            }}
+            style={{ left: tipPos.left, top: tipPos.top }}
           >
             <div className="font-medium">{String(tip[X])}</div>
             {series.map((s, i) => (

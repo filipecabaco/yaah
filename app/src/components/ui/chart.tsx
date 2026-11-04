@@ -312,7 +312,8 @@ function ChartLegendContent({
                 <div
                   className="h-2 w-2 shrink-0 rounded-[2px]"
                   style={{
-                    backgroundColor: item.color,
+                    // yaah: the series colour from the config; a stacked area's stroke is the surface seam.
+                    backgroundColor: itemConfig?.color ?? item.color,
                   }}
                 />
               )}

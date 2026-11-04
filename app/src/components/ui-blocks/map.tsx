@@ -1,12 +1,13 @@
 // `map` primitive — Leaflet via react-leaflet, OpenStreetMap tiles. Loaded on demand.
 // Marker labels and details are React children (portalled into Leaflet's
 // tooltip/popup), so agent text is shown as text, never parsed as HTML.
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { CircleMarker, MapContainer, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import type { CircleMarker as LeafletCircleMarker } from "leaflet";
 import { keepLinksOutside } from "@/components/ui-blocks/links";
 import { makeMarkerAccessible, markerName } from "@/components/ui-blocks/map-a11y";
+import { fitController } from "@/components/ui-blocks/map-fit";
 import { asArray, asNumber, asObj, optText } from "@/lib/narrow";
 
 type Tone = "default" | "success" | "warning" | "danger";
@@ -38,20 +39,33 @@ function toCenter(raw: unknown): [number, number] | undefined {
   return lat != null && lng != null ? [lat, lng] : undefined;
 }
 
+/** Fits the view to the markers once the container has a real size, and again on resize or new markers, until the user moves the map (map-fit.ts). */
 function FitBounds({ markers }: { markers: Marker[] }) {
   const map = useMap();
+  const fit = useRef<ReturnType<typeof fitController> | null>(null);
+  // By value: a re-render with the same places is no change.
+  const key = markers.map((m) => `${m.lat},${m.lng}`).join(";");
   useEffect(() => {
-    if (markers.length === 0) return;
-    const lats = markers.map((m) => m.lat);
-    const lngs = markers.map((m) => m.lng);
-    map.fitBounds(
-      [
-        [Math.min(...lats), Math.min(...lngs)],
-        [Math.max(...lats), Math.max(...lngs)],
-      ],
-      { padding: [32, 32], maxZoom: 12 },
+    const f = fitController(map);
+    fit.current = f;
+    const el = map.getContainer();
+    const ro = new ResizeObserver(([e]) => f.resized(e.contentRect.width, e.contentRect.height));
+    ro.observe(el);
+    f.resized(el.clientWidth, el.clientHeight);
+    return () => {
+      ro.disconnect();
+      f.dispose();
+      fit.current = null;
+    };
+  }, [map]);
+  useEffect(() => {
+    fit.current?.markers(
+      key.split(";").flatMap((p) => {
+        const [lat, lng] = p.split(",").map(Number);
+        return p ? [{ lat, lng }] : [];
+      }),
     );
-  }, [map, markers]);
+  }, [map, key]);
   return null;
 }
 
