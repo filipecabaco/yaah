@@ -4,7 +4,9 @@
 import { useEffect, useMemo } from "react";
 import { CircleMarker, MapContainer, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
+import type { CircleMarker as LeafletCircleMarker } from "leaflet";
 import { keepLinksOutside } from "@/components/ui-blocks/links";
+import { makeMarkerAccessible, markerName } from "@/components/ui-blocks/map-a11y";
 import { asArray, asNumber, asObj, optText } from "@/lib/narrow";
 
 type Tone = "default" | "success" | "warning" | "danger";
@@ -71,6 +73,8 @@ export default function UiMap({
     <div
       // `isolate`: Leaflet's panes use z-index 400–1000; keep them inside the map, under dialogs and menus.
       className="isolate overflow-hidden rounded-lg border"
+      role="region"
+      aria-label={markers.length ? `Map, ${markers.length === 1 ? "1 place" : `${markers.length} places`}` : "Map"}
       style={{ height: height || 320 }}
       onClickCapture={keepLinksOutside}
       onAuxClickCapture={keepLinksOutside}
@@ -90,6 +94,16 @@ export default function UiMap({
             radius={8}
             // A surface-coloured ring keeps overlapping markers apart.
             pathOptions={{ color: "#ffffff", weight: 2, fillColor: TONE[m.tone], fillOpacity: 0.95 }}
+            eventHandlers={{
+              add: (e) => {
+                const layer = e.target as LeafletCircleMarker;
+                makeMarkerAccessible(layer.getElement(), markerName(m, i, markers.length), {
+                  open: () => (m.detail ? layer.openPopup() : layer.openTooltip()),
+                  focus: () => layer.openTooltip(),
+                  blur: () => layer.closeTooltip(),
+                });
+              },
+            }}
           >
             {m.label && (
               <Tooltip direction="top" offset={[0, -8]}>

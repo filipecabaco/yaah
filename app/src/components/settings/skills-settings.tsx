@@ -223,7 +223,7 @@ function SkillRow({ s, onChanged }: { s: InstalledSkill; onChanged: () => void }
               <CircleAlert className="size-3" /> {s.problem}
             </p>
           )}
-          <p className="flex flex-wrap items-center gap-x-1.5 text-[0.6875rem] text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-x-1.5 text-2xs text-muted-foreground">
             {s.source ? (
               <>
                 <GitBranch className="size-3" />
@@ -440,7 +440,7 @@ function InstallPanel({ overview, onInstalled, onShow }: { overview: SkillsOverv
                       {s.installedIn.includes(target) && <Badge variant="outline">installed</Badge>}
                     </span>
                     {s.description && <span className="line-clamp-2 text-xs text-muted-foreground">{s.description}</span>}
-                    <span className="text-[0.6875rem] text-muted-foreground">
+                    <span className="text-2xs text-muted-foreground">
                       {s.path || "(repo root)"} · {plural(s.files, "file")} · {formatBytes(s.bytes)}
                       {s.skipped.length > 0 && ` · skips ${plural(s.skipped.length, "symlink or submodule", "symlinks or submodules")}`}
                     </span>

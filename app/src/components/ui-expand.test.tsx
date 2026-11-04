@@ -23,6 +23,9 @@ async function reviewInChat() {
   return { ...app, log, figure, reads };
 }
 
+/** The review's own title (its `title` prop): the dialog's title and both Expand buttons' names (SR-3). */
+const TITLE = "yaah: the last commit against the one before";
+
 const review = (root: ParentNode) => root.querySelector<HTMLElement>("[data-layout]") as HTMLElement;
 const current = (root: HTMLElement) => within(root).getByRole("navigation", { name: "Files" }).querySelector("[aria-current]")?.getAttribute("title");
 
@@ -35,10 +38,10 @@ describe("expanding a rendered UI", () => {
     const before = reads();
 
     // The caption's Expand (the diff-review header has one too).
-    const expand = within(figure.querySelector("figcaption") as HTMLElement).getByRole("button", { name: "Expand" });
+    const expand = within(figure.querySelector("figcaption") as HTMLElement).getByRole("button", { name: `Expand ${TITLE}` });
     expect(expand).toHaveAttribute("title", "Expand (F)");
     await user.click(expand);
-    const dialog = await screen.findByRole("dialog", { name: "diff-review" });
+    const dialog = await screen.findByRole("dialog", { name: TITLE });
     expect(dialog.className).toContain("h-[92vh]");
     expect(dialog.className).toContain("w-[96vw]");
     // The very same element, moved: nothing was mounted twice.
@@ -64,7 +67,7 @@ describe("expanding a rendered UI", () => {
 
     // … Esc closes it, and the entry shows it viewed, at its inline size again.
     await user.keyboard("{Escape}");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "diff-review" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: TITLE })).toBeNull());
     const back = review(figure);
     expect(back).toBe(inline);
     expect(back).not.toHaveAttribute("data-expanded");
@@ -77,7 +80,7 @@ describe("expanding a rendered UI", () => {
     const { user, figure } = await reviewInChat();
     review(figure).focus();
     await user.keyboard("f");
-    const dialog = await screen.findByRole("dialog", { name: "diff-review" });
+    const dialog = await screen.findByRole("dialog", { name: TITLE });
     const shown = review(dialog);
     // Focus is on the review itself, so j/k move between files straight away.
     await waitFor(() => expect(shown).toHaveFocus());
@@ -89,7 +92,7 @@ describe("expanding a rendered UI", () => {
     // F inside the dialog doesn't open another; the header's Expand is gone there.
     await user.keyboard("f");
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(within(shown).queryByRole("button", { name: "Expand" })).toBeNull();
+    expect(within(shown).queryByRole("button", { name: `Expand ${TITLE}` })).toBeNull();
   });
 
   it("opens from the review's own header too, and typing f in the composer doesn't", async () => {
@@ -99,8 +102,8 @@ describe("expanding a rendered UI", () => {
     await user.click(composer);
     await user.hover(figure);
     await user.keyboard("f");
-    expect(screen.queryByRole("dialog", { name: "diff-review" })).toBeNull();
-    await user.click(within(review(figure)).getByRole("button", { name: "Expand" }));
-    expect(await screen.findByRole("dialog", { name: "diff-review" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: TITLE })).toBeNull();
+    await user.click(within(review(figure)).getByRole("button", { name: `Expand ${TITLE}` }));
+    expect(await screen.findByRole("dialog", { name: TITLE })).toBeInTheDocument();
   });
 });

@@ -13,6 +13,12 @@
   /* `text-code`: code blocks, diffs and tool output. 12px at the default sizes; follows the code size. */
   --text-code: var(--code-size);
   --text-code--line-height: calc(1 / 0.75);
+  /* The smallest text never renders under 11px, whatever the interface size (SM-1): `text-xs` is 12px
+     at the default 14px interface, 10.3px at 12px without the floor; `text-2xs` is chips, badges and
+     path hints (11px at the default). */
+  --text-xs: max(0.75rem, 11px);
+  --text-2xs: max(0.6875rem, 11px);
+  --text-2xs--line-height: calc(1 / 0.6875);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -76,22 +82,44 @@
   --secondary: oklch(0.97 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
+  /* Darker than stock shadcn, for the floors in theme-map.ts (FLOORS; theme-contrast.test.ts):
+     muted text 4.5:1 on bg-muted and the reply bubble (4.82), destructive 4.5:1 on its own 20% tint
+     (4.58), control borders and the focus ring 3:1 on the page and the sidebar (3.23, 3.78). */
+  --muted-foreground: oklch(0.53 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
+  --destructive: oklch(0.5 0.2 27.325);
   --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  /* Categorical chart slots (dataviz reference palette, validated on #fff: CVD ΔE ≥ 9.1).
-       Slots 3–5 are < 3:1 on white, so charts always carry a legend and a table view. */
-  /* The one brand colour: the agent's tile in the mark. Never themed, like the chart colours. */
+  --input: oklch(0.65 0 0);
+  --ring: oklch(0.6 0 0);
+  /* The one brand colour: the agent's tile in the mark. Never themed. */
   --brand: oklch(0.72 0.17 55);
+  /* Categorical chart slots: the dataviz reference palette's first five, validated on #fff (adjacent
+     colour-blind ΔE ≥ 9.1, normal-vision ≥ 19.6). Slots 3–5 are < 3:1 on white, so charts always carry
+     a legend and a table view. A VS Code theme replaces these and the ramps below with its own, checked
+     on its own surface (lib/chart-palette.ts), or with these nudged to it. */
   --chart-1: #2a78d6;
   --chart-2: #eb6834;
   --chart-3: #1baf7a;
   --chart-4: #eda100;
   --chart-5: #e87ba4;
+  /* Sequential ramp (magnitude): one hue, the reference palette's blue steps 100–700, light to dark.
+     Diverging ramp (polarity): blue arm, gray midpoint, red arm, equal steps; the red arm matches the
+     blue steps' lightness on the reference red's hue. Both monotone in lightness (docs/research). */
+  --scale-seq-100: #cde2fb;
+  --scale-seq-200: #9ec5f4;
+  --scale-seq-300: #6da7ec;
+  --scale-seq-400: #3987e5;
+  --scale-seq-500: #256abf;
+  --scale-seq-600: #184f95;
+  --scale-seq-700: #0d366b;
+  --scale-div-neg-3: #184f95;
+  --scale-div-neg-2: #3987e5;
+  --scale-div-neg-1: #9ec5f4;
+  --scale-div-mid: #f0efec;
+  --scale-div-pos-1: #ffa69f;
+  --scale-div-pos-2: #e34948;
+  --scale-div-pos-3: #9b0016;
   --radius: 0.625rem;
   --sidebar: oklch(0.985 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
@@ -100,7 +128,7 @@
   --sidebar-accent: oklch(0.97 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --sidebar-ring: oklch(0.6 0 0);
   /* Terminals (components/terminal/theme.ts): background and text follow the theme; the 16 ANSI colours are tuned per mode. */
   --terminal-background: var(--card);
   --terminal-selection: oklch(0.708 0 0 / 40%);
@@ -141,13 +169,28 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
-  /* Same hues stepped for dark surfaces (validated on #171717, all ≥ 3:1). */
+  /* Same hues stepped for dark surfaces (validated on #171717 and #0a0a0a: all ≥ 3:1, colour-blind ΔE ≥ 8.4). */
   --brand: oklch(0.76 0.16 58);
   --chart-1: #3987e5;
   --chart-2: #d95926;
   --chart-3: #199e70;
   --chart-4: #c98500;
   --chart-5: #d55181;
+  /* The ramps flip their anchor: the low end recedes into the dark surface, the high end is lightest. */
+  --scale-seq-100: #0d366b;
+  --scale-seq-200: #184f95;
+  --scale-seq-300: #256abf;
+  --scale-seq-400: #3987e5;
+  --scale-seq-500: #6da7ec;
+  --scale-seq-600: #9ec5f4;
+  --scale-seq-700: #cde2fb;
+  --scale-div-neg-3: #9ec5f4;
+  --scale-div-neg-2: #5598e7;
+  --scale-div-neg-1: #256abf;
+  --scale-div-mid: #383835;
+  --scale-div-pos-1: #b53a3e;
+  --scale-div-pos-2: #e76767;
+  --scale-div-pos-3: #ffa6a2;
   --sidebar: oklch(0.205 0 0);
   --sidebar-foreground: oklch(0.985 0 0);
   --sidebar-primary: oklch(0.488 0.243 264.376);
@@ -193,6 +236,50 @@
 .leaflet-container.leaflet-container {
   font-family: var(--font-ui);
 }
+/* Map markers take the keyboard (ui-blocks/map.tsx): a focused one gets a ring-coloured stroke. */
+.leaflet-container .leaflet-interactive:focus-visible {
+  outline: none;
+  stroke: var(--ring);
+  stroke-width: 4px;
+}
+/* Focus (FO-1): shadcn draws focus as `ring-ring/50`, a half-transparent halo no theme can hold at
+   3:1. Here the halo is the solid `--ring`, which every theme keeps at 3:1 or more against the page
+   (theme-map.ts FLOORS); destructive controls keep their own colour, solid too. Unlayered, so it
+   wins over the utilities' colour while their widths stay. */
+[class*="focus-visible:ring"]:focus-visible {
+  --tw-ring-color: var(--ring);
+}
+[class*="focus-visible:ring-destructive"]:focus-visible {
+  --tw-ring-color: var(--destructive);
+}
+/* Forced colours (Windows High Contrast, some Linux webviews) drop box-shadow rings: draw an outline. */
+@media (forced-colors: active) {
+  :focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+/* Reduced motion (MO-1): spinners stop turning (the icon and its "running" text stay, so progress
+   still shows), dialogs and menus appear without zooming or fading, and scrolling jumps. */
+@media (prefers-reduced-motion: reduce) {
+  /* By substring: the classes come with variants (`data-open:animate-in`). */
+  [class*="animate-spin"],
+  [class*="animate-in"],
+  [class*="animate-out"] {
+    animation: none;
+  }
+  html,
+  * {
+    scroll-behavior: auto;
+  }
+}
+/* Charts draw the 2px gap between touching marks and the ring round each dot in the colour they sit on. */
+.ui-chart {
+  --chart-surface: var(--background);
+}
+[data-slot="card"] .ui-chart {
+  --chart-surface: var(--card);
+}
 /* A chat's column: the transcript and the composer share it, so their edges line up. It scales
    with its pane (each split pane is its own `@container`): gutters from 1rem in a narrow pane to
    3rem in a wide one, and up to 2048px wide, so a full-screen window isn't mostly margin. Inside,
@@ -214,17 +301,24 @@
 .markdown > * + * {
   margin-top: 0.6em;
 }
+/* Sized by the level the agent wrote (`data-md`, markdown.tsx), not the element, which is one lower (SR-5). */
 .markdown h1,
 .markdown h2,
-.markdown h3 {
+.markdown h3,
+.markdown :is([data-md="h1"], [data-md="h2"], [data-md="h3"]) {
   font-weight: 600;
   margin-top: 1em;
 }
-.markdown h1 {
+.markdown h1,
+.markdown [data-md="h1"] {
   font-size: 1.15em;
 }
-.markdown h2 {
+.markdown h2,
+.markdown [data-md="h2"] {
   font-size: 1.05em;
+}
+.markdown [data-md="h3"] {
+  font-size: 1em;
 }
 .markdown ul {
   list-style: disc;
@@ -280,10 +374,10 @@
 .agent-reply .markdown > * + * {
   margin-top: 0.85em;
 }
-.agent-reply .markdown > :is(h1, h2, h3) + * {
+.agent-reply .markdown > :is(h1, h2, h3, h4) + * {
   margin-top: 0.4em;
 }
-.agent-reply .markdown > * + :is(h1, h2, h3) {
+.agent-reply .markdown > * + :is(h1, h2, h3, h4) {
   margin-top: 1.25em;
 }
 .agent-reply .markdown li + li {

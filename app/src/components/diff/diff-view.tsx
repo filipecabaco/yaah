@@ -18,6 +18,7 @@ import { hunkTop, rowsOf, useWrap, WRAP_MAX } from "@/components/diff/lines";
 import { DiffLine, DiffRows, HunkHeader, WrapToggle } from "@/components/diff/rows";
 import { plural } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
+import { scrollBehavior } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /** Changed lines up to which everything is shown inline. */
@@ -279,7 +280,7 @@ function Review({
     setAt({ path: open, hunk: next });
     // The hunk's header row goes just under the file's sticky header.
     const el = body.current;
-    if (el) el.scrollTo({ top: hunkTop(el, starts, next), behavior: "smooth" });
+    if (el) el.scrollTo({ top: hunkTop(el, starts, next), behavior: scrollBehavior() });
   }
   function onKeyDown(e: KeyboardEvent) {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -363,9 +364,7 @@ function Review({
                     <Counts file={f} />
                   </span>
                   <span className="flex items-center gap-2 pl-5">
-                    <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-muted-foreground">
-                      {f.path.split("/").slice(0, -1).join("/") || "."}
-                    </span>
+                    <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{f.path.split("/").slice(0, -1).join("/") || "."}</span>
                     <Bar file={f} max={max} />
                   </span>
                 </button>

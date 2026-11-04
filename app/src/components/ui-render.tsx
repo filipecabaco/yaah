@@ -353,6 +353,11 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
             stacked={!!p.stacked}
             unit={optText(p.unit)}
             height={positive(p.height)}
+            refs={p.refs}
+            orientation={p.orientation}
+            labels={p.labels}
+            sort={p.sort}
+            scale={p.scale}
           />
         </Lazy>
       );
@@ -888,7 +893,7 @@ function LiveSource({
         state.data !== undefined && <Children nodes={nodes} scope={{ ...scope, [name]: state.data, history: state.samples }} />
       )}
       {state.error != null && <ErrorText error={state.error} prefix="Couldn’t read: " />}
-      <div className="flex items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <span
           className={cn(
             "size-1.5 rounded-full",

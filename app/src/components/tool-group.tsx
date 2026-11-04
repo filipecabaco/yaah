@@ -29,7 +29,7 @@ export function ToolGroup({ id, tools, running, autoAllowed, card }: Props) {
   const done = tools.map((_, k) => k).filter((k) => !running[k]);
   return (
     <Collapsible open={open} onOpenChange={(o) => setGroupOpen(id, o)} className="flex flex-col gap-3" data-slot="tool-group">
-      <CollapsibleTrigger className="group flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
+      <CollapsibleTrigger className="group flex min-h-[24px] w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted/50 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none">
         <ChevronRight className="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90" aria-hidden />
         {busy ? <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden /> : <Layers className="size-3.5 shrink-0" aria-hidden />}
         <span className="shrink-0 font-medium text-foreground">{plural(tools.length, "tool call")}</span>

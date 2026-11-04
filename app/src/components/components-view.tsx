@@ -110,7 +110,7 @@ export function ComponentsView({
     // Wide: the list beside the component. Narrow (under 36rem for this page, i.e. a window
     // under about 700px beside the sidebar): one at a time, the list or the component with a
     // way back to the list. A container query, so it follows the page's own width.
-    <main className="@container/library flex min-w-0 flex-1" data-pane={pane}>
+    <div className="@container/library flex min-w-0 flex-1" data-pane={pane}>
       <div
         className={cn(
           "flex w-64 shrink-0 flex-col border-r @max-xl/library:w-full @max-xl/library:border-r-0",
@@ -145,7 +145,7 @@ export function ComponentsView({
         <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3" aria-label="Components">
           {groups.map(([source, list]) => (
             <div key={source} className="flex flex-col gap-0.5">
-              <h2 className="px-2 pt-3 pb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
+              <h2 className="px-2 pt-3 pb-1 text-2xs font-medium tracking-wide text-muted-foreground uppercase">
                 {source === "yaah" ? "Provided by yaah" : label(source)}
               </h2>
               {list.map((c) => (
@@ -226,7 +226,7 @@ export function ComponentsView({
       {sharing && (
         <ShareLibraryDialog components={local} initial={current?.source === "local" ? [current.name] : []} onClose={() => setSharing(false)} />
       )}
-    </main>
+    </div>
   );
 }
 
@@ -314,7 +314,7 @@ function ComponentDetail({
           <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
             Built on
             {c.uses.map((u) => (
-              <Badge key={u} variant="outline" className="font-mono text-[0.625rem]">
+              <Badge key={u} variant="outline" className="font-mono text-2xs">
                 {u}
               </Badge>
             ))}

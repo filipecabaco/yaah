@@ -13,6 +13,9 @@ import { cn } from "@/lib/utils";
 const STEP = 0.02;
 const BIG_STEP = 0.1;
 
+/** The interface size over its default (the root font size over 16px): pane minimums grow with it. */
+const interfaceScale = () => parseFloat(getComputedStyle(document.documentElement).fontSize) / 16 || 1;
+
 const box = (r: Rect): CSSProperties => ({ left: `${r.x * 100}%`, top: `${r.y * 100}%`, width: `${r.w * 100}%`, height: `${r.h * 100}%` });
 
 export function PaneGrid({
@@ -132,7 +135,7 @@ function Divider({
   const [dragging, setDragging] = useState(false);
   const stop = useRef<(() => void) | null>(null);
   useEffect(() => () => stop.current?.(), []);
-  const clamp = (r: number) => clampRatio(split, r, px);
+  const clamp = (r: number) => clampRatio(split, r, px, interfaceScale());
 
   const start = (e: PointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;

@@ -331,3 +331,21 @@ Recommended order: 6 (ramps) with 1, then 3 (dumbbell and reference lines, becau
 - npm registry metadata for versions, licences and publish dates (queried 4 November 2026).
 - ECharts: https://echarts.apache.org/en/option.html (page did not answer the formatter/CSP question; UNVERIFIED)
 - Not checked: OSM tile usage policy (https://operations.osmfoundation.org/policies/tiles/), Claude artifacts, ChatGPT, MCP Apps, Observable docs, Recharts 3.8 sunburst support, Natural Earth admin-1 sizes.
+
+## 11. Note: chart palette and ramps, as built (4 November 2026)
+
+The first chart work landed after this research: colour-scale tokens, the mark specs, `refs` / `orientation` / `labels` / `sort`, and `kind: "dumbbell"` (d3-scale 4.0.2; 4.0.3 was published on 3 November and skipped). Screenshots: `docs/experiments/2026-11-04-charts-dumbbell/`.
+
+**Categorical slots on yaah's real surfaces** (`--background` and `--card` are `#ffffff` in light; `--card` `#171717` and `--background` `#0a0a0a` in dark), `node scripts/validate_palette.js`:
+
+| Set | Surface | Pairs | CVD worst ΔE | Normal worst ΔE | Contrast | Result |
+|---|---|---|---|---|---|---|
+| light 5 | `#ffffff` | adjacent | 9.1 (`#eda100`↔`#1baf7a`, protan) | 19.6 | WARN: slots 3–5 at 2.82, 2.17, 2.69 (relief: legend + table view) | pass |
+| light first 3 | `#ffffff` | all | 9.2 | 24.0 | WARN: `#1baf7a` 2.82 | pass |
+| dark 5 | `#171717` | adjacent | 8.4 (`#c98500`↔`#199e70`, protan) | 19.3 | all ≥ 3:1 | pass |
+| dark 5 | `#0a0a0a` | adjacent | 8.4 | 19.3 | all ≥ 3:1 | pass |
+| dark first 3 | `#171717` | all | 9.4 | 20.9 | all ≥ 3:1 | pass |
+
+**Ramps** (`--ordinal`, which checks monotone lightness, step gaps ≥ 0.06, one hue and a light-end contrast floor): `--scale-seq-100..700` are the reference blue steps 100–700 (light) and the same reversed (dark): monotone, gaps ≥ 0.06, one hue (spread 4°). Their near end fails the 2:1 light-end floor (1.32:1 light, 1.50:1 dark) by design: a sequential ramp's lowest step recedes into the surface, and that floor is the ordinal rule. The diverging arms (gray midpoint `#f0efec` / `#383835`, three steps to each pole; the red arm is the reference red's hue at the blue steps' lightness) are monotone with one hue per arm; in light the first step of each arm sits under 2:1 (1.79, 1.87). So small marks use only the stronger steps: a dumbbell's dots take at most 5 bins, steps 2 and 3 of each arm (all ≥ 3.6:1 light, ≥ 5.6:1 dark) and the muted text gray in the middle; sequential dots start at step 400 (3.64:1, passes `--ordinal`).
+
+**Themes.** VS Code themes now supply their own chart colours (`lib/chart-palette.ts`, checked in `toTokens` on every apply): `charts.*`, then terminal ANSI, then yaah's, each nudged in lightness (and, just under the floor, in chroma) to clear 3:1 on the theme's canvas, then held to chroma ≥ 0.10, adjacent CVD ≥ 6 and normal-vision ≥ 15. Of the 65 bundled themes, 1 uses its `charts.*` (Tokyo Night), 34 their terminal colours, 30 fall back to yaah's (nudged); every one passes. `pnpm themes` prints the per-theme reasons.

@@ -10,6 +10,8 @@ export type UiView = {
   expanded: boolean;
   /** Open this UI expanded; unset when it can't be (or already is). */
   expand?: () => void;
+  /** What the UI is called (lib/ui-title.ts): blocks name their own Expand button with it. */
+  name?: string;
 };
 
 export const UiViewContext = createContext<UiView>({ expanded: false });

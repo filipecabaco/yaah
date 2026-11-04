@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { compactPath } from "@/lib/format";
 import type { Selection } from "@/lib/layout";
-import { formatKeys, isMac, MOD, SHIFT } from "@/lib/shortcuts";
+import { formatKeys, isMac, MOD, SHIFT, SHORTCUTS } from "@/lib/shortcuts";
 import { openInTerminalApp, terminalApi, type TerminalExit } from "@/lib/terminal-api";
 import { TerminalView } from "./terminal-view";
 
@@ -147,7 +147,13 @@ export function TerminalPane({
     >
       <header data-tauri-drag-region="deep" className="flex shrink-0 items-center gap-2 border-b bg-background px-4 py-2.5 text-sm">
         <SquareTerminal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-        <span className="shrink-0 font-medium">{title}</span>
+        {/* Tab and Esc belong to the shell; the way out is said here (KB-2). */}
+        <span
+          className="shrink-0 font-medium"
+          title={`Tab and Esc go to the shell. ${formatKeys(SHORTCUTS.focusPane.keys)} moves to the pane beside it`}
+        >
+          {title}
+        </span>
         {exit && (
           <Badge variant="secondary" className="shrink-0 text-muted-foreground">
             {exit.signal ? `ended (${exit.signal})` : `exited ${exit.exitCode ?? ""}`}

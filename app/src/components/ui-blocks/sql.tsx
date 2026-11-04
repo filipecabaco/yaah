@@ -198,9 +198,7 @@ export default function UiSql({ connection, sql = "", limit, title }: { connecti
             ))}
           </select>
           {title && <span className="truncate text-xs text-muted-foreground">{title}</span>}
-          <span className="ml-auto text-[0.6875rem] text-muted-foreground">
-            {tables != null ? `${plural(tables, "table")} · read-only` : "read-only"}
-          </span>
+          <span className="ml-auto text-2xs text-muted-foreground">{tables != null ? `${plural(tables, "table")} · read-only` : "read-only"}</span>
           {history.length > 1 && (
             <label className="flex items-center gap-1 text-xs text-muted-foreground" title="Earlier queries">
               <History className="size-3.5" />

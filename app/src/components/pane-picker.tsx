@@ -133,7 +133,7 @@ export function PanePicker({
 
   if (terminalFolder && onNewTerminal) {
     return (
-      <main className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
+      <div className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
         <div className="mt-[max(0px,calc(12cqh-2rem))] flex h-fit w-full max-w-md flex-col gap-3">
           <div className="flex flex-col gap-1 px-1">
             <h2 className="text-sm font-medium">New terminal</h2>
@@ -141,13 +141,13 @@ export function PanePicker({
           </div>
           <TerminalFolders chats={chats} projects={projects} onPick={onNewTerminal} onBack={() => setTerminalFolder(false)} />
         </div>
-      </main>
+      </div>
     );
   }
 
   if (resuming && onResume) {
     return (
-      <main className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
+      <div className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
         <div className="mt-[max(0px,calc(12cqh-2rem))] flex h-fit w-full max-w-lg flex-col gap-3">
           <div className="flex flex-col gap-1 px-1">
             <h2 className="text-sm font-medium">Resume a session</h2>
@@ -155,13 +155,13 @@ export function PanePicker({
           </div>
           <ResumeSession agents={agents} inPane onResume={onResume} onBack={() => setResuming(false)} />
         </div>
-      </main>
+      </div>
     );
   }
 
   return (
     // Its top gap follows the pane's own height (a pane below another is short), not the window's.
-    <main className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
+    <div className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
       <div className="mt-[max(0px,calc(12cqh-2rem))] flex h-fit w-full max-w-md flex-col gap-3">
         <div className="flex flex-col gap-1 px-1">
           <h2 className="text-sm font-medium">Open in this pane</h2>
@@ -272,6 +272,6 @@ export function PanePicker({
           />
         </Suspense>
       )}
-    </main>
+    </div>
   );
 }

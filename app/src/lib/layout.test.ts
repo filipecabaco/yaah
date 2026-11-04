@@ -137,6 +137,16 @@ describe("contents and sizes", () => {
     expect(clampRatio(s, 0.99, 0)).toBe(0.95);
     expect((setRatio(threePanes(), "s1", 2).root as Split).ratio).toBe(0.95);
   });
+
+  it("grows the pane minimum with the interface size (LV-1: 20px is a scale of 20/14)", () => {
+    const s = threePanes().root as Split;
+    const scale = 20 / 14;
+    expect(minExtent(s, "x", scale)).toBeCloseTo(2 * MIN_PANE.w * scale);
+    expect(clampRatio(s, 0.01, 1000, scale)).toBeCloseTo((MIN_PANE.w * scale) / 1000);
+    expect(clampRatio(s, 0.99, 1000, scale)).toBeCloseTo(1 - (MIN_PANE.w * scale) / 1000);
+    // 2 × 400px no longer fits in 700px: only the plain bounds.
+    expect(clampRatio(s, 0.01, 700, scale)).toBe(0.05);
+  });
 });
 
 describe("balancing", () => {

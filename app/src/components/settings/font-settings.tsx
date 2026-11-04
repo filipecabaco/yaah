@@ -110,6 +110,8 @@ function SizeSlider({
   onChange: (size: number) => void;
 }) {
   const size = value ?? shown;
+  // Spoken as shown ("14 pixels, default"), not a bare number (SR-6).
+  const spoken = value == null ? `${size} pixels, ${note}` : `${size} pixels`;
   return (
     <div className="flex w-72 max-w-full flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2 text-sm">
@@ -118,6 +120,7 @@ function SizeSlider({
       </div>
       <Slider
         aria-label={`${label} size`}
+        aria-valuetext={spoken}
         min={limits.min}
         max={limits.max}
         step={1}

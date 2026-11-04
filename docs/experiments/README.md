@@ -3,6 +3,9 @@
 Screenshots and notes from experiments and visual checks, one folder per experiment (`YYYY-MM-DD-topic/`), each with a
 README saying what was tried and what each image shows.
 
+- [2026-11-04-charts-dumbbell](2026-11-04-charts-dumbbell/): the election dashboard's poll-vs-result dumbbell with a Tie line (before: grouped bars), the chart mark specs (solid grid, 24px bars, 10% wash, ringed dots, end labels), and chart colours following VS Code themes (Dracula, Tokyo Night, GitHub Light, Solarized Light, Nord's fallback), light and dark
+- [2026-11-04-a11y-personas](2026-11-04-a11y-personas/): accessibility persona review (low vision at 20 px, small text at 12 px, colour vision simulation, keyboard, screen-reader tree, theme contrast sweep, reduced motion): the flow screenshots behind `docs/research/accessibility-personas.md`
+- [2026-11-04-a11y-fixes](2026-11-04-a11y-fixes/): the persona review's fixes, re-measured: focus ring and failed badge at 12 px, focus coming back after dialogs and permission answers, the skip link, Settings and pane headers at 20 px, muted text in yaah light, Ayu Light and Dracula, named map markers, Lighthouse 95 → 100
 - [2026-11-04-mdx-default](2026-11-04-mdx-default/): one MDX-first Markdown renderer for every text: the MDX docs reply and a plain Markdown reply (links, a code fence) look as before, light and dark
 - [2026-11-03-mdx](2026-11-03-mdx/): an MDX docs section (Supabase style) in an agent reply, drawn as data with nothing run: frontmatter folded, imports hidden, `{expressions}` as code, Admonition, Tabs, Steps, details and an unknown component, light and dark
 - [2026-11-03-permissions](2026-11-03-permissions/): answered permission requests folded into their tool cards as chips, reads in the chat's folders and trusted MCP servers answered without asking, and runs of tool calls grouped into one row (light and dark)
@@ -25,3 +28,4 @@ README saying what was tried and what each image shows.
 - [2026-11-04-appearance-icons](2026-11-04-appearance-icons/): Settings Appearance mode cards, icon alignment before and after (light and dark)
 - [2026-11-04-expand-fill](2026-11-04-expand-fill/): Expand dialog fills with the main scroll area (file-view before and after, logs, git graph, tests, db query; light and dark)
 - [2026-11-04-fonts](2026-11-04-fonts/): Settings Fonts (interface and code font and size): the section, the pickers, chat, terminal, map and diff at 12 and 20 px, light and dark
+- [2026-11-04-chart-gallery](2026-11-04-chart-gallery/): the mock's "chart gallery" (eight subjects: line, stacked bar and area, dumbbell, horizontal bar, map) in yaah light and dark, Tokyo Night and Solarized Light

@@ -81,12 +81,18 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
   );
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col">
+    // `@container/chat`: the header drops what matters least as its pane narrows (in rem, so it follows the interface size).
+    <div className="@container/chat flex h-full min-w-0 flex-1 flex-col">
       {/* Drags the window (its buttons stay buttons): there's no title bar on macOS. */}
       <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
         {project && (
           <>
-            <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onOpenProject(project.id)}>
+            <button
+              type="button"
+              className="max-w-[40%] min-w-0 shrink truncate text-muted-foreground hover:text-foreground"
+              title={project.name}
+              onClick={() => onOpenProject(project.id)}
+            >
               {project.name}
             </button>
             <span className="text-muted-foreground" aria-hidden>
@@ -94,10 +100,13 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
             </span>
           </>
         )}
-        <h1 className="min-w-0 truncate font-medium">{session.title}</h1>
+        {/* The title gives way last: the folder path shrinks first and goes in a narrow pane; the full title is its tooltip. */}
+        <h1 className="min-w-[4ch] truncate font-medium" title={session.title}>
+          {session.title}
+        </h1>
         <button
           type="button"
-          className="shrink-0 rounded-4xl focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="flex min-h-[24px] shrink-0 items-center rounded-4xl focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           onClick={() => openAgentSwitch(session.sessionId)}
           aria-label={`Agent: ${agent?.label ?? session.accountId}. Switch the agent for the next message`}
           title={agent ? `${agent.detail ?? agent.email ?? agent.commandLine}\nClick to switch the agent for the next message` : undefined}
@@ -110,14 +119,17 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
         {agent?.report && !agent.report.mcpHttp && (
           <Badge
             variant="secondary"
-            className="text-muted-foreground"
+            className="hidden text-muted-foreground @md/chat:inline-flex"
             title={`${agent.label} can't connect to HTTP MCP servers, so this chat has no UI tools (forms, tables, charts). Chatting works as usual.`}
           >
             no UI tools
           </Badge>
         )}
         <FolderMenu path={session.cwd}>
-          <span className="ml-auto truncate font-mono text-xs text-muted-foreground" title={roots.map((r) => compactPath(r)).join("\n")}>
+          <span
+            className="ml-auto hidden min-w-0 shrink-[4] truncate font-mono text-xs text-muted-foreground @lg/chat:block"
+            title={roots.map((r) => compactPath(r)).join("\n")}
+          >
             {compactPath(session.cwd)}
           </span>
         </FolderMenu>
@@ -169,7 +181,7 @@ function TrustedServers({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="flex min-h-[24px] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           aria-label={`${plural(servers.length, "trusted MCP server")} in this ${inProject ? "project" : "chat"}`}
         >
           <ShieldCheck className="size-3.5" aria-hidden />
@@ -208,7 +220,8 @@ function ChatFolders({ roots, pending, inProject, onAdd }: { roots: string[]; pe
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          // Right-aligned by the folder path beside it; on its own once a narrow pane drops the path.
+          className="ml-auto flex min-h-[24px] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none @lg/chat:ml-0"
           aria-label={`${plural(roots.length, "folder")} in this chat. Show them or add repositories`}
         >
           <FolderGit2 className="size-3.5" aria-hidden />
@@ -227,7 +240,7 @@ function ChatFolders({ roots, pending, inProject, onAdd }: { roots: string[]; pe
           >
             <div className="min-w-0">
               <div className="truncate">{baseName(root)}</div>
-              <div className="truncate font-mono text-[0.6875rem] text-muted-foreground">{compactPath(root)}</div>
+              <div className="truncate font-mono text-2xs text-muted-foreground">{compactPath(root)}</div>
             </div>
           </DropdownMenuItem>
         ))}
@@ -662,11 +675,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
                           {s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : <FileText />)}
                           {s.path ? <FileLabel label={s.label} /> : <span className="shrink-0 font-mono">{s.label}</span>}
                           {s.local && (
-                            <Badge
-                              variant="secondary"
-                              className="h-4 shrink-0 px-1 text-[0.625rem]"
-                              title="yaah's own command, not sent to the agent"
-                            >
+                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs" title="yaah's own command, not sent to the agent">
                               yaah
                             </Badge>
                           )}

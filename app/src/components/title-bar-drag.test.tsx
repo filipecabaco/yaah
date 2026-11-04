@@ -49,8 +49,10 @@ describe("the hidden sidebar's title bar", () => {
     const bar = await screen.findByLabelText("Title bar");
     const row = bar.closest("[data-shown]")!;
     const column = row.parentElement!;
-    // The bar's row comes first in the main column, then the pane grid, which clips its absolutely placed panes.
-    const grid = column.lastElementChild as HTMLElement;
+    // The bar's row comes first in the main column, then the main landmark holding the pane grid, which clips its absolutely placed panes.
+    const main = column.lastElementChild as HTMLElement;
+    expect(main.tagName).toBe("MAIN");
+    const grid = main.firstElementChild as HTMLElement;
     expect(column.firstElementChild).toBe(row);
     expect(grid).toHaveClass("relative", "overflow-hidden", "flex-1");
     expect(grid.querySelectorAll("section[data-pane-id]").length).toBeGreaterThan(0);

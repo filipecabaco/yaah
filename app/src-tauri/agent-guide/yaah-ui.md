@@ -79,6 +79,34 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 
 **Command output.** Pass short output as printed to the primitive or component made for it (`tests`, `filetree`, `json`, `textfile`, `wordcount`, `gitgraph`, `gitstatus`, `diffstat`). Don't restate it in prose. Anything long is referenced instead (next section).
 
+## Charts
+
+Pick the form from what the reader must do, before anything else:
+
+| The data | Use |
+| --- | --- |
+| One number, or a few headline numbers | `stat` (a row of them), not a one-bar chart |
+| A ratio against a limit | `progress` |
+| A trend over time | `chart` `line`; `area` with `stacked` for parts of a total |
+| Amounts to compare | `chart` `bar`, `sort: "value"` unless the order means something |
+| Two values per item: before → after, poll → result, target → actual | `chart` `dumbbell` |
+| More than about 7 classes that all matter | `table` |
+
+No pie or donut: ranked bars compare parts better. No dual axes: two charts, or index both series to 100.
+
+Colours are not yours to set. Series take the theme's chart colours in order, checked for colour-blind safety on its surface; past 5 series the rest fold into "Other". A dumbbell is two shades of one hue unless `scale` says otherwise: `diverging` (with its `midpoint`) only when the data has a meaningful middle, such as a margin or a change; `sequential` for magnitude; `categorical` for two unrelated series. At most 7 `bins` (a dumbbell's dots carry 5); the legend shows them.
+
+`refs` draws reference lines (`axis: "y"` is a value, `"x"` a category). `labels`: `ends` (default for line, area and dumbbell) labels the last values or the gaps; `none` (default for bar); avoid `all`. `orientation` overrides bar and dumbbell. `sort`: `value`, or `gap` for a dumbbell. A dumbbell takes exactly 2 series, and any chart at most 2,000 rows. There are no format strings or expressions; `unit` is a short suffix.
+
+```json
+{ "type": "chart", "props": {
+  "kind": "dumbbell", "x": "state", "unit": " pts", "sort": "gap",
+  "data": [{ "state": "PA", "poll": -0.5, "result": 1.7 }, { "state": "MI", "poll": -0.8, "result": 1.4 }, { "state": "AZ", "poll": 1.2, "result": 5.5 }],
+  "series": [{ "key": "poll", "label": "Poll average" }, { "key": "result", "label": "Result" }],
+  "refs": [{ "axis": "y", "value": 0, "label": "Tie" }],
+  "scale": { "type": "diverging", "midpoint": 0, "bins": 5 } } }
+```
+
 ## Reference data, don't paste it
 
 Every character of a `ui_render` call is something you generate, slowly, while the user watches the card say it is building. Never paste large data (diffs, logs, file contents, query results) into the JSON: name it, and yaah reads it itself, in the chat's folder, read-only, and keeps it fresh.

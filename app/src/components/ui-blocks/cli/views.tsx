@@ -408,7 +408,7 @@ function TreeRow({
       <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground transition-transform", open && "rotate-90", !node.dir && "invisible")} />
       <Icon className={cn("size-3.5 shrink-0", node.dir ? "text-[var(--chart-1)]" : "text-muted-foreground")} />
       <span className={cn("truncate", node.dir && "font-medium")}>{hit && query ? <Mark text={node.name} q={query} /> : node.name}</span>
-      {sub && !open && sub.files > 0 && <span className="ml-auto shrink-0 text-[0.6875rem] text-muted-foreground">{fmt.format(sub.files)}</span>}
+      {sub && !open && sub.files > 0 && <span className="ml-auto shrink-0 text-2xs text-muted-foreground">{fmt.format(sub.files)}</span>}
     </>
   );
   const rowClass = cn("flex w-full items-center gap-1.5 py-[3px] pr-2 text-left", hit && "bg-amber-500/15");
@@ -615,7 +615,7 @@ function JsonNode({
           {!shown && (
             <>
               <span className="text-muted-foreground"> … {c}</span>
-              <span className="ml-1.5 text-[0.6875rem] text-muted-foreground">{plural(entries.length, isArr ? "item" : "key")}</span>
+              <span className="ml-1.5 text-2xs text-muted-foreground">{plural(entries.length, isArr ? "item" : "key")}</span>
               {comma}
             </>
           )}
@@ -636,7 +636,7 @@ function JsonNode({
             />
           ))}
           {entries.length > limit && (
-            <button type="button" className="pl-4 text-[0.6875rem] text-muted-foreground underline" onClick={() => setLimit((l) => l + 100)}>
+            <button type="button" className="pl-4 text-2xs text-muted-foreground underline" onClick={() => setLimit((l) => l + 100)}>
               {fmt.format(entries.length - limit)} more
             </button>
           )}
@@ -826,7 +826,11 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
             className={cn("flex", (marks.has(start + i) || hitSet.has(i)) && "bg-amber-500/15", i === target && hits.length > 0 && "bg-amber-500/30")}
           >
             <span
-              className="sticky left-0 shrink-0 bg-background px-2 text-right text-muted-foreground/70 select-none"
+              // A highlighted line also gets a bar by its number: a shape, not the tint alone (CV-1).
+              className={cn(
+                "sticky left-0 shrink-0 border-l-2 border-transparent bg-background px-2 text-right text-muted-foreground/70 select-none",
+                (marks.has(start + i) || hitSet.has(i)) && "border-amber-500 text-foreground",
+              )}
               style={{ width: `${width + 2}ch` }}
             >
               {start + i}
@@ -970,10 +974,10 @@ function GraphCell({ rows, i, h, cols }: { rows: GitRow[]; i: number; h: number;
 }
 
 function RefBadge({ r }: { r: GitRef }) {
-  if (r.kind === "head") return <Badge className="h-4 px-1.5 text-[0.625rem]">HEAD</Badge>;
+  if (r.kind === "head") return <Badge className="h-4 px-1.5 text-2xs">HEAD</Badge>;
   if (r.kind === "tag")
     return (
-      <Badge variant="outline" className="h-4 gap-0.5 px-1.5 text-[0.625rem]">
+      <Badge variant="outline" className="h-4 gap-0.5 px-1.5 text-2xs">
         <Tag className="size-2.5" />
         {r.name}
       </Badge>
@@ -981,7 +985,7 @@ function RefBadge({ r }: { r: GitRef }) {
   return (
     <Badge
       variant={r.kind === "branch" ? "secondary" : "outline"}
-      className={cn("h-4 gap-0.5 px-1.5 text-[0.625rem]", r.kind === "remote" && "text-muted-foreground")}
+      className={cn("h-4 gap-0.5 px-1.5 text-2xs", r.kind === "remote" && "text-muted-foreground")}
     >
       <GitBranch className="size-2.5" />
       {r.name}
@@ -1004,7 +1008,7 @@ export function GitGraphView({ text }: { text: string }) {
           return (
             <div key={i} className="flex items-center gap-2 pr-3 pl-2 text-xs hover:bg-muted/40" style={{ height: h }}>
               <GraphCell rows={rows} i={i} h={h} cols={cols} />
-              {r.hash && <span className="font-mono text-[0.6875rem] text-muted-foreground">{r.hash}</span>}
+              {r.hash && <span className="font-mono text-2xs text-muted-foreground">{r.hash}</span>}
               {r.refs.length > 0 && (
                 <span className="flex min-w-0 shrink gap-1 overflow-hidden">
                   {r.refs.map((ref, j) => (
@@ -1087,7 +1091,7 @@ export function GitStatusView({ text }: { text: string }) {
                   {f.from && <span className="text-muted-foreground">{f.from} → </span>}
                   {f.path}
                 </span>
-                <span className="ml-auto shrink-0 font-sans text-[0.6875rem] text-muted-foreground">{f.label}</span>
+                <span className="ml-auto shrink-0 font-sans text-2xs text-muted-foreground">{f.label}</span>
               </div>
             ))}
           </div>
@@ -1125,7 +1129,7 @@ export function DiffStatView({ text }: { text: string }) {
             <span className="truncate font-mono">{tail(f.path, 60)}</span>
             <div className="flex h-2.5 gap-px">
               {f.binary ? (
-                <span className="text-[0.6875rem] text-muted-foreground">binary</span>
+                <span className="text-2xs text-muted-foreground">binary</span>
               ) : (
                 <>
                   <div className="rounded-sm bg-green-600 dark:bg-green-500" style={{ width: `${(f.added / max) * 100}%` }} />

@@ -48,9 +48,7 @@ function Told({ title, text }: { title: string; text: string }) {
         {title}
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <pre className="mt-1.5 max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-[0.6875rem] leading-relaxed whitespace-pre-wrap">
-          {text}
-        </pre>
+        <pre className="mt-1.5 max-h-96 overflow-auto rounded-md border bg-muted/30 p-3 text-2xs leading-relaxed whitespace-pre-wrap">{text}</pre>
       </CollapsibleContent>
     </Collapsible>
   );
@@ -230,7 +228,7 @@ export function ChatSettings() {
                   <span className="truncate font-mono text-xs" title={k}>
                     {cardKeyLabel(k)}
                   </span>
-                  {isDefault && <span className="text-[0.6875rem] text-muted-foreground">default</span>}
+                  {isDefault && <span className="text-2xs text-muted-foreground">default</span>}
                 </div>
                 <span className="ml-auto flex items-center gap-1">
                   <ModeSelect value={rules[k]} onChange={(m) => save(k, m)} label={`How ${cardKeyLabel(k)} cards open`} />

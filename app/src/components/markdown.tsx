@@ -60,9 +60,31 @@ export function SafeImage({ src, alt, width, className }: { src: unknown; alt?: 
   );
 }
 
+/**
+ * An agent's `#` is a section of the chat, under the pane's own title (its h1): every heading goes
+ * one level down (SR-5), so a reply's "# Release notes" isn't a second page title. `data-md` keeps
+ * the level it was written at, which index.css sizes it by.
+ */
+function heading(level: 1 | 2 | 3 | 4 | 5 | 6) {
+  const Tag = `h${Math.min(6, level + 1)}` as "h2";
+  return function Heading({ id, children }: ComponentProps<"h2">) {
+    return (
+      <Tag id={id} data-md={`h${level}`}>
+        {children}
+      </Tag>
+    );
+  };
+}
+
 const components: Components = {
   a: Link,
   img: ({ src, alt }) => <SafeImage src={src} alt={alt} />,
+  h1: heading(1),
+  h2: heading(2),
+  h3: heading(3),
+  h4: heading(4),
+  h5: heading(5),
+  h6: heading(6),
   ...MDX_COMPONENTS,
 };
 

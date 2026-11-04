@@ -243,9 +243,10 @@
       }
     },
     "chart": {
-      "description": "A bar, line or area chart over one x field and up to 5 series on a single y axis (never two y scales; put measures of different scale in separate charts). Always shows a legend for 2+ series and lets the user flip to a table of the data. More than 5 series: keep the biggest and fold the rest into an \"Other\" series.",
+      "description": "A bar, line, area or dumbbell chart over one x field and up to 5 series on a single y axis (never two y scales; put measures of different scale in separate charts). bar compares amounts, line shows a trend, area a trend of parts (stacked), dumbbell two values per category (before → after, poll → result) as two dots joined by a line. Always shows a legend for 2+ series and lets the user flip to a table of the data. More than 5 series: keep the biggest and fold the rest into an \"Other\" series. Colours come from the theme and are checked for colour-blind safety; you can't set them. At most 2,000 rows.",
       "uses": [
-        "recharts"
+        "recharts",
+        "d3-scale"
       ],
       "children": false,
       "props": {
@@ -254,24 +255,25 @@
           "enum": [
             "bar",
             "line",
-            "area"
+            "area",
+            "dumbbell"
           ],
           "required": true
         },
         "data": {
           "type": "array",
           "required": true,
-          "description": "Rows, e.g. [{ month: \"Jan\", api: 120, web: 80 }]."
+          "description": "Rows, e.g. [{ month: \"Jan\", api: 120, web: 80 }]. At most 2,000."
         },
         "x": {
           "type": "string",
           "required": true,
-          "description": "Field of each row used for the x axis."
+          "description": "Field of each row used for the x axis (a dumbbell's rows)."
         },
         "series": {
           "type": "array",
           "required": true,
-          "description": "[{ key, label }] — fields plotted as series, in a fixed order."
+          "description": "[{ key, label }] — fields plotted as series, in a fixed order. A dumbbell takes exactly 2: before, then after."
         },
         "stacked": {
           "type": "boolean",
@@ -283,7 +285,41 @@
         },
         "height": {
           "type": "number",
-          "description": "Pixels. Default 240."
+          "description": "Pixels. Default 240 (a horizontal dumbbell sizes itself: 28px a row)."
+        },
+        "refs": {
+          "type": "array",
+          "description": "Reference lines, at most 20: [{ axis: \"y\", value: 0, label: \"Tie\" }]. axis \"y\" is a value (a target, zero), \"x\" a category; label at most 40 characters."
+        },
+        "orientation": {
+          "type": "string",
+          "enum": [
+            "vertical",
+            "horizontal"
+          ],
+          "description": "bar and dumbbell only. Default: a dumbbell is horizontal, bars turn horizontal when a category name is long."
+        },
+        "labels": {
+          "type": "string",
+          "enum": [
+            "ends",
+            "none",
+            "all"
+          ],
+          "description": "Direct labels. Default \"ends\" for line, area (each series' last value) and dumbbell (the gap at the row end); \"none\" for bar (\"ends\" puts each bar's value, or a stack's total, at its tip). \"all\" labels every point: rarely right."
+        },
+        "sort": {
+          "type": "string",
+          "enum": [
+            "none",
+            "value",
+            "gap"
+          ],
+          "description": "Row order. \"value\": biggest first (bar, dumbbell by its second series). \"gap\": a dumbbell's widest gap first. Default \"none\", the data's order."
+        },
+        "scale": {
+          "type": "object",
+          "description": "dumbbell only: how dots are coloured. { type: \"sequential\" | \"diverging\" | \"categorical\", domain?: [low, high], midpoint?, bins?: 2-7, unit? }. Default: two shades of one hue. \"diverging\" colours each dot by its side of the midpoint (the first series hollow) with a legend of the bins (dots carry at most 5 bins; more are merged); \"categorical\" uses the first two series colours."
         }
       }
     },

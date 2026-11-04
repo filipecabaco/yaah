@@ -13,7 +13,17 @@
    "addFg": "rgb(150 224 114)",
    "removeFg": "rgb(238 93 67)",
    "selection": "rgb(61 67 82)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(124 183 255)",
+     "rgb(238 93 67)",
+     "rgb(0 232 198)",
+     "rgb(255 230 109)",
+     "rgb(255 0 170)"
+    ],
+    "ansiRed": "rgb(238 93 67)"
+   }
   }
  },
  {
@@ -30,7 +40,10 @@
    "addFg": "rgb(99 209 136)",
    "removeFg": "rgb(221 80 116)",
    "selection": "rgb(38 46 71)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansiRed": "rgb(221 80 115)"
+   }
   }
  },
  {
@@ -47,7 +60,17 @@
    "addFg": "rgb(112 191 86)",
    "removeFg": "rgb(242 109 120)",
    "selection": "rgb(25 49 85)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(79 191 255)",
+     "rgb(240 107 115)",
+     "rgb(147 226 200)",
+     "rgb(253 176 76)",
+     "rgb(208 161 255)"
+    ],
+    "ansiRed": "rgb(240 107 115)"
+   }
   }
  },
  {
@@ -64,7 +87,17 @@
    "addFg": "rgb(91 162 57)",
    "removeFg": "rgb(216 98 111)",
    "selection": "rgb(215 228 246)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(33 161 226)",
+     "rgb(240 107 108)",
+     "rgb(74 188 150)",
+     "rgb(231 161 0)",
+     "rgb(161 118 203)"
+    ],
+    "ansiRed": "rgb(240 107 108)"
+   }
   }
  },
  {
@@ -81,7 +114,17 @@
    "addFg": "rgb(135 217 108)",
    "removeFg": "rgb(242 121 131)",
    "selection": "rgb(43 71 104)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(106 205 255)",
+     "rgb(242 130 115)",
+     "rgb(147 226 200)",
+     "rgb(252 202 96)",
+     "rgb(221 187 255)"
+    ],
+    "ansiRed": "rgb(242 130 115)"
+   }
   }
  },
  {
@@ -98,7 +141,25 @@
    "addFg": "rgb(166 209 137)",
    "removeFg": "rgb(231 130 132)",
    "selection": "rgb(73 78 99)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(140 170 238)",
+     "rgb(239 159 118)",
+     "rgb(166 209 137)",
+     "rgb(229 200 144)",
+     "rgb(202 158 230)"
+    ],
+    "chartsRed": "rgb(231 130 132)",
+    "ansi": [
+     "rgb(140 170 238)",
+     "rgb(231 130 132)",
+     "rgb(129 200 190)",
+     "rgb(229 200 144)",
+     "rgb(244 184 228)"
+    ],
+    "ansiRed": "rgb(231 130 132)"
+   }
   }
  },
  {
@@ -115,7 +176,25 @@
    "addFg": "rgb(59 147 40)",
    "removeFg": "rgb(210 15 57)",
    "selection": "rgb(204 207 215)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "charts": [
+     "rgb(30 102 245)",
+     "rgb(254 100 11)",
+     "rgb(64 160 43)",
+     "rgb(223 142 29)",
+     "rgb(136 57 239)"
+    ],
+    "chartsRed": "rgb(210 15 57)",
+    "ansi": [
+     "rgb(30 102 245)",
+     "rgb(210 15 57)",
+     "rgb(23 146 153)",
+     "rgb(223 142 29)",
+     "rgb(234 118 203)"
+    ],
+    "ansiRed": "rgb(210 15 57)"
+   }
   }
  },
  {
@@ -132,7 +211,25 @@
    "addFg": "rgb(166 218 149)",
    "removeFg": "rgb(237 135 150)",
    "selection": "rgb(64 68 89)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(138 173 244)",
+     "rgb(245 169 127)",
+     "rgb(166 218 149)",
+     "rgb(238 212 159)",
+     "rgb(198 160 246)"
+    ],
+    "chartsRed": "rgb(237 135 150)",
+    "ansi": [
+     "rgb(138 173 244)",
+     "rgb(237 135 150)",
+     "rgb(139 213 202)",
+     "rgb(238 212 159)",
+     "rgb(245 189 230)"
+    ],
+    "ansiRed": "rgb(237 135 150)"
+   }
   }
  },
  {
@@ -149,7 +246,25 @@
    "addFg": "rgb(166 227 161)",
    "removeFg": "rgb(243 139 168)",
    "selection": "rgb(59 61 79)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(137 180 250)",
+     "rgb(250 179 135)",
+     "rgb(166 227 161)",
+     "rgb(249 226 175)",
+     "rgb(203 166 247)"
+    ],
+    "chartsRed": "rgb(243 139 168)",
+    "ansi": [
+     "rgb(137 180 250)",
+     "rgb(243 139 168)",
+     "rgb(148 226 213)",
+     "rgb(249 226 175)",
+     "rgb(245 194 231)"
+    ],
+    "ansiRed": "rgb(243 139 168)"
+   }
   }
  },
  {
@@ -166,7 +281,8 @@
    "addFg": "rgb(74 222 128)",
    "removeFg": "rgb(248 113 113)",
    "selection": "rgb(20 62 91)",
-   "dark": true
+   "dark": true,
+   "chartSources": {}
   }
  },
  {
@@ -183,7 +299,17 @@
    "addFg": "rgb(80 250 123)",
    "removeFg": "rgb(255 85 85)",
    "selection": "rgb(68 71 90)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(189 147 249)",
+     "rgb(255 85 85)",
+     "rgb(139 233 253)",
+     "rgb(241 250 140)",
+     "rgb(255 121 198)"
+    ],
+    "ansiRed": "rgb(255 85 85)"
+   }
   }
  },
  {
@@ -200,7 +326,17 @@
    "addFg": "rgb(98 232 132)",
    "removeFg": "rgb(238 102 102)",
    "selection": "rgb(68 71 90)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(191 158 238)",
+     "rgb(238 102 102)",
+     "rgb(151 225 241)",
+     "rgb(231 238 152)",
+     "rgb(242 134 196)"
+    ],
+    "ansiRed": "rgb(238 102 102)"
+   }
   }
  },
  {
@@ -217,7 +353,25 @@
    "addFg": "rgb(122 140 102)",
    "removeFg": "rgb(230 126 128)",
    "selection": "rgb(65 75 81)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(127 187 179)",
+     "rgb(230 152 117)",
+     "rgb(167 192 128)",
+     "rgb(219 188 127)",
+     "rgb(214 153 182)"
+    ],
+    "chartsRed": "rgb(230 126 128)",
+    "ansi": [
+     "rgb(127 187 179)",
+     "rgb(230 126 128)",
+     "rgb(131 192 146)",
+     "rgb(219 188 127)",
+     "rgb(214 153 182)"
+    ],
+    "ansiRed": "rgb(230 126 128)"
+   }
   }
  },
  {
@@ -234,7 +388,25 @@
    "addFg": "rgb(132 139 61)",
    "removeFg": "rgb(248 85 82)",
    "selection": "rgb(239 233 213)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "charts": [
+     "rgb(58 148 197)",
+     "rgb(245 125 38)",
+     "rgb(141 161 1)",
+     "rgb(223 160 0)",
+     "rgb(223 105 186)"
+    ],
+    "chartsRed": "rgb(248 85 82)",
+    "ansi": [
+     "rgb(58 148 197)",
+     "rgb(248 85 82)",
+     "rgb(53 167 124)",
+     "rgb(223 160 0)",
+     "rgb(223 105 186)"
+    ],
+    "ansiRed": "rgb(248 85 82)"
+   }
   }
  },
  {
@@ -251,7 +423,17 @@
    "addFg": "rgb(52 208 88)",
    "removeFg": "rgb(234 74 90)",
    "selection": "rgb(40 69 102)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(33 136 255)",
+     "rgb(234 74 90)",
+     "rgb(57 197 207)",
+     "rgb(255 234 127)",
+     "rgb(179 146 240)"
+    ],
+    "ansiRed": "rgb(234 74 90)"
+   }
   }
  },
  {
@@ -268,7 +450,17 @@
    "addFg": "rgb(63 185 80)",
    "removeFg": "rgb(248 81 73)",
    "selection": "rgb(25 56 101)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(88 166 255)",
+     "rgb(255 123 114)",
+     "rgb(57 197 207)",
+     "rgb(210 153 34)",
+     "rgb(188 140 255)"
+    ],
+    "ansiRed": "rgb(255 123 114)"
+   }
   }
  },
  {
@@ -285,7 +477,17 @@
    "addFg": "rgb(87 171 90)",
    "removeFg": "rgb(229 83 75)",
    "selection": "rgb(51 80 116)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(83 155 245)",
+     "rgb(244 112 103)",
+     "rgb(57 197 207)",
+     "rgb(198 144 38)",
+     "rgb(176 131 240)"
+    ],
+    "ansiRed": "rgb(244 112 103)"
+   }
   }
  },
  {
@@ -302,7 +504,17 @@
    "addFg": "rgb(38 205 77)",
    "removeFg": "rgb(255 106 105)",
    "selection": "rgb(255 255 255)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(113 183 255)",
+     "rgb(255 148 146)",
+     "rgb(57 197 207)",
+     "rgb(240 183 47)",
+     "rgb(203 158 255)"
+    ],
+    "ansiRed": "rgb(255 148 146)"
+   }
   }
  },
  {
@@ -319,7 +531,17 @@
    "addFg": "rgb(40 167 69)",
    "removeFg": "rgb(215 58 73)",
    "selection": "rgb(218 233 249)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(3 102 214)",
+     "rgb(215 58 73)",
+     "rgb(27 124 131)",
+     "rgb(219 171 9)",
+     "rgb(90 50 163)"
+    ],
+    "ansiRed": "rgb(215 58 73)"
+   }
   }
  },
  {
@@ -336,7 +558,17 @@
    "addFg": "rgb(26 127 55)",
    "removeFg": "rgb(207 34 46)",
    "selection": "rgb(169 203 242)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(9 105 218)",
+     "rgb(207 34 46)",
+     "rgb(27 124 131)",
+     "rgb(77 45 0)",
+     "rgb(130 80 223)"
+    ],
+    "ansiRed": "rgb(207 34 46)"
+   }
   }
  },
  {
@@ -353,7 +585,17 @@
    "addFg": "rgb(5 93 32)",
    "removeFg": "rgb(160 17 31)",
    "selection": "rgb(14 17 22)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(3 73 180)",
+     "rgb(160 17 31)",
+     "rgb(27 124 131)",
+     "rgb(63 34 0)",
+     "rgb(98 44 188)"
+    ],
+    "ansiRed": "rgb(160 17 31)"
+   }
   }
  },
  {
@@ -370,7 +612,17 @@
    "addFg": "rgb(235 219 178)",
    "removeFg": "rgb(251 73 52)",
    "selection": "rgb(48 63 51)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(69 133 136)",
+     "rgb(204 36 29)",
+     "rgb(104 157 106)",
+     "rgb(215 153 33)",
+     "rgb(177 98 134)"
+    ],
+    "ansiRed": "rgb(204 36 29)"
+   }
   }
  },
  {
@@ -387,7 +639,17 @@
    "addFg": "rgb(235 219 178)",
    "removeFg": "rgb(251 73 52)",
    "selection": "rgb(56 69 57)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(69 133 136)",
+     "rgb(204 36 29)",
+     "rgb(104 157 106)",
+     "rgb(215 153 33)",
+     "rgb(177 98 134)"
+    ],
+    "ansiRed": "rgb(204 36 29)"
+   }
   }
  },
  {
@@ -404,7 +666,17 @@
    "addFg": "rgb(235 219 178)",
    "removeFg": "rgb(251 73 52)",
    "selection": "rgb(64 75 62)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(69 133 136)",
+     "rgb(204 36 29)",
+     "rgb(104 157 106)",
+     "rgb(215 153 33)",
+     "rgb(177 98 134)"
+    ],
+    "ansiRed": "rgb(204 36 29)"
+   }
   }
  },
  {
@@ -421,7 +693,17 @@
    "addFg": "rgb(60 56 54)",
    "removeFg": "rgb(204 36 29)",
    "selection": "rgb(213 223 188)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(69 133 136)",
+     "rgb(204 36 29)",
+     "rgb(104 157 106)",
+     "rgb(215 153 33)",
+     "rgb(177 98 134)"
+    ],
+    "ansiRed": "rgb(204 36 29)"
+   }
   }
  },
  {
@@ -438,7 +720,17 @@
    "addFg": "rgb(60 56 54)",
    "removeFg": "rgb(204 36 29)",
    "selection": "rgb(214 220 176)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(69 133 136)",
+     "rgb(204 36 29)",
+     "rgb(104 157 106)",
+     "rgb(215 153 33)",
+     "rgb(177 98 134)"
+    ],
+    "ansiRed": "rgb(204 36 29)"
+   }
   }
  },
  {
@@ -455,7 +747,17 @@
    "addFg": "rgb(60 56 54)",
    "removeFg": "rgb(204 36 29)",
    "selection": "rgb(207 211 167)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(69 133 136)",
+     "rgb(204 36 29)",
+     "rgb(104 157 106)",
+     "rgb(215 153 33)",
+     "rgb(177 98 134)"
+    ],
+    "ansiRed": "rgb(204 36 29)"
+   }
   }
  },
  {
@@ -472,7 +774,17 @@
    "addFg": "rgb(36 160 117)",
    "removeFg": "rgb(244 62 92)",
    "selection": "rgb(41 43 55)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(38 187 217)",
+     "rgb(233 86 120)",
+     "rgb(89 225 227)",
+     "rgb(250 183 149)",
+     "rgb(238 100 172)"
+    ],
+    "ansiRed": "rgb(233 86 120)"
+   }
   }
  },
  {
@@ -489,7 +801,17 @@
    "addFg": "rgb(69 144 114)",
    "removeFg": "rgb(244 62 92)",
    "selection": "rgb(251 221 213)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(38 187 217)",
+     "rgb(233 86 120)",
+     "rgb(89 225 227)",
+     "rgb(250 183 149)",
+     "rgb(238 100 172)"
+    ],
+    "ansiRed": "rgb(233 86 120)"
+   }
   }
  },
  {
@@ -506,7 +828,17 @@
    "addFg": "rgb(75 243 200)",
    "removeFg": "rgb(244 88 126)",
    "selection": "rgb(63 43 76)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(43 126 202)",
+     "rgb(220 54 87)",
+     "rgb(36 192 207)",
+     "rgb(255 195 104)",
+     "rgb(173 93 202)"
+    ],
+    "ansiRed": "rgb(220 54 87)"
+   }
   }
  },
  {
@@ -523,7 +855,17 @@
    "addFg": "rgb(138 154 123)",
    "removeFg": "rgb(196 116 110)",
    "selection": "rgb(34 50 73)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(139 164 176)",
+     "rgb(196 116 110)",
+     "rgb(142 164 162)",
+     "rgb(196 178 138)",
+     "rgb(162 146 163)"
+    ],
+    "ansiRed": "rgb(196 116 110)"
+   }
   }
  },
  {
@@ -540,7 +882,17 @@
    "addFg": "rgb(111 137 78)",
    "removeFg": "rgb(200 64 83)",
    "selection": "rgb(199 215 224)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(77 105 155)",
+     "rgb(200 64 83)",
+     "rgb(89 123 117)",
+     "rgb(119 113 63)",
+     "rgb(179 91 121)"
+    ],
+    "ansiRed": "rgb(200 64 83)"
+   }
   }
  },
  {
@@ -557,7 +909,17 @@
    "addFg": "rgb(118 148 106)",
    "removeFg": "rgb(195 64 67)",
    "selection": "rgb(34 50 73)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(126 156 216)",
+     "rgb(195 64 67)",
+     "rgb(106 149 137)",
+     "rgb(192 163 110)",
+     "rgb(149 127 184)"
+    ],
+    "ansiRed": "rgb(195 64 67)"
+   }
   }
  },
  {
@@ -574,7 +936,17 @@
    "addFg": "rgb(116 223 196)",
    "removeFg": "rgb(179 129 197)",
    "selection": "rgb(69 43 67)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(64 180 196)",
+     "rgb(235 100 185)",
+     "rgb(180 220 231)",
+     "rgb(255 226 97)",
+     "rgb(179 129 197)"
+    ],
+    "ansiRed": "rgb(235 100 185)"
+   }
   }
  },
  {
@@ -591,7 +963,8 @@
    "addFg": "rgb(22 134 58)",
    "removeFg": "rgb(215 58 73)",
    "selection": "rgb(166 208 237)",
-   "dark": false
+   "dark": false,
+   "chartSources": {}
   }
  },
  {
@@ -608,7 +981,17 @@
    "addFg": "rgb(195 232 141)",
    "removeFg": "rgb(240 113 120)",
    "selection": "rgb(49 69 74)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(130 170 255)",
+     "rgb(240 113 120)",
+     "rgb(137 221 255)",
+     "rgb(255 203 107)",
+     "rgb(199 146 234)"
+    ],
+    "ansiRed": "rgb(240 113 120)"
+   }
   }
  },
  {
@@ -625,7 +1008,17 @@
    "addFg": "rgb(195 232 141)",
    "removeFg": "rgb(240 113 120)",
    "selection": "rgb(53 53 53)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(130 170 255)",
+     "rgb(240 113 120)",
+     "rgb(137 221 255)",
+     "rgb(255 203 107)",
+     "rgb(199 146 234)"
+    ],
+    "ansiRed": "rgb(240 113 120)"
+   }
   }
  },
  {
@@ -642,7 +1035,17 @@
    "addFg": "rgb(122 155 75)",
    "removeFg": "rgb(229 57 53)",
    "selection": "rgb(219 238 236)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(97 130 184)",
+     "rgb(229 57 53)",
+     "rgb(57 173 181)",
+     "rgb(226 147 29)",
+     "rgb(156 62 218)"
+    ],
+    "ansiRed": "rgb(229 57 53)"
+   }
   }
  },
  {
@@ -659,7 +1062,17 @@
    "addFg": "rgb(195 232 141)",
    "removeFg": "rgb(240 113 120)",
    "selection": "rgb(46 51 74)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(130 170 255)",
+     "rgb(240 113 120)",
+     "rgb(137 221 255)",
+     "rgb(255 203 107)",
+     "rgb(199 146 234)"
+    ],
+    "ansiRed": "rgb(240 113 120)"
+   }
   }
  },
  {
@@ -676,7 +1089,17 @@
    "addFg": "rgb(195 232 141)",
    "removeFg": "rgb(240 113 120)",
    "selection": "rgb(64 70 99)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(130 170 255)",
+     "rgb(240 113 120)",
+     "rgb(137 221 255)",
+     "rgb(255 203 107)",
+     "rgb(199 146 234)"
+    ],
+    "ansiRed": "rgb(240 113 120)"
+   }
   }
  },
  {
@@ -693,7 +1116,8 @@
    "addFg": "rgb(74 222 128)",
    "removeFg": "rgb(248 113 113)",
    "selection": "rgb(92 92 92)",
-   "dark": true
+   "dark": true,
+   "chartSources": {}
   }
  },
  {
@@ -710,7 +1134,17 @@
    "addFg": "rgb(92 159 0)",
    "removeFg": "rgb(211 47 47)",
    "selection": "rgb(166 166 166)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(224 224 224)",
+     "rgb(211 47 47)",
+     "rgb(77 191 153)",
+     "rgb(242 151 24)",
+     "rgb(153 102 204)"
+    ],
+    "ansiRed": "rgb(211 47 47)"
+   }
   }
  },
  {
@@ -727,7 +1161,17 @@
    "addFg": "rgb(134 180 43)",
    "removeFg": "rgb(249 38 114)",
    "selection": "rgb(87 90 90)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(106 126 200)",
+     "rgb(196 38 94)",
+     "rgb(86 173 188)",
+     "rgb(179 180 43)",
+     "rgb(140 107 200)"
+    ],
+    "ansiRed": "rgb(196 38 94)"
+   }
   }
  },
  {
@@ -744,7 +1188,17 @@
    "addFg": "rgb(34 218 110)",
    "removeFg": "rgb(239 83 80)",
    "selection": "rgb(29 59 83)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(130 170 255)",
+     "rgb(239 83 80)",
+     "rgb(33 199 168)",
+     "rgb(197 228 120)",
+     "rgb(199 146 234)"
+    ],
+    "ansiRed": "rgb(239 83 80)"
+   }
   }
  },
  {
@@ -761,7 +1215,17 @@
    "addFg": "rgb(8 145 106)",
    "removeFg": "rgb(222 61 59)",
    "selection": "rgb(224 224 224)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(40 142 215)",
+     "rgb(222 61 59)",
+     "rgb(42 162 152)",
+     "rgb(224 175 2)",
+     "rgb(214 67 138)"
+    ],
+    "ansiRed": "rgb(222 61 59)"
+   }
   }
  },
  {
@@ -778,7 +1242,25 @@
    "addFg": "rgb(163 190 140)",
    "removeFg": "rgb(191 97 106)",
    "selection": "rgb(63 71 88)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(129 161 193)",
+     "rgb(208 135 112)",
+     "rgb(163 190 140)",
+     "rgb(235 203 139)",
+     "rgb(180 142 173)"
+    ],
+    "chartsRed": "rgb(191 97 106)",
+    "ansi": [
+     "rgb(129 161 193)",
+     "rgb(191 97 106)",
+     "rgb(136 192 208)",
+     "rgb(235 203 139)",
+     "rgb(180 142 173)"
+    ],
+    "ansiRed": "rgb(191 97 106)"
+   }
   }
  },
  {
@@ -795,7 +1277,17 @@
    "addFg": "rgb(140 194 101)",
    "removeFg": "rgb(224 85 97)",
    "selection": "rgb(64 72 89)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(74 165 240)",
+     "rgb(224 85 97)",
+     "rgb(66 179 194)",
+     "rgb(209 143 82)",
+     "rgb(193 98 222)"
+    ],
+    "ansiRed": "rgb(224 85 97)"
+   }
   }
  },
  {
@@ -812,7 +1304,8 @@
    "addFg": "rgb(22 134 58)",
    "removeFg": "rgb(215 58 73)",
    "selection": "rgb(229 229 230)",
-   "dark": false
+   "dark": false,
+   "chartSources": {}
   }
  },
  {
@@ -829,7 +1322,17 @@
    "addFg": "rgb(152 195 121)",
    "removeFg": "rgb(224 108 117)",
    "selection": "rgb(60 65 73)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(97 175 239)",
+     "rgb(224 108 117)",
+     "rgb(86 182 194)",
+     "rgb(229 192 123)",
+     "rgb(181 126 220)"
+    ],
+    "ansiRed": "rgb(224 108 117)"
+   }
   }
  },
  {
@@ -846,7 +1349,25 @@
    "addFg": "rgb(95 179 161)",
    "removeFg": "rgb(208 103 157)",
    "selection": "rgb(39 44 60)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(173 215 255)",
+     "rgb(137 221 255)",
+     "rgb(93 228 199)",
+     "rgb(255 250 194)",
+     "rgb(240 135 189)"
+    ],
+    "chartsRed": "rgb(208 103 157)",
+    "ansi": [
+     "rgb(137 221 255)",
+     "rgb(208 103 157)",
+     "rgb(137 221 255)",
+     "rgb(255 250 194)",
+     "rgb(240 135 189)"
+    ],
+    "ansiRed": "rgb(208 103 157)"
+   }
   }
  },
  {
@@ -863,7 +1384,8 @@
    "addFg": "rgb(74 222 128)",
    "removeFg": "rgb(248 113 113)",
    "selection": "rgb(117 0 0)",
-   "dark": true
+   "dark": true,
+   "chartSources": {}
   }
  },
  {
@@ -880,7 +1402,25 @@
    "addFg": "rgb(156 207 216)",
    "removeFg": "rgb(144 140 170)",
    "selection": "rgb(42 40 56)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(156 207 216)",
+     "rgb(235 188 186)",
+     "rgb(49 116 143)",
+     "rgb(246 193 119)",
+     "rgb(196 167 231)"
+    ],
+    "chartsRed": "rgb(235 111 146)",
+    "ansi": [
+     "rgb(156 207 216)",
+     "rgb(235 111 146)",
+     "rgb(235 188 186)",
+     "rgb(246 193 119)",
+     "rgb(196 167 231)"
+    ],
+    "ansiRed": "rgb(235 111 146)"
+   }
   }
  },
  {
@@ -897,7 +1437,25 @@
    "addFg": "rgb(86 148 159)",
    "removeFg": "rgb(121 117 147)",
    "selection": "rgb(239 233 229)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "charts": [
+     "rgb(86 148 159)",
+     "rgb(215 130 126)",
+     "rgb(40 105 131)",
+     "rgb(234 157 52)",
+     "rgb(144 122 169)"
+    ],
+    "chartsRed": "rgb(180 99 122)",
+    "ansi": [
+     "rgb(86 148 159)",
+     "rgb(180 99 122)",
+     "rgb(215 130 126)",
+     "rgb(234 157 52)",
+     "rgb(144 122 169)"
+    ],
+    "ansiRed": "rgb(180 99 122)"
+   }
   }
  },
  {
@@ -914,7 +1472,25 @@
    "addFg": "rgb(156 207 216)",
    "removeFg": "rgb(144 140 170)",
    "selection": "rgb(49 47 69)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(156 207 216)",
+     "rgb(234 154 151)",
+     "rgb(62 143 176)",
+     "rgb(246 193 119)",
+     "rgb(196 167 231)"
+    ],
+    "chartsRed": "rgb(235 111 146)",
+    "ansi": [
+     "rgb(156 207 216)",
+     "rgb(235 111 146)",
+     "rgb(234 154 151)",
+     "rgb(246 193 119)",
+     "rgb(196 167 231)"
+    ],
+    "ansiRed": "rgb(235 111 146)"
+   }
   }
  },
  {
@@ -931,7 +1507,8 @@
    "addFg": "rgb(236 178 46)",
    "removeFg": "rgb(255 255 255)",
    "selection": "rgb(22 64 85)",
-   "dark": true
+   "dark": true,
+   "chartSources": {}
   }
  },
  {
@@ -948,7 +1525,17 @@
    "addFg": "rgb(184 139 36)",
    "removeFg": "rgb(229 57 53)",
    "selection": "rgb(174 212 251)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(97 130 184)",
+     "rgb(229 57 53)",
+     "rgb(57 173 181)",
+     "rgb(255 182 44)",
+     "rgb(124 77 255)"
+    ],
+    "ansiRed": "rgb(229 57 53)"
+   }
   }
  },
  {
@@ -965,7 +1552,17 @@
    "addFg": "rgb(41 160 81)",
    "removeFg": "rgb(235 85 80)",
    "selection": "rgb(223 241 230)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(9 161 237)",
+     "rgb(255 92 87)",
+     "rgb(19 187 183)",
+     "rgb(207 156 0)",
+     "rgb(247 103 187)"
+    ],
+    "ansiRed": "rgb(255 92 87)"
+   }
   }
  },
  {
@@ -982,7 +1579,17 @@
    "addFg": "rgb(133 153 0)",
    "removeFg": "rgb(220 50 47)",
    "selection": "rgb(39 70 66)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(38 139 210)",
+     "rgb(220 50 47)",
+     "rgb(42 161 152)",
+     "rgb(181 137 0)",
+     "rgb(211 54 130)"
+    ],
+    "ansiRed": "rgb(220 50 47)"
+   }
   }
  },
  {
@@ -999,7 +1606,17 @@
    "addFg": "rgb(88 110 117)",
    "removeFg": "rgb(220 50 47)",
    "selection": "rgb(238 232 213)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(38 139 210)",
+     "rgb(220 50 47)",
+     "rgb(42 161 152)",
+     "rgb(181 137 0)",
+     "rgb(211 54 130)"
+    ],
+    "ansiRed": "rgb(220 50 47)"
+   }
   }
  },
  {
@@ -1016,7 +1633,17 @@
    "addFg": "rgb(99 200 158)",
    "removeFg": "rgb(254 68 80)",
    "selection": "rgb(65 63 78)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(3 237 249)",
+     "rgb(254 68 80)",
+     "rgb(3 237 249)",
+     "rgb(243 231 15)",
+     "rgb(255 126 219)"
+    ],
+    "ansiRed": "rgb(254 68 80)"
+   }
   }
  },
  {
@@ -1033,7 +1660,25 @@
    "addFg": "rgb(68 157 171)",
    "removeFg": "rgb(247 118 142)",
    "selection": "rgb(43 47 65)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "charts": [
+     "rgb(122 162 247)",
+     "rgb(255 158 100)",
+     "rgb(65 166 181)",
+     "rgb(224 175 104)",
+     "rgb(157 124 216)"
+    ],
+    "chartsRed": "rgb(247 118 142)",
+    "ansi": [
+     "rgb(122 162 247)",
+     "rgb(247 118 142)",
+     "rgb(125 207 255)",
+     "rgb(224 175 104)",
+     "rgb(187 154 247)"
+    ],
+    "ansiRed": "rgb(247 118 142)"
+   }
   }
  },
  {
@@ -1050,7 +1695,8 @@
    "addFg": "rgb(74 222 128)",
    "removeFg": "rgb(248 113 113)",
    "selection": "rgb(51 51 51)",
-   "dark": true
+   "dark": true,
+   "chartSources": {}
   }
  },
  {
@@ -1067,7 +1713,17 @@
    "addFg": "rgb(77 147 117)",
    "removeFg": "rgb(203 118 118)",
    "selection": "rgb(22 22 22)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(99 148 191)",
+     "rgb(203 118 118)",
+     "rgb(94 170 181)",
+     "rgb(230 204 119)",
+     "rgb(217 115 159)"
+    ],
+    "ansiRed": "rgb(203 118 118)"
+   }
   }
  },
  {
@@ -1084,7 +1740,17 @@
    "addFg": "rgb(77 147 117)",
    "removeFg": "rgb(203 118 118)",
    "selection": "rgb(39 39 39)",
-   "dark": true
+   "dark": true,
+   "chartSources": {
+    "ansi": [
+     "rgb(99 148 191)",
+     "rgb(203 118 118)",
+     "rgb(94 170 181)",
+     "rgb(230 204 119)",
+     "rgb(217 115 159)"
+    ],
+    "ansiRed": "rgb(203 118 118)"
+   }
   }
  },
  {
@@ -1101,7 +1767,17 @@
    "addFg": "rgb(30 117 79)",
    "removeFg": "rgb(171 89 89)",
    "selection": "rgb(234 234 234)",
-   "dark": false
+   "dark": false,
+   "chartSources": {
+    "ansi": [
+     "rgb(41 106 163)",
+     "rgb(171 89 89)",
+     "rgb(41 147 163)",
+     "rgb(189 164 55)",
+     "rgb(161 56 101)"
+    ],
+    "ansiRed": "rgb(171 89 89)"
+   }
   }
  }
 ]

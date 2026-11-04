@@ -147,7 +147,7 @@ export function GeneralSettings() {
               <div className="flex min-w-0 flex-col gap-0.5">
                 <span className="text-sm font-medium">{d.label}</span>
                 <span className="text-xs text-muted-foreground">{d.about}</span>
-                <span className="truncate font-mono text-[0.6875rem] text-muted-foreground" title={d.path}>
+                <span className="truncate font-mono text-2xs text-muted-foreground" title={d.path}>
                   {compactPath(d.path)}
                 </span>
               </div>

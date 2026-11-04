@@ -237,7 +237,7 @@ export function WorkItemPicker({ onStart, onOpenProject, onIntegrations, onDone 
                     <span className="font-mono">{item.id}</span>
                     {item.status && <span>· {item.status}</span>}
                     {item.labels.map((l) => (
-                      <Badge key={l} variant="secondary" className="h-4 px-1.5 text-[0.625rem] font-normal">
+                      <Badge key={l} variant="secondary" className="h-4 px-1.5 text-2xs font-normal">
                         {l}
                       </Badge>
                     ))}

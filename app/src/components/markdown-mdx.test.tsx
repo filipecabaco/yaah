@@ -142,18 +142,19 @@ describe("MDX", () => {
     expect(fm.querySelector("pre")).toHaveTextContent("description: Listen to database changes.");
     // Not a rule and a setext heading.
     expect(c.querySelector("hr")).toBeNull();
-    expect(c.querySelector("h2")).toBeNull();
+    expect(c.querySelector('[data-md="h2"]')).toBeNull();
   });
 
   it("hides import and export lines", () => {
     const c = draw(DOCS);
     expect(c.textContent).not.toMatch(/import|export|@site|sidebar/);
-    expect(c.querySelector("h1")).toHaveTextContent("Postgres changes");
+    // An agent's `#` sits one level under the pane's title (SR-5): an h2 that remembers it was an h1.
+    expect(c.querySelector('h2[data-md="h1"]')).toHaveTextContent("Postgres changes");
   });
 
   it("shows braces as text, as Markdown does, and drops MDX comments", () => {
     const c = draw(DOCS);
-    expect(c.querySelector("h1 + p")).toHaveTextContent("Listen to inserts on the messages table for project {props.projectRef}.");
+    expect(c.querySelector('[data-md="h1"] + p')).toHaveTextContent("Listen to inserts on the messages table for project {props.projectRef}.");
     expect([...c.querySelectorAll("code")].map((e) => e.textContent)).not.toContain("{props.projectRef}");
     expect(c.textContent).not.toContain("An MDX comment");
     expect(c.textContent).toContain("That's all.");
