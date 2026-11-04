@@ -61,7 +61,8 @@ public/sitemap.xml           the one page, by hand (no sitemap integration for o
 
 Every image in `public/shots/` is the app, captured from its browser mock (`pnpm dev` in `app/`,
 http://localhost:1420) replaying recorded agent sessions, at 2× in light and dark. The originals and
-how they were taken are in `docs/experiments/2026-11-03-website/`. To refresh one, capture it again
+how they were taken are in `docs/experiments/2026-11-03-website/`, and for the shots added or replaced for 0.5.0 and 0.5.1,
+`docs/experiments/2026-11-04-website-refresh/`. To refresh one, capture it again
 there and convert it to WebP into `public/shots/` with the same name (`<name>-light.webp`,
 `<name>-dark.webp`).
 
