@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, FolderGit2, Loader2, MessageSquarePlus, ShieldCheck, Trash2, X } from "lucide-react";
+import { ChevronDown, FolderGit2, GitCompare, Loader2, MessageSquarePlus, ShieldCheck, SquareTerminal, Trash2, X } from "lucide-react";
 import { AgentMenu, AgentSelect } from "@/components/agent-choice";
 import { ChatMenu } from "@/components/menus";
 import { RepoPicker } from "@/components/repo-picker";
@@ -27,6 +27,9 @@ type Props = {
   /** A chat in the project, with `agentId` when the user picked one for it. */
   onNewChat: (projectId: string, agentId?: string) => Promise<unknown>;
   onLogin: (agent: AgentProfile) => void;
+  /** A terminal or diff pane to the right, in the project's first repo and listed under it in the sidebar. */
+  onNewTerminal?: (projectId: string) => void;
+  onOpenDiff?: (projectId: string) => void;
   /** Set by the sidebar's Delete… item: show the delete confirmation. */
   askDelete?: boolean;
   onAskDeleteSeen?: () => void;
@@ -47,6 +50,8 @@ export function ProjectView({
   onOpenChat,
   onNewChat,
   onLogin,
+  onNewTerminal,
+  onOpenDiff,
   askDelete,
   onAskDeleteSeen,
   askRename,
@@ -287,10 +292,24 @@ export function ProjectView({
               </Button>
             </div>
           ))}
-          <Button variant="outline" size="sm" className="self-start" onClick={() => setPicking(true)}>
-            <FolderGit2 /> Add repos
-          </Button>
-          <p className="text-xs text-muted-foreground">Chats run in the first repo and can work across the rest. Changes apply to new chats.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => setPicking(true)}>
+              <FolderGit2 /> Add repos
+            </Button>
+            {onNewTerminal && (
+              <Button variant="outline" size="sm" onClick={() => onNewTerminal(project.id)}>
+                <SquareTerminal /> New terminal
+              </Button>
+            )}
+            {onOpenDiff && (
+              <Button variant="outline" size="sm" onClick={() => onOpenDiff(project.id)}>
+                <GitCompare /> Open diff
+              </Button>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Chats, terminals and diffs open in the first repo; chats can work across the rest. Changes apply to new chats.
+          </p>
           <RepoPicker
             open={picking}
             onClose={() => setPicking(false)}

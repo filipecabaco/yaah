@@ -1,5 +1,5 @@
 // A terminal pane: the user's login shell in a folder, inside yaah. The pane's content
-// is `{ kind: "terminal", cwd, id }` (layout.ts, saved with the layout). A pane that
+// is `{ kind: "terminal", cwd, id, projectId }` (layout.ts, saved with the layout). A pane that
 // comes back after a restart names a shell that's gone, so it opens a new one in the
 // same folder and says so; processes don't outlive the app.
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -78,7 +78,8 @@ export function TerminalPane({
 
   const launch = useCallback(() => {
     openShell(pane, latest.current.content.cwd, gridFor(box.current)).then(
-      (opened) => latest.current.onContent({ kind: "terminal", cwd: opened.cwd, id: opened.id }),
+      // The folder the shell opened in, and its id; the project it belongs to stays.
+      (opened) => latest.current.onContent({ ...latest.current.content, cwd: opened.cwd, id: opened.id }),
       (e: unknown) => setError(String(e)),
     );
   }, [pane]);
@@ -97,7 +98,7 @@ export function TerminalPane({
   const restart = () => {
     setExit(null);
     if (content.id) void terminalApi.close(content.id);
-    latest.current.onContent({ kind: "terminal", cwd: content.cwd });
+    latest.current.onContent({ kind: "terminal", cwd: content.cwd, projectId: content.projectId });
   };
 
   // A new shell starts its own clock (the quick-exit rule).

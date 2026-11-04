@@ -3,18 +3,19 @@
 // the home screen. Pure functions over plain data; the app keeps the tree in
 // use-yaah.ts and Rust saves it (settings.rs `layout`, checked and pruned by layout.rs).
 
-/** What a pane shows; null is the home screen. */
 /**
  * What a pane shows; null is the home screen. A terminal is a shell in `cwd` (the default folder
- * when there is none); `id` is its running shell, which a restart leaves naming nothing.
+ * when there is none); `id` is its running shell, which a restart leaves naming nothing. A terminal
+ * or diff opened from a project's context keeps `projectId`, so the sidebar lists it under that
+ * project; Rust drops the link when the project is deleted (layout.rs `pruned`).
  */
 export type Selection =
   | { kind: "project"; id: string }
   | { kind: "chat"; id: string }
   | { kind: "components" }
   | { kind: "picker" }
-  | { kind: "terminal"; cwd?: string; id?: string }
-  | { kind: "diff"; cwd?: string; mode?: DiffMode; base?: string }
+  | { kind: "terminal"; cwd?: string; id?: string; projectId?: string }
+  | { kind: "diff"; cwd?: string; mode?: DiffMode; base?: string; projectId?: string }
   | null;
 
 /**
@@ -134,6 +135,17 @@ export function mapContents(layout: Layout, f: (c: Selection) => Selection): Lay
   return changed ? { ...layout, root } : layout;
 }
 
+/** The project a terminal or diff pane belongs to, if it was opened from one. */
+export const linkedProject = (c: Selection): string | undefined => (c?.kind === "terminal" || c?.kind === "diff" ? c.projectId : undefined);
+
+/** `c` without its project link when `keep` rejects that project (deleted): the pane goes on working, unlinked. */
+export function unlinkUnless(c: Selection, keep: (projectId: string) => boolean): Selection {
+  if ((c?.kind !== "terminal" && c?.kind !== "diff") || !c.projectId || keep(c.projectId)) return c;
+  const next = { ...c };
+  delete next.projectId;
+  return next;
+}
+
 export function setRatio(layout: Layout, splitId: string, ratio: number): Layout {
   const r = clamp(ratio, RATIO_MIN, 1 - RATIO_MIN);
   return { ...layout, root: mapTree(layout.root, (n) => (n.type === "split" && n.id === splitId && n.ratio !== r ? { ...n, ratio: r } : n)) };
@@ -167,8 +179,8 @@ export const focusPane = (layout: Layout, id: string): Layout =>
 export function sameContent(a: Selection, b: Selection): boolean {
   if (a === b) return true;
   if (!a || !b || a.kind !== b.kind) return false;
-  if (a.kind === "terminal") return b.kind === "terminal" && a.id === b.id && a.cwd === b.cwd;
-  if (a.kind === "diff") return b.kind === "diff" && a.cwd === b.cwd && a.mode === b.mode && a.base === b.base;
+  if (a.kind === "terminal") return b.kind === "terminal" && a.id === b.id && a.cwd === b.cwd && a.projectId === b.projectId;
+  if (a.kind === "diff") return b.kind === "diff" && a.cwd === b.cwd && a.mode === b.mode && a.base === b.base && a.projectId === b.projectId;
   return !("id" in a) || a.id === (b as { id: string }).id;
 }
 
@@ -269,7 +281,8 @@ export function clampRatio(split: Split, ratio: number, px: number, scale = 1): 
 
 /**
  * Without panes `keep` rejects (a deleted chat or project), their siblings taking the
- * space; a single home pane when nothing is left. Mirrors layout.rs `pruned`.
+ * space; a single home pane when nothing is left. Mirrors layout.rs `pruned` (which also
+ * unlinks terminals and diffs from deleted projects: `unlinkUnless` through `mapContents`).
  */
 export function prune(layout: Layout, keep: (c: Selection) => boolean): Layout {
   const walk = (n: LayoutNode): LayoutNode | null => {

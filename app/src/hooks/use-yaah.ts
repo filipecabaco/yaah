@@ -14,7 +14,7 @@ import {
   type WorkItem,
 } from "@/lib/api";
 import { TranscriptStore } from "@/lib/transcripts";
-import type { Selection } from "@/lib/layout";
+import { unlinkUnless, type Selection } from "@/lib/layout";
 import { useLayout } from "@/hooks/use-layout";
 
 /** Sidebar order: archived projects sink to the bottom; otherwise newest first. */
@@ -121,12 +121,12 @@ export function useYaah() {
     [putProject, focusedId, openIn],
   );
 
-  // Every pane showing it goes home.
+  // Every pane showing it goes home; its terminals and diffs stay open, no longer its (layout.rs `pruned` on the next start).
   const deleteProject = useCallback(
     async (id: string) => {
       await api.deleteProject(id);
       setProjects((prev) => prev.filter((p) => p.id !== id));
-      mapContents((c) => (c?.kind === "project" && c.id === id ? null : c));
+      mapContents((c) => (c?.kind === "project" && c.id === id ? null : unlinkUnless(c, (p) => p !== id)));
     },
     [mapContents],
   );

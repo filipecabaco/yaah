@@ -1,5 +1,5 @@
 // A diff pane: the working tree's changes of a git repository, beside the chats and shells.
-// The pane's content is `{ kind: "diff", cwd, mode, base }` (layout.ts, saved with the layout).
+// The pane's content is `{ kind: "diff", cwd, mode, base, projectId }` (layout.ts, saved with the layout).
 // Rust reads everything (sources/git.rs `working_view`: repo detection, the diff in a mode, a
 // fingerprint); this polls with that fingerprint, so a quiet repo costs one `git status` and a
 // change refreshes the files list, keeping what was ticked as viewed. Read-only: no staging.
@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ExternalLink, FolderSearch, GitCompare, RefreshCw, X } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { TerminalFolders } from "@/components/terminal/terminal-folders";
+import { inProject } from "@/components/terminal/use-terminals";
 import DiffReview from "@/components/ui-blocks/diff-review";
 import { UiViewContext } from "@/components/ui-view";
 import { Badge } from "@/components/ui/badge";
@@ -137,9 +138,18 @@ export function DiffPane({
   }, [pane, name, detail]);
   useEffect(() => () => clearPaneInfo(pane), [pane]);
 
+  /**
+   * Another folder, starting over in mode and base. It stays the project's while the folder is one of
+   * that project's (another of its repos); a folder outside it unlinks the pane, which the sidebar then
+   * lists under "Open panes" rather than file an unrelated repo under the project.
+   */
+  const pick = (dir: string) => {
+    const p = projects.find((x) => x.id === content.projectId);
+    onContent({ kind: "diff", cwd: dir, ...(p && inProject(dir, p) ? { projectId: p.id } : {}) });
+  };
   const choose = async () => {
     const dir = await open({ directory: true, title: "Folder with the repository" });
-    if (typeof dir === "string") onContent({ kind: "diff", cwd: dir });
+    if (typeof dir === "string") pick(dir);
   };
 
   const header = (
@@ -154,7 +164,7 @@ export function DiffPane({
       {repo?.detached && <Badge variant="outline">detached HEAD</Badge>}
       {repo && (
         <>
-          <Select value={mode} onValueChange={(m) => onContent({ kind: "diff", cwd, mode: m as DiffMode, base: content.base })}>
+          <Select value={mode} onValueChange={(m) => onContent({ ...content, mode: m as DiffMode })}>
             <SelectTrigger size="sm" className="w-auto" aria-label="What to compare">
               <SelectValue />
             </SelectTrigger>
@@ -167,7 +177,7 @@ export function DiffPane({
             </SelectContent>
           </Select>
           {mode === "branch" && (
-            <Select value={content.base ?? view?.base ?? ""} onValueChange={(b) => onContent({ kind: "diff", cwd, mode, base: b })}>
+            <Select value={content.base ?? view?.base ?? ""} onValueChange={(b) => onContent({ ...content, mode, base: b })}>
               <SelectTrigger size="sm" className="w-auto max-w-48 font-mono" aria-label="Base branch">
                 <SelectValue placeholder="Pick a base" />
               </SelectTrigger>
@@ -225,13 +235,7 @@ export function DiffPane({
             <h2 className="text-sm font-medium">Open a diff</h2>
             <p className="text-xs text-muted-foreground">The changes of a git repository. Which folder?</p>
           </div>
-          <TerminalFolders
-            purpose="diff"
-            chats={chats}
-            projects={projects}
-            onPick={(dir) => dir && onContent({ kind: "diff", cwd: dir })}
-            onBack={onClose}
-          />
+          <TerminalFolders purpose="diff" chats={chats} projects={projects} onPick={(dir) => dir && pick(dir)} onBack={onClose} />
         </div>
       </div>
     );
