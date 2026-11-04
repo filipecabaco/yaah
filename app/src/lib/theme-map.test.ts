@@ -7,7 +7,20 @@ import bundled from "@/lib/themes.json";
 import { legibility, parse, toPalette, toTokens, type Palette, type VsCodeTheme } from "@/lib/theme-map";
 
 // The bar every theme has to clear (the same one `pnpm themes` enforces).
-const MIN = { text: 4.5, muted: 3, accent: 3, onPrimary: 4.5, sidebarText: 4.5, sidebarMuted: 3 };
+const MIN = {
+  text: 4.5,
+  muted: 4.5,
+  mutedOnMuted: 4.5,
+  mutedOnBubble: 4.5,
+  accent: 3,
+  onPrimary: 4.5,
+  sidebarText: 4.5,
+  sidebarMuted: 4.5,
+  ring: 3,
+  destructive: 4.5,
+  destructiveOnTint: 4.5,
+  input: 3,
+};
 const SAFE = /^rgb\(\d{1,3} \d{1,3} \d{1,3}\)$/;
 
 function expectLegible(p: Palette) {

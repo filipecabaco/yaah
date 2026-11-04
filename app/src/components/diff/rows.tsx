@@ -7,7 +7,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } 
 import { WrapText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { DiffFile, Hunk, Line } from "@/components/diff/model";
-import { OVERSCAN, ROW, splitIndent, tabStyle, WRAP_MAX, type Row } from "@/components/diff/lines";
+import { OVERSCAN, rowHeight, splitIndent, tabStyle, WRAP_MAX, type Row } from "@/components/diff/lines";
+import { useCodeScale } from "@/lib/fonts";
 import { menuActions, type MenuAction } from "@/lib/menu-actions";
 import { cn } from "@/lib/utils";
 
@@ -27,7 +28,16 @@ const GUTTER_TONE: Record<Line["kind"], string | undefined> = {
 export function DiffLine({ line, wrap, fixed, className }: { line: Line; wrap: boolean; fixed?: boolean; className?: string }) {
   const { indent, rest, cols } = wrap ? splitIndent(line.text) : { indent: "", rest: line.text, cols: 0 };
   return (
-    <div data-line="" className={cn("flex leading-5", wrap ? "w-full" : "w-max min-w-full", fixed ? "h-5" : "min-h-5", TONE[line.kind], className)}>
+    <div
+      data-line=""
+      className={cn(
+        "flex leading-(--code-row)",
+        wrap ? "w-full" : "w-max min-w-full",
+        fixed ? "h-(--code-row)" : "min-h-(--code-row)",
+        TONE[line.kind],
+        className,
+      )}
+    >
       <span className="sticky left-0 z-[1] flex shrink-0 self-stretch bg-background select-none">
         <span className={cn("flex text-muted-foreground/60", GUTTER_TONE[line.kind])}>
           <span data-old="" className="w-12 pr-2 text-right tabular-nums">
@@ -67,7 +77,7 @@ export function HunkHeader({ hunk, index, tools, mark, fixed }: { hunk: Hunk; in
       data-hunk-header={index}
       className={cn(
         "group flex items-center bg-blue-500/10 pr-1 text-muted-foreground",
-        fixed ? "h-5" : "min-h-5",
+        fixed ? "h-(--code-row)" : "min-h-(--code-row)",
         mark && "shadow-[inset_2px_0_0_var(--ring)]",
       )}
     >
@@ -116,6 +126,8 @@ export function DiffRows({
   hunkMenu?: (index: number) => MenuAction[] | undefined;
 }) {
   const wrapped = wrap && rows.length <= WRAP_MAX;
+  // Rows are `--code-row` tall, which follows the code size.
+  const row = rowHeight(useCodeScale());
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ top: 0, height: 0 });
   useEffect(() => {
@@ -155,17 +167,17 @@ export function DiffRows({
 
   if (wrapped)
     return (
-      <div ref={box} className="relative font-mono text-xs" data-rows={rows.length} data-wrapped="true">
+      <div ref={box} className="relative font-mono text-code" data-rows={rows.length} data-wrapped="true">
         {rows.map(draw)}
       </div>
     );
   // Before the first layout (or without one), a screenful.
   const height = view.height || 1000;
-  const first = Math.max(0, Math.floor(view.top / ROW) - OVERSCAN);
-  const last = Math.min(rows.length, Math.ceil((view.top + height) / ROW) + OVERSCAN);
+  const first = Math.max(0, Math.floor(view.top / row) - OVERSCAN);
+  const last = Math.min(rows.length, Math.ceil((view.top + height) / row) + OVERSCAN);
   return (
-    <div ref={box} className="relative font-mono text-xs" style={{ height: rows.length * ROW }} data-rows={rows.length} data-wrapped="false">
-      <div className="absolute top-0 left-0 w-max min-w-full" style={{ transform: `translateY(${first * ROW}px)` }}>
+    <div ref={box} className="relative font-mono text-code" style={{ height: rows.length * row }} data-rows={rows.length} data-wrapped="false">
+      <div className="absolute top-0 left-0 w-max min-w-full" style={{ transform: `translateY(${first * row}px)` }}>
         {rows.slice(first, last).map((r, k) => draw(r, first + k))}
       </div>
     </div>

@@ -10,7 +10,7 @@ import { draftIntoComposer, useChat } from "@/components/chat-context";
 import { ErrorText } from "@/components/error-text";
 import { UiChoice, UiForm, UiRank, UiSelect, UiSlider, UiTextfield, UiToggle } from "@/components/ui-form";
 import { FormHostContext, type FormHost } from "@/components/ui-form-host";
-import { useUiView } from "@/components/ui-view";
+import { growClass, growAttr, inlineMax, useUiView } from "@/components/ui-view";
 import { branch, collectTabs, eachScopes, requiredFields, resolve, resolveProps, type Scope } from "@/components/ui-bindings";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -27,11 +27,14 @@ import { asArray, asNumber, asObj, isObj, optText, show, type Obj } from "@/lib/
 import { cn } from "@/lib/utils";
 import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
 
-// Library-backed blocks load on first use, so a chat without a chart never downloads Recharts.
+// Library-backed blocks load on first use, so a chat without a chart never downloads its code.
 // Once a chat shows agent UI, the rest are fetched while the app is idle (preloadUiBlocks), and a
 // block whose code is in draws at once instead of flashing a placeholder.
 const UiChart = preloadable(() => import("@/components/ui-blocks/chart").then((m) => m.default));
 const UiMap = preloadable(() => import("@/components/ui-blocks/map").then((m) => m.default));
+// Region maps (outline, choropleth, bubble, connection, hexbin) and flow graphs are SVG over d3 modules: no Leaflet, no tiles.
+const UiGeoMap = preloadable(() => import("@/components/ui-blocks/map/geo-map").then((m) => m.default));
+const UiFlow = preloadable(() => import("@/components/ui-blocks/flow/flow").then((m) => m.default));
 const UiDataTable = preloadable(() => import("@/components/ui-blocks/data-table").then((m) => m.default));
 const UiDiagram = preloadable(() => import("@/components/ui-blocks/diagram").then((m) => m.default));
 const UiSql = preloadable(() => import("@/components/ui-blocks/sql").then((m) => m.default));
@@ -50,7 +53,7 @@ const DiffStatView = preloadable(() => cliViews().then((m) => m.DiffStatView));
 const diffBlocks = () => import("@/components/ui-blocks/diff-blocks");
 const TextDiffBlock = preloadable(() => diffBlocks().then((m) => m.TextDiffBlock));
 const PatchBlock = preloadable(() => diffBlocks().then((m) => m.PatchBlock));
-const BLOCKS = [UiChart, UiMap, UiDataTable, UiDiagram, UiSql, TestsView, TextDiffBlock, UiDiffReview];
+const BLOCKS = [UiChart, UiMap, UiGeoMap, UiFlow, UiDataTable, UiDiagram, UiSql, TestsView, TextDiffBlock, UiDiffReview];
 
 let preloading = false;
 /** After the first agent UI: fetch every block's code while the app is idle. */
@@ -93,11 +96,29 @@ export function UiTree({ tree, props, form }: { tree: unknown; props: unknown; f
   return (
     <UiErrorBoundary tree={tree}>
       <FormHostContext.Provider value={form}>
-        <div data-expanded={expanded || undefined} className={cn("flex flex-col gap-3 text-sm", expanded && "h-full min-h-0")}>
+        <div data-expanded={expanded || undefined} className={cn("flex flex-col gap-3 text-sm", expanded && ["h-full min-h-0", FILL_PATH])}>
           <UiNode node={tree} scope={asObj(props)} />
         </div>
       </FormHostContext.Provider>
     </UiErrorBoundary>
+  );
+}
+
+/**
+ * Expanded, the containers around the growing region (`[data-grow]`: a block's main scroll area, or a
+ * node marked `"grow": true`) pass the dialog's height down to it: each takes the space left and may
+ * shrink. Containers without one stay at their natural size, top-aligned.
+ */
+const FILL_PATH = "[&_*:has([data-grow])]:min-h-0 [&_*:has([data-grow=fill])]:flex-1";
+
+/** A node marked `"grow": true`: expanded, it takes the dialog's height left and scrolls inside itself. */
+function Grow({ children }: { children: ReactNode }) {
+  const { expanded } = useUiView();
+  if (!expanded) return children;
+  return (
+    <div {...growAttr(true)} className={cn("flex flex-col gap-3 *:shrink-0", growClass(true, ""))}>
+      {children}
+    </div>
   );
 }
 
@@ -112,6 +133,11 @@ function Children({ nodes, scope }: { nodes: unknown; scope: Scope }) {
 }
 
 function UiNode({ node, scope }: { node: unknown; scope: Scope }): ReactNode {
+  const body = <UiNodeBody node={node} scope={scope} />;
+  return isObj(node) && node.grow === true ? <Grow>{body}</Grow> : body;
+}
+
+function UiNodeBody({ node, scope }: { node: unknown; scope: Scope }): ReactNode {
   if (typeof node === "string") return <span className="whitespace-pre-wrap">{show(resolve(node, scope))}</span>;
   if (!isObj(node)) return null;
   if ("each" in node)
@@ -151,6 +177,7 @@ const TREND: Record<string, ReactNode> = {
 const find = (p: Obj) => optText(p.find);
 
 function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): ReactNode {
+  const { expanded } = useUiView();
   const kids = <Children nodes={node.children} scope={scope} />;
   const type = show(node.type);
   switch (type) {
@@ -210,7 +237,7 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
     case "markdown":
       return <Markdown>{show(p.text)}</Markdown>;
     case "code":
-      return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre">{show(p.text)}</pre>;
+      return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-code whitespace-pre">{show(p.text)}</pre>;
     case "badge":
       return (
         <Badge variant={variant(p.variant, "secondary")} className="self-start">
@@ -329,13 +356,30 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
             stacked={!!p.stacked}
             unit={optText(p.unit)}
             height={positive(p.height)}
+            refs={p.refs}
+            orientation={p.orientation}
+            labels={p.labels}
+            sort={p.sort}
+            scale={p.scale}
+            zero={p.zero}
+            domain={p.domain}
           />
         </Lazy>
       );
     case "map":
+      return p.kind === "outline" || p.kind === "choropleth" || p.kind === "bubble" || p.kind === "connection" || p.kind === "hexbin" ? (
+        <Lazy height={positive(p.height) ?? 360}>
+          <UiGeoMap props={p} />
+        </Lazy>
+      ) : (
+        <Lazy height={positive(p.height) ?? 320}>
+          <UiMap markers={p.markers} center={p.center} zoom={p.zoom} height={positive(p.height)} lines={p.lines} cluster={p.cluster} />
+        </Lazy>
+      );
+    case "flow":
       return (
         <Lazy height={positive(p.height) ?? 320}>
-          <UiMap markers={p.markers} center={p.center} zoom={p.zoom} height={positive(p.height)} />
+          <UiFlow props={p} />
         </Lazy>
       );
     case "diagram":
@@ -455,7 +499,7 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
       // Natural size (capped by the column), never stretched up; tall captures scroll.
       if (src.startsWith("data:image/"))
         return (
-          <div className="max-h-[40rem] self-start overflow-auto rounded-md border">
+          <div className={cn("self-start overflow-auto rounded-md border", inlineMax(expanded, "max-h-[40rem]"))}>
             <img src={src} alt={alt} width={positive(p.width)} loading="lazy" className="block h-auto max-w-full" />
           </div>
         );
@@ -864,7 +908,7 @@ function LiveSource({
         state.data !== undefined && <Children nodes={nodes} scope={{ ...scope, [name]: state.data, history: state.samples }} />
       )}
       {state.error != null && <ErrorText error={state.error} prefix="Couldn’t read: " />}
-      <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <span
           className={cn(
             "size-1.5 rounded-full",

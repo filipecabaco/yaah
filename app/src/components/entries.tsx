@@ -2,7 +2,7 @@
 // only draw it. Every entry is memoised on the entry object itself (Rust sends
 // a new object only for the entry that changed), so a streaming reply
 // re-renders one entry, not the whole chat.
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Brain,
@@ -42,6 +42,7 @@ import { ToolTerminal } from "@/components/terminal/tool-terminal";
 import { FolderRequestEntry, UiEntry } from "@/components/ui-entry";
 import { api, type Entry, type ToolContent } from "@/lib/api";
 import { openSettings } from "@/lib/app-events";
+import { focusAfterPermission } from "@/lib/pane-focus";
 import { permissionAnswer, permissionChip, type PermissionEntry } from "@/lib/permissions";
 import { baseName, compactPath, elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
@@ -362,7 +363,7 @@ function Pre({ children, layout = "prose", failed = false }: { children: string;
     <pre
       data-layout={layout}
       className={cn(
-        "max-h-96 rounded-md bg-muted px-2 pt-2 font-mono text-xs leading-5 [tab-size:4]",
+        "max-h-96 rounded-md bg-muted px-2 pt-2 font-mono text-code leading-(--code-row) [tab-size:4]",
         layout === "code" ? "overflow-auto pb-3 whitespace-pre" : "overflow-y-auto pb-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap",
         failed && "bg-destructive/5 text-destructive",
       )}
@@ -411,9 +412,10 @@ function AllowedChip({ entry }: { entry: PermissionEntry }) {
   if (!chip) return null;
   const said = chip.reason ? `${chip.label}: ${chip.reason}` : chip.label;
   return (
-    <span className="flex min-w-0 shrink items-center gap-1 text-[11px] text-muted-foreground" title={`${said}\n${entry.chosen ?? ""}`.trim()}>
+    <span className="flex min-w-0 shrink items-center gap-1 text-2xs text-muted-foreground" title={`${said}\n${entry.chosen ?? ""}`.trim()}>
       <ShieldCheck className="size-3 shrink-0" aria-hidden />
-      <span className="shrink-0">{chip.label}</span>
+      {/* In a narrow pane (a split at a large interface size) only the shield shows: the tool's name keeps the room. */}
+      <span className="sr-only shrink-0 @sm:not-sr-only">{chip.label}</span>
       {chip.reason && <span className="hidden truncate @2xl:inline">· {chip.reason}</span>}
       <span className="sr-only">{chip.reason ? `: ${chip.reason}` : ""}</span>
     </span>
@@ -425,12 +427,16 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
   const [sending, setSending] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const pending = entry.chosen == null;
+  const card = useRef<HTMLDivElement>(null);
+  // Answered, the keyboard moves on to the next waiting request or the message box (KB-1).
   const respond = (optionId: string) => {
     if (!chat) return;
     setSending(optionId);
     setError(null);
+    const moveOn = focusAfterPermission(card.current);
     api
       .respondPermission(chat.sessionId, index, optionId)
+      .then(moveOn)
       .catch(setError)
       .finally(() => setSending(null));
   };
@@ -438,8 +444,10 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
     if (!chat) return;
     setSending("trust");
     setError(null);
+    const moveOn = focusAfterPermission(card.current);
     api
       .trustMcpServer(chat.sessionId, index)
+      .then(moveOn)
       .catch(setError)
       .finally(() => setSending(null));
   };
@@ -450,11 +458,15 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
   const scope = chat?.inProject ? "project" : "chat";
   return (
     <CopyMenu actions={[{ label: "Copy request", text: request }]}>
-      <div role="group" aria-label="Permission requested" className="rounded-lg border border-amber-500/60 bg-amber-500/5 px-3 py-2">
+      <div ref={card} role="group" aria-label="Permission requested" className="rounded-lg border border-amber-500/60 bg-amber-500/5 px-3 py-2">
         <div className="flex items-start gap-2 text-sm">
           <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600" />
           <div className="min-w-0 flex-1">
             <div className="font-medium">Permission requested</div>
+            {/* Said at once, not only when the polite log gets to it (SR-2); the answers are a Shift+Tab from the message box. */}
+            <span role="alert" className="sr-only">
+              Permission requested: {entry.title}
+            </span>
             <div className="truncate font-mono text-xs text-muted-foreground" title={entry.title}>
               {entry.title}
             </div>
@@ -636,7 +648,7 @@ function AddedDirsEntry({ entry }: { entry: Of<"addedDirs"> }) {
       <FolderPlus className="size-3 shrink-0" aria-hidden />
       <span className="min-w-0" title={entry.paths.join("\n")}>
         Added <span className="font-medium text-foreground">{list}</span> to this {entry.to}
-        <span className="block truncate font-mono text-[11px]">{entry.paths.map((p) => compactPath(p)).join(" · ")}</span>
+        <span className="block truncate font-mono text-2xs">{entry.paths.map((p) => compactPath(p)).join(" · ")}</span>
       </span>
       <span className="h-px flex-1 bg-border" aria-hidden />
     </div>

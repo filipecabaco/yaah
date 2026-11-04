@@ -7,6 +7,8 @@ src/components/ui
 # Recorded and generated data.
 src/dev/fixtures
 src/lib/themes.json
+# The 1:50m world ships as written (minified): 0.7 MB smaller to parse.
+src/assets/geo/world-50m.topo.json
 src/ui-primitives.json
 # Editor hook caches.
 .impeccable

@@ -383,10 +383,24 @@ export const SIDEBAR = { min: 220, max: 480, default: 288 } as const;
 export type WindowLayout = { panes: Layout | null; sidebar: SidebarState };
 
 export type Appearance = "system" | "light" | "dark";
+/** The CSS variables Settings → Fonts sets on the root (index.css has their defaults). */
+export const FONT_VARS = ["--font-ui", "--font-code", "--font-ui-scale", "--font-code-scale"] as const;
+export type FontVar = (typeof FONT_VARS)[number];
+/** What `set_fonts` takes: a family per slot (null: the system default) and sizes in px (null: the default). */
+export type FontChoice = { ui: string | null; code: string | null; uiSize: number | null; codeSize: number | null };
+/** The saved fonts (settings.rs `fonts_for_ui`): the choice, the size ranges, and the CSS Rust built for it (null: index.css's default). */
+export type FontSettings = FontChoice & {
+  limits: Record<"uiSize" | "codeSize", { min: number; max: number; default: number }>;
+  css: Record<FontVar, string | null>;
+};
+/** A font family on this machine (fonts.rs); `mono` when a face of it is fixed-pitch. */
+export type InstalledFonts = { families: { name: string; mono: boolean }[]; scanMs: number; fallback: boolean };
 export type GeneralSettings = {
   appearance: Appearance;
   /** Theme ids for light and dark mode: "yaah", "shiki:<name>" or "custom:<file>". */
   theme: { light: string; dark: string };
+  /** Interface and code fonts and sizes (Settings → Appearance → Fonts). */
+  fonts: FontSettings;
   /** How tool cards open in chats, by kind of tool (defaults plus your own rules). */
   toolCards: { rules: Record<string, "auto" | "collapsed" | "expanded">; defaults: { key: string; mode: string }[] };
   /** VS Code themes dropped in ~/.config/yaah/themes. */
@@ -738,6 +752,10 @@ export const api = {
   agentGuide: () => invoke<AgentGuide>("agent_guide"),
   setTeachAgents: (enabled: boolean) => invoke<void>("set_teach_agents", { enabled }),
   setGroupToolCalls: (enabled: boolean) => invoke<void>("set_group_tool_calls", { enabled }),
+  installedFonts: () => invoke<InstalledFonts>("installed_fonts"),
+  setFonts: (fonts: FontChoice) => invoke<FontSettings>("set_fonts", { fonts }),
+  /** ⌘= / ⌘- / ⌘0: sizes a step bigger (1), smaller (-1) or back to the default (0). */
+  stepFontSize: (step: -1 | 0 | 1) => invoke<FontSettings>("step_font_size", { step }),
   readCustomTheme: (name: string) =>
     invoke<{ name?: string; displayName?: string; type?: string; colors: Record<string, string> }>("read_custom_theme", { name }),
   revealDataDir: (path: string) => invoke<void>("reveal_data_dir", { path }),

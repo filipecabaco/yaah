@@ -1,6 +1,17 @@
 // Settings → General: appearance, themes (with one custom drop-in, "harbor"),
 // tool-card rules, workspace folders and data folders.
-import { SIDEBAR, type AgentGuide, type Appearance, type GeneralSettings, type GuideRoute, type SidebarState, type WindowLayout } from "@/lib/api";
+import {
+  SIDEBAR,
+  type AgentGuide,
+  type Appearance,
+  type FontChoice,
+  type FontSettings,
+  type GeneralSettings,
+  type GuideRoute,
+  type InstalledFonts,
+  type SidebarState,
+  type WindowLayout,
+} from "@/lib/api";
 import { prune, type Layout } from "@/lib/layout";
 // The real templates Rust embeds (src-tauri/agent-guide/), so Settings shows what agents are told.
 import guideTemplate from "../../../src-tauri/agent-guide/guide.md?raw";
@@ -40,6 +51,52 @@ const harbor = {
   },
 };
 
+/** A sample of what fonts.rs finds on a Mac (and a couple of popular installs), `mono` for fixed-pitch families. */
+export const SAMPLE_FONTS: InstalledFonts = {
+  families: [
+    ["American Typewriter", false],
+    ["Avenir", false],
+    ["Avenir Next", false],
+    ["Courier New", true],
+    ["Fira Code", true],
+    ["Georgia", false],
+    ["Gill Sans", false],
+    ["Helvetica Neue", false],
+    ["Iowan Old Style", false],
+    ["JetBrains Mono", true],
+    ["Menlo", true],
+    ["Monaco", true],
+    ["Palatino", false],
+    ["PT Mono", true],
+    ["Times New Roman", false],
+    ["Verdana", false],
+  ].map(([name, mono]) => ({ name: name as string, mono: mono as boolean })),
+  scanMs: 41,
+  fallback: false,
+};
+
+const UI_LIMIT = { min: 12, max: 20, default: 14 };
+const CODE_LIMIT = { min: 10, max: 20, default: 12 };
+const FALLBACK = {
+  ui: '"Geist Variable", system-ui, sans-serif',
+  code: '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, "DejaVu Sans Mono", monospace',
+};
+const num = (n: number) => String(Number(n.toFixed(4)));
+
+/** settings.rs `fonts_for_ui`: the choice, its limits and the CSS Rust builds for it. */
+export function fontsForUi(f: FontChoice): FontSettings {
+  return {
+    ...f,
+    limits: { uiSize: UI_LIMIT, codeSize: CODE_LIMIT },
+    css: {
+      "--font-ui": f.ui ? `"${f.ui}", ${FALLBACK.ui}` : null,
+      "--font-code": f.code ? `"${f.code}", ${FALLBACK.code}` : null,
+      "--font-ui-scale": f.uiSize ? num(f.uiSize / UI_LIMIT.default) : null,
+      "--font-code-scale": f.codeSize ? num(f.codeSize / CODE_LIMIT.default) : null,
+    },
+  };
+}
+
 const dataDirs = [
   ["Chats", ".yaah/sessions", "Transcripts, restored at start."],
   ["Quick-chat folders", ".yaah/scratch", "Scratch folders for chats without a project."],
@@ -52,6 +109,8 @@ export function seedSettings() {
   return {
     appearance: "system" as Appearance,
     theme: { light: "yaah", dark: "yaah" },
+    /** Settings → Appearance → Fonts (settings.json `fonts`). */
+    fonts: { ui: null, code: null, uiSize: null, codeSize: null } as FontChoice,
     /** Your own tool-card rules, over the defaults. */
     cardRules: {} as Record<string, CardMode>,
     workspaceRoots: [ws],
@@ -93,6 +152,7 @@ export function settingsReplies({ state }: Mock): Replies {
     general_settings: (): GeneralSettings => ({
       appearance: state.appearance,
       theme: state.theme,
+      fonts: fontsForUi(state.fonts),
       toolCards: {
         rules: { ...cardDefaults, ...state.cardRules },
         defaults: Object.entries(cardDefaults).map(([key, mode]) => ({ key, mode })),
@@ -116,6 +176,26 @@ export function settingsReplies({ state }: Mock): Replies {
       return null;
     },
     read_custom_theme: () => harbor,
+    installed_fonts: (): InstalledFonts => SAMPLE_FONTS,
+    // settings.rs `set_fonts`: only listed families and sizes in range.
+    set_fonts: ({ fonts }: { fonts: FontChoice }): FontSettings => {
+      const known = (n: string | null) => n == null || SAMPLE_FONTS.families.some((f) => f.name === n);
+      const inRange = (n: number | null, l: { min: number; max: number }) => n == null || (Number.isInteger(n) && n >= l.min && n <= l.max);
+      if (!known(fonts.ui) || !known(fonts.code)) throw new Error("isn't a font installed on this machine");
+      if (!inRange(fonts.uiSize, UI_LIMIT) || !inRange(fonts.codeSize, CODE_LIMIT)) throw new Error("size out of range");
+      state.fonts = { ui: fonts.ui, code: fonts.code, uiSize: fonts.uiSize, codeSize: fonts.codeSize };
+      return fontsForUi(state.fonts);
+    },
+    // settings.rs `step_font_size`: a px at a time within range; a code size of its own moves too.
+    step_font_size: ({ step }: { step: number }): FontSettings => {
+      const f = state.fonts;
+      const clamp = (n: number, l: { min: number; max: number }) => Math.min(l.max, Math.max(l.min, n));
+      const by = Math.sign(step);
+      const ui = step === 0 ? null : clamp((f.uiSize ?? UI_LIMIT.default) + by, UI_LIMIT);
+      const code = f.codeSize == null ? null : step === 0 ? CODE_LIMIT.default : clamp(f.codeSize + by, CODE_LIMIT);
+      state.fonts = { ...f, uiSize: ui === UI_LIMIT.default ? null : ui, codeSize: code };
+      return fontsForUi(state.fonts);
+    },
     set_tool_card: ({ key, mode }: { key: string; mode: CardMode | null }) => {
       const { [key]: _, ...rest } = state.cardRules;
       state.cardRules = mode ? { ...rest, [key]: mode } : rest;

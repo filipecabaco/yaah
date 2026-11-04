@@ -19,6 +19,7 @@ import { useFind } from "@/components/ui-blocks/find";
 import { plural } from "@/lib/format";
 import { asArray, isObj, optText, show, type Obj } from "@/lib/narrow";
 import { cn } from "@/lib/utils";
+import { growAttr, growClass, useUiView } from "@/components/ui-view";
 
 type Column = { key: string; label: string; align?: "left" | "right" };
 
@@ -56,6 +57,7 @@ export default function UiDataTable({
   const rows = useMemo(() => asArray(rawRows).filter(isObj), [rawRows]);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [filter, setFilter] = useFind(find);
+  const { expanded } = useUiView();
 
   // Numbers line up on the right unless the column says otherwise (query results don't).
   const right = useMemo(
@@ -122,7 +124,7 @@ export default function UiDataTable({
           </span>
         </div>
       )}
-      <div className="overflow-x-auto rounded-md border">
+      <div {...growAttr(expanded, false)} className={cn("overflow-x-auto rounded-md border", growClass(expanded, "", false))}>
         <Table>
           <TableHeader>
             {table.getHeaderGroups().map((g) => (

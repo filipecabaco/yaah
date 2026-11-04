@@ -5,6 +5,10 @@
 import type { Entry, Project, SessionInfo, SlashCommand } from "@/lib/api";
 import { baseName, home, need, now, type Mock, type Replies } from "./context";
 import { bundledComponents, recordings, type Recording } from "./fixtures";
+import { chartGallery } from "./chart-gallery";
+import { mapGallery } from "./map-gallery";
+import { mapTypes } from "./map-types";
+import { flowGraphs } from "./flow-graphs";
 import { addProject } from "./projects";
 import { permissionsReply, trustedAnswer, trustedFor } from "./permissions";
 
@@ -478,11 +482,283 @@ const folderRequest: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
+/** Library components with their first example, one UI each (file-view as .mdx and as source): to try Expand on every kind of scroll area. */
+const MDX_SAMPLE = `# Release notes\n\n${Array.from({ length: 20 }, (_, i) => `## Section ${i + 1}\n\nParagraph ${i + 1} with some **bold** text and \`code\`.\n`).join("\n")}`;
+const expandFill: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  ...(
+    [
+      ["file-view", { text: MDX_SAMPLE, path: "docs/release.mdx" }],
+      ["file-view", undefined],
+      ["container-logs", undefined],
+      ["test-report", undefined],
+      ["git-graph", undefined],
+      ["db-query", undefined],
+    ] as [string, Record<string, unknown> | undefined][]
+  ).map(([name, props], i): Recording[number] => {
+    const c = bundledComponents.find((b) => b.name === name);
+    const given = props ?? c?.examples?.[0]?.props ?? {};
+    return {
+      event: "session-entry",
+      index: i + 1,
+      entry: {
+        type: "ui",
+        askId: null,
+        answer: null,
+        title: null,
+        component: c?.name ?? name,
+        version: c?.version ?? 1,
+        tree: { type: "$component", name: c?.name, version: c?.version ?? 1, props: given, tree: c?.tree },
+        props: given,
+      },
+    };
+  }),
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
+/**
+ * An election-night dashboard, the shape an agent built for "US election dashboard": tabs, stat
+ * tiles, the poll-against-result dumbbell with a Tie line, a stacked area of the count with end
+ * labels, and the marker map. Margins are Republican minus Democrat, in points; the numbers are
+ * illustrative, not real results.
+ */
+const ELECTION = [
+  ["IA", 8.2, 13.2, 41.9, -93.1],
+  ["LA", 15.0, 22.0, 31.0, -92.0],
+  ["AK", 9.0, 13.1, 61.4, -150.5],
+  ["SC", 12.0, 17.8, 33.9, -80.9],
+  ["OH", 8.0, 11.2, 40.4, -82.9],
+  ["ME", -8.0, -6.9, 45.3, -69.2],
+  ["TX", 7.2, 13.7, 31.0, -99.9],
+  ["KS", 12.0, 16.2, 38.5, -98.4],
+  ["MI", -0.8, 1.4, 44.3, -85.6],
+  ["MN", -4.6, -4.2, 46.7, -94.7],
+  ["NH", -5.0, -2.8, 43.2, -71.6],
+  ["GA", 1.0, 2.2, 32.7, -83.4],
+  ["FL", 7.0, 13.1, 28.0, -81.8],
+  ["NC", 1.2, 3.2, 35.6, -79.4],
+] as const;
+const margin = (v: number) => (v === 0 ? "Tie" : `${v > 0 ? "R" : "D"} +${Math.abs(v).toFixed(1)}`);
+const electionTree = {
+  type: "card",
+  props: { title: "Election night: polls against results", description: "14 states. Margin is Republican minus Democrat, in points." },
+  children: [
+    {
+      type: "grid",
+      props: { columns: 3, gap: "md" },
+      children: [
+        { type: "stat", props: { label: "Average polling miss", value: "R +3.6 pts", hint: "Toward Republicans in all 14 states" } },
+        { type: "stat", props: { label: "Missed by more than 3 points", value: "8 of 14" } },
+        { type: "stat", props: { label: "Closest result", value: "MI, R +1.4" } },
+      ],
+    },
+    {
+      type: "tabs",
+      children: [
+        {
+          type: "tab",
+          props: { label: "Polls vs results" },
+          children: [
+            {
+              type: "chart",
+              props: {
+                kind: "dumbbell",
+                x: "state",
+                data: ELECTION.map(([state, poll, result]) => ({ state, poll, result })),
+                series: [
+                  { key: "poll", label: "Final poll average" },
+                  { key: "result", label: "Result" },
+                ],
+                refs: [{ axis: "y", value: 0, label: "Tie" }],
+                sort: "gap",
+                unit: " pts",
+                scale: { type: "diverging", domain: [-24, 24], midpoint: 0, bins: 5, unit: " pts" },
+              },
+            },
+          ],
+        },
+        {
+          type: "tab",
+          props: { label: "Count over the night" },
+          children: [
+            {
+              type: "chart",
+              props: {
+                kind: "area",
+                stacked: true,
+                x: "hour",
+                unit: "M",
+                data: [
+                  { hour: "7pm", early: 18.2, day: 0.4, mail: 0.2 },
+                  { hour: "8pm", early: 31.5, day: 6.1, mail: 1.9 },
+                  { hour: "9pm", early: 38.8, day: 15.4, mail: 4.6 },
+                  { hour: "10pm", early: 41.2, day: 24.9, mail: 7.8 },
+                  { hour: "11pm", early: 42.0, day: 31.7, mail: 10.3 },
+                  { hour: "12am", early: 42.3, day: 35.2, mail: 12.9 },
+                  { hour: "1am", early: 42.4, day: 36.8, mail: 15.1 },
+                ],
+                series: [
+                  { key: "early", label: "Early in person" },
+                  { key: "day", label: "Election day" },
+                  { key: "mail", label: "Mail" },
+                ],
+              },
+            },
+          ],
+        },
+        {
+          type: "tab",
+          props: { label: "Map" },
+          children: [
+            {
+              type: "map",
+              props: {
+                // States filled by their result on the same diverging scale as the dumbbell; the rest weren't in this set.
+                kind: "choropleth",
+                region: "us-states",
+                title: "Result margin in the 14 states",
+                data: ELECTION.map(([state, , result]) => ({ id: state, value: result, detail: margin(result) })),
+                scale: { type: "diverging", domain: [-24, 24], midpoint: 0, bins: 7, unit: " pts" },
+                legend: { title: "Result margin (R + / D −)" },
+                // 37 states have no row: plain land, not 37 hatched "no data" states drowning the 14.
+                missing: "land",
+                noDataLabel: "Not in this set",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  ],
+};
+const electionInput = { title: "Election night", tree: electionTree };
+const election: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  { event: "session-entry", index: 1, entry: call("ui", "mcp__yaah-ui__ui_render", "other", "in_progress", electionInput) },
+  {
+    event: "session-entry",
+    index: 2,
+    entry: { type: "ui", askId: null, answer: null, title: "Election night", component: null, version: null, tree: electionTree, props: {} },
+  },
+  { event: "session-entry", index: 1, entry: call("ui", "mcp__yaah-ui__ui_render", "other", "completed", electionInput, "Rendered.") },
+  {
+    event: "session-entry",
+    index: 3,
+    entry: {
+      type: "agent",
+      text: "The polls missed toward Republicans in all 14 states, by 3.6 points on average; Louisiana and Texas moved most, Minnesota least. (Illustrative numbers.)",
+      messageId: null,
+    },
+  },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
+/** "chart gallery": a short message, then one small dashboard per subject (chart-gallery.ts). */
+const gallery: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  {
+    event: "session-entry",
+    index: 1,
+    entry: {
+      type: "agent",
+      text: "Here are eight small dashboards, one per subject, each with a different chart or map. All numbers are made up.",
+      messageId: null,
+    },
+  },
+  ...chartGallery.flatMap(([title, tree], i): Recording => {
+    const input = { title, tree };
+    const id = `gallery-${i}`;
+    return [
+      { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "in_progress", input) },
+      {
+        event: "session-entry",
+        index: 3 + i * 2,
+        entry: { type: "ui", askId: null, answer: null, title, component: null, version: null, tree, props: {} },
+      },
+      { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "completed", input, "Rendered.") },
+    ];
+  }),
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
+/** "map gallery": a short message, then one card per map example (map-gallery.ts). */
+const mapGalleryRecording: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  {
+    event: "session-entry",
+    index: 1,
+    entry: {
+      type: "agent",
+      text: "Here are eight map examples, from one bike station to a whole continent. All data is made up.",
+      messageId: null,
+    },
+  },
+  ...mapGallery.flatMap(([title, tree], i): Recording => {
+    const input = { title, tree };
+    const id = `map-gallery-${i}`;
+    return [
+      { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "in_progress", input) },
+      {
+        event: "session-entry",
+        index: 3 + i * 2,
+        entry: { type: "ui", askId: null, answer: null, title, component: null, version: null, tree, props: {} },
+      },
+      { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "completed", input, "Rendered.") },
+    ];
+  }),
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
+/** A short message, then one rendered card per entry (the map types and flow graphs mocks). */
+function cardsRecording(text: string, prefix: string, entries: [string, Record<string, unknown>][]): Recording {
+  return [
+    { event: "session-info", running: true, stopReason: null },
+    { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+    { event: "session-entry", index: 1, entry: { type: "agent", text, messageId: null } },
+    ...entries.flatMap(([title, tree], i): Recording => {
+      const input = { title, tree };
+      const id = `${prefix}-${i}`;
+      return [
+        { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "in_progress", input) },
+        {
+          event: "session-entry",
+          index: 3 + i * 2,
+          entry: { type: "ui", askId: null, answer: null, title, component: null, version: null, tree, props: {} },
+        },
+        { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "completed", input, "Rendered.") },
+      ];
+    }),
+    { event: "session-info", running: false, stopReason: "end_turn" },
+  ];
+}
+/** "map types": the region map kinds (map-types.ts). */
+const mapTypesRecording = cardsRecording(
+  "Ten maps: a world choropleth, US states by 2024 margin, European store revenue as bubbles, edge locations as an outline, flights and data-centre traffic as connections, weather stations as a hexbin, Iberia zoomed in, a delivery round and bike docks on the street map. Numbers are illustrative.",
+  "map-types",
+  mapTypes,
+);
+/** "flow graphs": a CI sankey and a service network (flow-graphs.ts). */
+const flowGraphsRecording = cardsRecording(
+  "Three flow graphs: last week's CI runs as a sankey, the service call graph as a network, and the monorepo's package imports. Numbers are made up.",
+  "flow-graphs",
+  flowGraphs,
+);
+
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
 const routes: [RegExp, Recording][] = [
   [/command output|tool cards/i, commandOutput],
+  [/election (dashboard|night)/i, election],
+  [/chart gallery/i, gallery],
+  [/map gallery/i, mapGalleryRecording],
+  [/map types/i, mapTypesRecording],
+  [/flow graphs?/i, flowGraphsRecording],
   [/diff of my project|workspace of yaah|request folders/i, folderRequest],
   [/big diff/i, bigDiff],
+  [/expand fill/i, expandFill],
   [/assembl|deploys/i, assembling],
   [/\bmdx\b|docs page/i, mdxReply],
   [/\blinks?\b|markdown/i, markdownReply],

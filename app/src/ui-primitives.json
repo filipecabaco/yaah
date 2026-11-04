@@ -1,5 +1,5 @@
 {
-  "about": "Base components for agent-built UI. Rust validates trees against this file (src-tauri/src/ui_library.rs) and React renders them (src/components/ui-render.tsx). Keep the two in step when adding one. Each primitive lists the libraries it is built on in `uses`; a component's libraries are the union over the primitives it contains.",
+  "about": "Base components for agent-built UI. Rust validates trees against this file (src-tauri/src/ui_library.rs) and React renders them (src/components/ui-render.tsx). Keep the two in step when adding one. Each primitive lists the libraries it is built on in `uses`; a component's libraries are the union over the primitives it contains. Expanded (the Expand button, F), the UI fills a large dialog: `textfile`, `filetree`, `json`, `table`, `gitgraph`, `gitstatus`, `diffstat`, `wordcount` and `diffreview` give their main scroll area all the height left, with no cap. For any other node (a `stack`, `list`, `code`, `markdown`…) that should take it, set `\"grow\": true` on the node itself (next to `type`, not in `props`): expanded it fills the height and scrolls inside. Mark one node; the rest stay at their natural size, top-aligned.",
   "primitives": {
     "stack": {
       "description": "Lays children out in a row or column.",
@@ -130,7 +130,7 @@
       }
     },
     "markdown": {
-      "description": "Markdown text (GitHub flavoured). MDX renders too, as data (nothing runs): frontmatter folded, imports hidden, `{expressions}` as code, common docs components (Admonition, Tabs, Steps, Cards, details) drawn natively.",
+      "description": "Markdown text (GitHub flavoured), read as MDX and drawn as data (nothing runs): frontmatter folded, imports and comments hidden, `{braces}` as text, simple HTML (`<br>`, `<kbd>`) and common docs components (Admonition, Tabs, Steps, Cards, details) drawn natively.",
       "uses": [
         "react-markdown",
         "remark-gfm"
@@ -243,9 +243,10 @@
       }
     },
     "chart": {
-      "description": "A bar, line or area chart over one x field and up to 5 series on a single y axis (never two y scales; put measures of different scale in separate charts). Always shows a legend for 2+ series and lets the user flip to a table of the data. More than 5 series: keep the biggest and fold the rest into an \"Other\" series.",
+      "description": "A bar, line, area or dumbbell chart over one x field and up to 5 series on a single y axis (never two y scales; put measures of different scale in separate charts). bar compares amounts, line shows a trend, area a trend of parts (stacked), dumbbell two values per category (before → after, poll → result) as two dots joined by a line. Always shows a legend for 2+ series and lets the user flip to a table of the data. More than 5 series: keep the biggest and fold the rest into an \"Other\" series. Colours come from the theme and are checked for colour-blind safety; you can't set them. At most 2,000 rows.",
       "uses": [
-        "recharts"
+        "d3-scale",
+        "d3-shape"
       ],
       "children": false,
       "props": {
@@ -254,24 +255,25 @@
           "enum": [
             "bar",
             "line",
-            "area"
+            "area",
+            "dumbbell"
           ],
           "required": true
         },
         "data": {
           "type": "array",
           "required": true,
-          "description": "Rows, e.g. [{ month: \"Jan\", api: 120, web: 80 }]."
+          "description": "Rows, e.g. [{ month: \"Jan\", api: 120, web: 80 }]. At most 2,000."
         },
         "x": {
           "type": "string",
           "required": true,
-          "description": "Field of each row used for the x axis."
+          "description": "Field of each row used for the x axis (a dumbbell's rows)."
         },
         "series": {
           "type": "array",
           "required": true,
-          "description": "[{ key, label }] — fields plotted as series, in a fixed order."
+          "description": "[{ key, label }] — fields plotted as series, in a fixed order. A dumbbell takes exactly 2: before, then after."
         },
         "stacked": {
           "type": "boolean",
@@ -279,11 +281,53 @@
         },
         "unit": {
           "type": "string",
-          "description": "Suffix for values, e.g. \"ms\" or \"%\"."
+          "description": "Suffix for values. Symbols and magnitude suffixes attach to the number (\"k\" → 16k, \"M\", \"%\", \"°\", \"°C\"; a currency symbol leads: $12); a word gets a space (\"ms\" → 42 ms); a leading space you write is kept (\" pts\" → 12 pts)."
+        },
+        "zero": {
+          "type": "boolean",
+          "description": "line and area: start the value axis at 0. Default: bars and stacks always start at 0; lines and unstacked areas fit their data (padded to nice ticks, with any refs), and include 0 only when the data crosses it."
+        },
+        "domain": {
+          "type": "array",
+          "description": "line and area: [low, high] for the value axis, e.g. [0, 100] for a percentage. Widened if the data or a ref falls outside."
         },
         "height": {
           "type": "number",
-          "description": "Pixels. Default 240."
+          "description": "Pixels. Default 240 (a horizontal dumbbell sizes itself: 28px a row)."
+        },
+        "refs": {
+          "type": "array",
+          "description": "Reference lines, at most 20: [{ axis: \"y\", value: 0, label: \"Tie\" }]. axis \"y\" is a value (a target, zero), \"x\" a category; label at most 40 characters, drawn outside the plot (beside a horizontal line, above a vertical one), never over the data."
+        },
+        "orientation": {
+          "type": "string",
+          "enum": [
+            "vertical",
+            "horizontal"
+          ],
+          "description": "bar and dumbbell only. Default: a dumbbell is horizontal, bars turn horizontal when a category name is long."
+        },
+        "labels": {
+          "type": "string",
+          "enum": [
+            "ends",
+            "none",
+            "all"
+          ],
+          "description": "Direct labels. Default \"ends\" for line, area (each series' last value) and dumbbell (the gap at the row end); \"none\" for bar (\"ends\" puts each bar's value, or a stack's total, at its tip). \"all\" labels every point: rarely right."
+        },
+        "sort": {
+          "type": "string",
+          "enum": [
+            "none",
+            "value",
+            "gap"
+          ],
+          "description": "Row order. \"value\": biggest first (bar, dumbbell by its second series). \"gap\": a dumbbell's widest gap first. Default \"none\", the data's order."
+        },
+        "scale": {
+          "type": "object",
+          "description": "dumbbell only: how dots are coloured. { type: \"sequential\" | \"diverging\" | \"categorical\", domain?: [low, high], midpoint?, bins?: 2-7, unit? }. Default: two shades of one hue. \"diverging\" colours each dot by its own value's side of the midpoint (the first series hollow) with a legend of the bins (dots carry at most 5 bins; more are merged): for signed values such as margins (poll → result, -3 to +5); for before → after of raw values (points, prices) use the default or \"categorical\", which uses the first two series colours."
         }
       }
     },
@@ -302,28 +346,208 @@
       }
     },
     "map": {
-      "description": "An interactive map (OpenStreetMap tiles) with labelled markers. Fits all markers unless center/zoom are given.",
+      "description": "A map. `kind` picks the form: \"markers\" (the default) is a street map (OpenStreetMap tiles) with labelled markers, for \"where on the streets\"; \"choropleth\" colours regions by one value each (a value per country or state); \"bubble\" sizes a circle at each place by its value (a value at a point: revenue by city); \"outline\" is a plain map with highlighted regions and marked places; \"connection\" draws links between places as great-circle arcs, as wide as their value (flights between hubs, traffic between data centres); \"hexbin\" bins many raw points into hexagons coloured by how many fall in each (or the sum or mean of a weight). The region kinds draw bundled geometry (`region`: world, europe, us-states), work offline, follow the theme, label small sets directly, and flip to a table. Region ids are what you'd write: ISO alpha-3 (\"PRT\"), alpha-2 (\"PT\") or an English name for countries; postal code (\"PA\"), FIPS or name for US states. An unknown id is refused with the nearest names. Colours come from the theme; you can't set them.",
       "uses": [
         "leaflet",
-        "react-leaflet"
+        "react-leaflet",
+        "d3-geo",
+        "topojson-client",
+        "d3-scale",
+        "d3-hexbin"
       ],
       "children": false,
       "props": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "markers",
+            "outline",
+            "choropleth",
+            "bubble",
+            "connection",
+            "hexbin"
+          ],
+          "description": "Default \"markers\"."
+        },
         "markers": {
           "type": "array",
-          "required": true,
-          "description": "[{ lat, lng, label, detail?, tone?: 'default'|'success'|'warning'|'danger' }]"
+          "description": "markers only, required there: [{ id?, lat, lng, label, detail?, tone?: 'default'|'success'|'warning'|'danger' }], at most 2,000. `id` lets a route in `lines` name the marker."
         },
         "center": {
           "type": "array",
-          "description": "[lat, lng]"
+          "description": "markers only: [lat, lng]. Default: fit all markers."
         },
         "zoom": {
-          "type": "number"
+          "type": "number",
+          "description": "markers only."
+        },
+        "lines": {
+          "type": "array",
+          "description": "markers only: routes, [{ points, label?, detail?, tone? }], at most 50; `points` is 2 to 1,000 places in order, each [lat, lng] or a marker's `id`. Drawn as lines on the street map, named for the keyboard."
+        },
+        "cluster": {
+          "type": "any",
+          "description": "markers only: \"auto\" (default: close markers group into a numbered cluster from 40 markers, ringed in the worst status), true, or false. Enter or a click on a cluster zooms in."
+        },
+        "hubs": {
+          "type": "array",
+          "description": "connection, required: [{ id, label, lon, lat, detail? }], at most 100; ids unique (text up to 40 characters, or a whole number)."
+        },
+        "links": {
+          "type": "array",
+          "description": "connection, required: [{ from, to, value?, label?, detail? }] between hub ids, at most 200; no self-links, one row per pair (per direction when `directed`). `value` (0 or more) sets the width."
+        },
+        "directed": {
+          "type": "boolean",
+          "description": "connection: arrowheads from `from` to `to`. Default false."
+        },
+        "width": {
+          "type": "string",
+          "enum": [
+            "value",
+            "fixed"
+          ],
+          "description": "connection: lines as wide as their value (default when any link has one) or all one width."
+        },
+        "radius": {
+          "type": "number",
+          "description": "hexbin: the hexagon's radius, 8 to 40 px. Default 16."
+        },
+        "aggregate": {
+          "type": "string",
+          "enum": [
+            "count",
+            "sum",
+            "mean"
+          ],
+          "description": "hexbin: what a cell's colour says: how many points (default), or the sum or mean of their `weight`."
+        },
+        "missing": {
+          "type": "string",
+          "enum": [
+            "hatch",
+            "land"
+          ],
+          "description": "choropleth: how regions without a row look: hatched as \"no data\", or plain land (outside the data, as for 14 swing states on a US map). Default: hatched while at most half the set lacks a row, else land. A null value is always hatched."
+        },
+        "region": {
+          "type": "string",
+          "enum": [
+            "world",
+            "europe",
+            "us-states"
+          ],
+          "description": "Region kinds: the bundled geometry. Default \"world\". \"europe\" is the countries of Europe (with Türkiye, Cyprus and the Caucasus), at a scale where Malta and Luxembourg show."
+        },
+        "data": {
+          "type": "array",
+          "description": "choropleth, required: [{ id, value, label?, detail? }], one row per region, at most 3,000. `value` is a number, or null for \"no data\" (hatched, never the lowest class)."
+        },
+        "highlight": {
+          "type": "array",
+          "description": "outline: [{ id, label?, detail?, tone? }], at most 100 regions to mark; `tone` 'default'|'success'|'warning'|'danger' is also said in words."
+        },
+        "points": {
+          "type": "array",
+          "description": "bubble, required: [{ lon, lat, value (0 or more), label, detail?, shade? }], at most 500, area proportional to value, the biggest labelled where they fit. outline: [{ lon, lat, label, detail?, tone? }], at most 200. hexbin, required: [{ lon, lat, weight? }], at most 5,000 raw points."
+        },
+        "scale": {
+          "type": "object",
+          "description": "choropleth, hexbin (sequential or diverging) and bubble `shade`: { type: \"sequential\" | \"diverging\" | \"categorical\", domain?: [low, high], midpoint?, bins?: 2-7, unit? }. Default sequential, 5 classes. Values past the domain go in the end classes (labelled \"< low\", \"> high\"); without a domain, outliers are fenced off the same way."
+        },
+        "view": {
+          "type": "any",
+          "description": "Region kinds: \"auto\" (default: the region set, or for bubble, connection and hexbin the places, ignoring the far-off ones from 20 places, with \"N outside view\") or [west, south, east, north] in degrees. A world view narrower than about 50° by 35° draws the detailed (1:50m) coast."
+        },
+        "title": {
+          "type": "string",
+          "description": "Region kinds: what the map shows, at most 120 characters; its accessible name and the table's caption."
+        },
+        "legend": {
+          "type": "any",
+          "description": "Region kinds: true (default) or { title } (at most 80 characters), e.g. { title: \"Margin (R + / D -)\" }."
+        },
+        "labels": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "all",
+            "none"
+          ],
+          "description": "Region kinds. \"auto\" (default): every label for 12 or fewer items, else the regions whose label fits inside them, up to 10 of the biggest bubbles and 12 of the busiest hubs where they don't collide, and link labels up to 40 links; \"all\" up to 24 (hexbin: each cell's value, from radius 16); \"none\"."
+        },
+        "noDataLabel": {
+          "type": "string",
+          "description": "choropleth: the legend's word for regions without a row (hatched or land, see `missing`). Default \"No data\" (hatched) or \"Not in the data\" (land)."
+        },
+        "maxRadius": {
+          "type": "number",
+          "description": "bubble: the largest bubble's radius, 6 to 48 px. Default about a twelfth of the map's short side."
+        },
+        "unit": {
+          "type": "string",
+          "description": "bubble, connection, hexbin: suffix for values, as on charts (\"M EUR\", \"%\", \" flights\", \" stations\")."
+        },
+        "borders": {
+          "type": "string",
+          "enum": [
+            "countries",
+            "none"
+          ],
+          "description": "outline: draw borders between regions (default) or not."
         },
         "height": {
           "type": "number",
-          "description": "Pixels. Default 320."
+          "description": "Pixels, 160 to 900. Default 320 for markers, 360 for region kinds. Expanded, the map fills the dialog."
+        }
+      }
+    },
+    "flow": {
+      "description": "A flow graph. \"sankey\": quantities flowing from stage to stage (CI jobs through lint, test and build to passed or failed; requests through services; cost by step), bands as wide as their values, flowing one way (a cycle is refused). \"network\": things and the links between them (service calls, package dependencies), laid out by force, up to a few hundred nodes. Both label small graphs directly, take arrows node to node (Enter steps along a node's links), and flip to a table (sankey: source, target, value; network: each node's neighbours). Ids and labels are text. Colours come from the theme.",
+      "uses": [
+        "d3-sankey",
+        "d3-force"
+      ],
+      "children": false,
+      "props": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "sankey",
+            "network"
+          ],
+          "required": true
+        },
+        "nodes": {
+          "type": "array",
+          "required": true,
+          "description": "[{ id, label? }] (ids unique, at most 60 characters). sankey also takes tone?: 'default'|'success'|'warning'|'danger' (e.g. a failed stage), at most 200 nodes. network takes group? (at most 3 groups, coloured) and size? (node weight), at most 500 nodes."
+        },
+        "links": {
+          "type": "array",
+          "required": true,
+          "description": "[{ source, target, value, label? }] between node ids. sankey: value above 0, at most 1,000 links, no cycles. network: value optional (line weight), at most 2,000 links."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Suffix for values, as on charts (\" jobs\", \"ms\", \"$\")."
+        },
+        "title": {
+          "type": "string",
+          "description": "What the graph shows, at most 120 characters: its accessible name and the table's caption."
+        },
+        "labels": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "all",
+            "none"
+          ],
+          "description": "Node labels. \"auto\" (default): every sankey node; network: all up to 40 nodes, else the 12 most connected."
+        },
+        "height": {
+          "type": "number",
+          "description": "Pixels, 160 to 900. Default 320 (sankey), 360 (network). Expanded, it fills the dialog."
         }
       }
     },

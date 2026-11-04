@@ -13,6 +13,6 @@ export function TextDiffBlock({ path, oldText, newText }: { path: string; oldTex
 /** `git diff` / `diff -u` text; anything else shows as it is. */
 export function PatchBlock({ text, title }: { text: string; title?: string }) {
   const files = useMemo(() => parsePatch(text), [text]);
-  if (files.length === 0) return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs">{text || "(empty diff)"}</pre>;
+  if (files.length === 0) return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-code">{text || "(empty diff)"}</pre>;
   return <DiffView files={files} title={title} />;
 }

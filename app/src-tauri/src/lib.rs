@@ -10,6 +10,7 @@ pub mod agents;
 mod commands;
 mod data_commands;
 mod files;
+pub mod fonts;
 pub mod integrations;
 mod json_file;
 pub mod keychain;
@@ -47,6 +48,8 @@ use ui_library::Library;
 pub fn run() {
     // Read in the background: only spawning a program waits for it (path_env.rs).
     path_env::start_login_shell();
+    // Settings → Fonts lists them, and reading the saved fonts checks against them (fonts.rs).
+    fonts::warm_in_background();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -119,6 +122,9 @@ pub fn run() {
             agent_guide::agent_guide,
             agent_guide::set_teach_agents,
             data_commands::read_custom_theme,
+            data_commands::installed_fonts,
+            data_commands::set_fonts,
+            data_commands::step_font_size,
             data_commands::reveal_data_dir,
             data_commands::window_layout,
             data_commands::set_layout,

@@ -22,7 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Markdown } from "@/components/markdown";
 import { useFind } from "@/components/ui-blocks/find";
-import { inlineMax, useUiView } from "@/components/ui-view";
+import { growAttr, growClass, useUiView } from "@/components/ui-view";
 import { formatBytes, formatDuration, plural } from "@/lib/format";
 import { fuzzyScore } from "@/lib/fuzzy";
 import { asArray, asNumber, isObj, optArray, optText, show } from "@/lib/narrow";
@@ -200,7 +200,7 @@ export function TestsView({ text, results, title, find }: { text?: string; resul
     return (
       <div className="flex flex-col gap-1">
         <span className="text-xs text-muted-foreground">No test results found in this output.</span>
-        {text && <pre className="max-h-64 overflow-auto rounded-md bg-muted p-2 font-mono text-xs">{text}</pre>}
+        {text && <pre className="max-h-64 overflow-auto rounded-md bg-muted p-2 font-mono text-code">{text}</pre>}
       </div>
     );
 
@@ -299,7 +299,7 @@ function Failure({ t, open: initial }: { t: TestCase; open: boolean }) {
         {t.message && <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />}
       </button>
       {open && t.message && (
-        <pre className="mx-2 mb-2 max-h-72 overflow-auto rounded bg-background/70 p-2 font-mono text-xs whitespace-pre-wrap">{t.message}</pre>
+        <pre className="mx-2 mb-2 max-h-72 overflow-auto rounded bg-background/70 p-2 font-mono text-code whitespace-pre-wrap">{t.message}</pre>
       )}
     </div>
   );
@@ -361,7 +361,12 @@ export function FileTreeView({ text, paths, open, find }: { text?: string; paths
             {hits && <span className="text-xs text-muted-foreground">{plural(hits.matches.size, "match", "matches")}</span>}
           </div>
         )}
-        <div ref={box} key={`${key}:${query}`} className={cn("overflow-auto py-1 font-mono text-xs", inlineMax(expanded, "max-h-[480px]"))}>
+        <div
+          ref={box}
+          key={`${key}:${query}`}
+          {...growAttr(expanded, false)}
+          className={cn("overflow-auto py-1 font-mono text-code", growClass(expanded, "max-h-[480px]", false))}
+        >
           {hits && hits.matches.size === 0 ? (
             <p className="px-3 py-2 font-sans text-muted-foreground">Nothing matches “{query}”.</p>
           ) : (
@@ -403,7 +408,7 @@ function TreeRow({
       <ChevronRight className={cn("size-3 shrink-0 text-muted-foreground transition-transform", open && "rotate-90", !node.dir && "invisible")} />
       <Icon className={cn("size-3.5 shrink-0", node.dir ? "text-[var(--chart-1)]" : "text-muted-foreground")} />
       <span className={cn("truncate", node.dir && "font-medium")}>{hit && query ? <Mark text={node.name} q={query} /> : node.name}</span>
-      {sub && !open && sub.files > 0 && <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">{fmt.format(sub.files)}</span>}
+      {sub && !open && sub.files > 0 && <span className="ml-auto shrink-0 text-2xs text-muted-foreground">{fmt.format(sub.files)}</span>}
     </>
   );
   const rowClass = cn("flex w-full items-center gap-1.5 py-[3px] pr-2 text-left", hit && "bg-amber-500/15");
@@ -493,7 +498,7 @@ export function JsonView({ text, value, open, find }: { text?: string; value?: u
     return (
       <div className="flex flex-col gap-1">
         <span className="text-xs text-destructive">Not valid JSON: {parsed.ok ? "" : parsed.error}</span>
-        <pre className="max-h-96 overflow-auto rounded-md bg-muted p-2 font-mono text-xs">{text}</pre>
+        <pre className="max-h-96 overflow-auto rounded-md bg-muted p-2 font-mono text-code">{text}</pre>
       </div>
     );
   const { pretty, depth, docs } = shape;
@@ -507,7 +512,12 @@ export function JsonView({ text, value, open, find }: { text?: string; value?: u
         </Button>
         <CopyButton text={pretty} />
       </div>
-      <div ref={box} key={query} className={cn("overflow-auto p-2 pl-5 font-mono text-xs leading-5", inlineMax(expanded, "max-h-[520px]"))}>
+      <div
+        ref={box}
+        key={query}
+        {...growAttr(expanded, false)}
+        className={cn("overflow-auto p-2 pl-5 font-mono text-code leading-(--code-row)", growClass(expanded, "max-h-[520px]", false))}
+      >
         {raw ? (
           <pre className="whitespace-pre">{pretty}</pre>
         ) : (
@@ -605,7 +615,7 @@ function JsonNode({
           {!shown && (
             <>
               <span className="text-muted-foreground"> … {c}</span>
-              <span className="ml-1.5 text-[11px] text-muted-foreground">{plural(entries.length, isArr ? "item" : "key")}</span>
+              <span className="ml-1.5 text-2xs text-muted-foreground">{plural(entries.length, isArr ? "item" : "key")}</span>
               {comma}
             </>
           )}
@@ -626,7 +636,7 @@ function JsonNode({
             />
           ))}
           {entries.length > limit && (
-            <button type="button" className="pl-4 text-[11px] text-muted-foreground underline" onClick={() => setLimit((l) => l + 100)}>
+            <button type="button" className="pl-4 text-2xs text-muted-foreground underline" onClick={() => setLimit((l) => l + 100)}>
               {fmt.format(entries.length - limit)} more
             </button>
           )}
@@ -699,6 +709,7 @@ export function TextFileView({
           ? "json"
           : "text";
   const [raw, setRaw] = useState(false);
+  const { expanded } = useUiView();
   const lines = useMemo(() => text.replace(/\n$/, "").split("\n"), [text]);
   const bytes = useMemo(() => new TextEncoder().encode(text).length, [text]);
   const marked = useMemo(() => asArray(highlight).flatMap((n) => asNumber(n) ?? []), [highlight]);
@@ -722,7 +733,7 @@ export function TextFileView({
   let body: ReactNode;
   if (!raw && kind === "markdown")
     body = (
-      <div className="max-h-[560px] overflow-auto rounded-md border px-4 py-3">
+      <div {...growAttr(expanded)} className={cn("overflow-auto rounded-md border px-4 py-3", growClass(expanded, "max-h-[560px]"))}>
         <Markdown>{text}</Markdown>
       </div>
     );
@@ -772,7 +783,7 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
     if (box.current && el) box.current.scrollTop = Math.max(0, el.offsetTop - box.current.offsetTop - box.current.clientHeight / 3);
   }, [target]);
   const short = lines.length <= 12 && lines.every((l) => l.length <= 120) && !highlight.length && !follow && !query;
-  if (short) return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre">{lines.join("\n")}</pre>;
+  if (short) return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-code whitespace-pre">{lines.join("\n")}</pre>;
   const cap = all || target >= 2000 ? lines.length : 2000;
   const hitSet = new Set(hits);
   const width = String(start + lines.length).length;
@@ -805,7 +816,8 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
       <div
         ref={box}
         onScroll={(e) => (pinned.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 24)}
-        className={cn("overflow-auto py-1 font-mono text-xs leading-5", inlineMax(expanded, "max-h-[480px]"))}
+        {...growAttr(expanded)}
+        className={cn("overflow-auto py-1 font-mono text-code leading-(--code-row)", growClass(expanded, "max-h-[480px]"))}
       >
         {lines.slice(0, cap).map((line, i) => (
           <div
@@ -814,7 +826,11 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
             className={cn("flex", (marks.has(start + i) || hitSet.has(i)) && "bg-amber-500/15", i === target && hits.length > 0 && "bg-amber-500/30")}
           >
             <span
-              className="sticky left-0 shrink-0 bg-background px-2 text-right text-muted-foreground/70 select-none"
+              // A highlighted line also gets a bar by its number: a shape, not the tint alone (CV-1).
+              className={cn(
+                "sticky left-0 shrink-0 border-l-2 border-transparent bg-background px-2 text-right text-muted-foreground/70 select-none",
+                (marks.has(start + i) || hitSet.has(i)) && "border-amber-500 text-foreground",
+              )}
               style={{ width: `${width + 2}ch` }}
             >
               {start + i}
@@ -858,6 +874,7 @@ const WC_LABEL: Record<string, string> = { lines: "Lines", words: "Words", bytes
 const wcValue = (col: string, n: number) => (col === "bytes" ? formatBytes(n) : fmt.format(n));
 
 export function WordCountView({ text, columns }: { text: string; columns?: unknown }) {
+  const { expanded } = useUiView();
   const rows = useMemo(() => parseWc(text), [text]);
   const width = Math.max(1, ...rows.map((r) => r.counts.length));
   const named = asArray(columns).map(show);
@@ -872,7 +889,7 @@ export function WordCountView({ text, columns }: { text: string; columns?: unkno
   const total = rows.find((r) => r.total)?.counts ?? cols.map((_, i) => files.reduce((n, r) => n + (r.counts[i] ?? 0), 0));
   const sorted = [...files].sort((a, b) => (b.counts[0] ?? 0) - (a.counts[0] ?? 0));
   const max = sorted[0]?.counts[0] || 1;
-  if (!rows.length) return <pre className="rounded-md bg-muted p-2 font-mono text-xs">{text}</pre>;
+  if (!rows.length) return <pre className="rounded-md bg-muted p-2 font-mono text-code">{text}</pre>;
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-x-8 gap-y-2">
@@ -893,7 +910,7 @@ export function WordCountView({ text, columns }: { text: string; columns?: unkno
         )}
       </div>
       {files.length > 1 && (
-        <div className="flex max-h-[420px] flex-col gap-1 overflow-y-auto">
+        <div {...growAttr(expanded, false)} className={cn("flex flex-col gap-1 overflow-y-auto", growClass(expanded, "max-h-[420px]", false))}>
           <span className="text-xs text-muted-foreground">{WC_LABEL[cols[0]] ?? cols[0]} per file</span>
           {sorted.map((r, i) => (
             <div key={i} className="grid grid-cols-[minmax(0,14rem)_1fr_auto] items-center gap-2 text-xs" title={r.name}>
@@ -957,10 +974,10 @@ function GraphCell({ rows, i, h, cols }: { rows: GitRow[]; i: number; h: number;
 }
 
 function RefBadge({ r }: { r: GitRef }) {
-  if (r.kind === "head") return <Badge className="h-4 px-1.5 text-[10px]">HEAD</Badge>;
+  if (r.kind === "head") return <Badge className="h-4 px-1.5 text-2xs">HEAD</Badge>;
   if (r.kind === "tag")
     return (
-      <Badge variant="outline" className="h-4 gap-0.5 px-1.5 text-[10px]">
+      <Badge variant="outline" className="h-4 gap-0.5 px-1.5 text-2xs">
         <Tag className="size-2.5" />
         {r.name}
       </Badge>
@@ -968,7 +985,7 @@ function RefBadge({ r }: { r: GitRef }) {
   return (
     <Badge
       variant={r.kind === "branch" ? "secondary" : "outline"}
-      className={cn("h-4 gap-0.5 px-1.5 text-[10px]", r.kind === "remote" && "text-muted-foreground")}
+      className={cn("h-4 gap-0.5 px-1.5 text-2xs", r.kind === "remote" && "text-muted-foreground")}
     >
       <GitBranch className="size-2.5" />
       {r.name}
@@ -977,6 +994,7 @@ function RefBadge({ r }: { r: GitRef }) {
 }
 
 export function GitGraphView({ text }: { text: string }) {
+  const { expanded } = useUiView();
   const rows = useMemo(() => parseGitLog(text), [text]);
   const commits = rows.filter((r) => r.hash).length;
   // One graph width for every row, so hashes and subjects line up.
@@ -984,13 +1002,13 @@ export function GitGraphView({ text }: { text: string }) {
   return (
     <div className="flex flex-col gap-1">
       <span className="text-xs text-muted-foreground">{plural(commits, "commit")}</span>
-      <div className="max-h-[560px] overflow-y-auto rounded-md border py-1">
+      <div {...growAttr(expanded, false)} className={cn("overflow-y-auto rounded-md border py-1", growClass(expanded, "max-h-[560px]", false))}>
         {rows.map((r, i) => {
           const h = r.hash ? 26 : 10;
           return (
             <div key={i} className="flex items-center gap-2 pr-3 pl-2 text-xs hover:bg-muted/40" style={{ height: h }}>
               <GraphCell rows={rows} i={i} h={h} cols={cols} />
-              {r.hash && <span className="font-mono text-[11px] text-muted-foreground">{r.hash}</span>}
+              {r.hash && <span className="font-mono text-2xs text-muted-foreground">{r.hash}</span>}
               {r.refs.length > 0 && (
                 <span className="flex min-w-0 shrink gap-1 overflow-hidden">
                   {r.refs.map((ref, j) => (
@@ -1073,7 +1091,7 @@ export function GitStatusView({ text }: { text: string }) {
                   {f.from && <span className="text-muted-foreground">{f.from} → </span>}
                   {f.path}
                 </span>
-                <span className="ml-auto shrink-0 font-sans text-[11px] text-muted-foreground">{f.label}</span>
+                <span className="ml-auto shrink-0 font-sans text-2xs text-muted-foreground">{f.label}</span>
               </div>
             ))}
           </div>
@@ -1087,6 +1105,7 @@ export function GitStatusView({ text }: { text: string }) {
 // ── --stat ──────────────────────────────────────────────────────────────────
 
 export function DiffStatView({ text }: { text: string }) {
+  const { expanded } = useUiView();
   const { files, summary } = useMemo(() => parseDiffStat(text), [text]);
   const sorted = [...files].sort((a, b) => b.added + b.removed - (a.added + a.removed));
   const max = Math.max(1, ...files.map((f) => f.added + f.removed));
@@ -1101,13 +1120,16 @@ export function DiffStatView({ text }: { text: string }) {
         <span className={BAD}>−{fmt.format(removed)}</span>
         {summary && <span className="ml-auto truncate text-xs text-muted-foreground">{summary}</span>}
       </div>
-      <div className={cn("flex flex-col gap-1", sorted.length > 16 && "max-h-[420px] overflow-y-auto")}>
+      <div
+        {...growAttr(expanded, false)}
+        className={cn("flex flex-col gap-1", expanded ? growClass(true, "", false) : sorted.length > 16 && "max-h-[420px] overflow-y-auto")}
+      >
         {sorted.map((f, i) => (
           <div key={i} className="grid grid-cols-[minmax(0,1fr)_7rem_5.5rem] items-center gap-2 text-xs" title={f.path}>
             <span className="truncate font-mono">{tail(f.path, 60)}</span>
             <div className="flex h-2.5 gap-px">
               {f.binary ? (
-                <span className="text-[11px] text-muted-foreground">binary</span>
+                <span className="text-2xs text-muted-foreground">binary</span>
               ) : (
                 <>
                   <div className="rounded-sm bg-green-600 dark:bg-green-500" style={{ width: `${(f.added / max) * 100}%` }} />

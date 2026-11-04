@@ -45,14 +45,41 @@ function DialogOverlay({
   )
 }
 
+/**
+ * yaah (not in stock shadcn): Radix returns focus to a dialog's `DialogTrigger`, but yaah's dialogs
+ * open from shortcuts (⌘K, ⌘,), menus and buttons with no trigger, so focus fell to the page body.
+ * This remembers what had focus as the dialog opened and gives it back on close (KB-1). A caller's
+ * own `onCloseAutoFocus` that calls `preventDefault()` still decides instead.
+ */
+function RememberOpener({ into }: { into: React.RefObject<HTMLElement | null> }) {
+  const marker = React.useRef<HTMLSpanElement>(null)
+  // A layout effect, before anything in the dialog takes focus (`autoFocus`, Radix's own move).
+  // Focus already inside this dialog means the effect ran again (React's StrictMode): keep the first.
+  React.useLayoutEffect(() => {
+    const el = document.activeElement
+    if (el && marker.current?.parentElement?.contains(el)) return
+    into.current = el instanceof HTMLElement && el !== document.body ? el : null
+  }, [into])
+  return <span ref={marker} hidden />
+}
+
+/** Focus `el` if it is still on the page and can take it; whether it did. */
+function giveFocusBack(el: HTMLElement | null): boolean {
+  if (!el?.isConnected || el.matches(":disabled") || el.closest("[inert]")) return false
+  el.focus({ preventScroll: true })
+  return document.activeElement === el
+}
+
 function DialogContent({
   className,
   children,
   showCloseButton = true,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean
 }) {
+  const opener = React.useRef<HTMLElement | null>(null)
   return (
     <DialogPortal>
       <DialogOverlay />
@@ -62,8 +89,17 @@ function DialogContent({
           "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
+        onCloseAutoFocus={(e) => {
+          onCloseAutoFocus?.(e)
+          if (e.defaultPrevented) return
+          const el = opener.current
+          opener.current = null
+          // Otherwise Radix's default: the trigger, if there is one.
+          if (giveFocusBack(el)) e.preventDefault()
+        }}
         {...props}
       >
+        <RememberOpener into={opener} />
         {children}
         {showCloseButton && (
           <DialogPrimitive.Close data-slot="dialog-close" asChild>

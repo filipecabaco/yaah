@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   ChevronDown,
   FileText,
@@ -81,12 +82,18 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
   );
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col">
+    // `@container/chat`: the header drops what matters least as its pane narrows (in rem, so it follows the interface size).
+    <div className="@container/chat flex h-full min-w-0 flex-1 flex-col">
       {/* Drags the window (its buttons stay buttons): there's no title bar on macOS. */}
-      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm">
+      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
         {project && (
           <>
-            <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onOpenProject(project.id)}>
+            <button
+              type="button"
+              className="max-w-[40%] min-w-0 shrink truncate text-muted-foreground hover:text-foreground"
+              title={project.name}
+              onClick={() => onOpenProject(project.id)}
+            >
               {project.name}
             </button>
             <span className="text-muted-foreground" aria-hidden>
@@ -94,10 +101,13 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
             </span>
           </>
         )}
-        <h1 className="min-w-0 truncate font-medium">{session.title}</h1>
+        {/* The title gives way last: the folder path shrinks first and goes in a narrow pane; the full title is its tooltip. */}
+        <h1 className="min-w-[4ch] truncate font-medium" title={session.title}>
+          {session.title}
+        </h1>
         <button
           type="button"
-          className="shrink-0 rounded-4xl focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="flex min-h-[24px] shrink-0 items-center rounded-4xl focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           onClick={() => openAgentSwitch(session.sessionId)}
           aria-label={`Agent: ${agent?.label ?? session.accountId}. Switch the agent for the next message`}
           title={agent ? `${agent.detail ?? agent.email ?? agent.commandLine}\nClick to switch the agent for the next message` : undefined}
@@ -110,14 +120,17 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
         {agent?.report && !agent.report.mcpHttp && (
           <Badge
             variant="secondary"
-            className="text-muted-foreground"
+            className="hidden text-muted-foreground @md/chat:inline-flex"
             title={`${agent.label} can't connect to HTTP MCP servers, so this chat has no UI tools (forms, tables, charts). Chatting works as usual.`}
           >
             no UI tools
           </Badge>
         )}
         <FolderMenu path={session.cwd}>
-          <span className="ml-auto truncate font-mono text-xs text-muted-foreground" title={roots.map((r) => compactPath(r)).join("\n")}>
+          <span
+            className="ml-auto hidden min-w-0 shrink-[4] truncate font-mono text-xs text-muted-foreground @lg/chat:block"
+            title={roots.map((r) => compactPath(r)).join("\n")}
+          >
             {compactPath(session.cwd)}
           </span>
         </FolderMenu>
@@ -169,7 +182,7 @@ function TrustedServers({
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="flex min-h-[24px] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           aria-label={`${plural(servers.length, "trusted MCP server")} in this ${inProject ? "project" : "chat"}`}
         >
           <ShieldCheck className="size-3.5" aria-hidden />
@@ -208,7 +221,8 @@ function ChatFolders({ roots, pending, inProject, onAdd }: { roots: string[]; pe
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className="flex shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          // Right-aligned by the folder path beside it; on its own once a narrow pane drops the path.
+          className="ml-auto flex min-h-[24px] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none @lg/chat:ml-0"
           aria-label={`${plural(roots.length, "folder")} in this chat. Show them or add repositories`}
         >
           <FolderGit2 className="size-3.5" aria-hidden />
@@ -227,7 +241,7 @@ function ChatFolders({ roots, pending, inProject, onAdd }: { roots: string[]; pe
           >
             <div className="min-w-0">
               <div className="truncate">{baseName(root)}</div>
-              <div className="truncate font-mono text-[11px] text-muted-foreground">{compactPath(root)}</div>
+              <div className="truncate font-mono text-2xs text-muted-foreground">{compactPath(root)}</div>
             </div>
           </DropdownMenuItem>
         ))}
@@ -292,11 +306,44 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
     );
   };
 
-  // Follow the stream only while the user is already at the bottom.
-  useEffect(() => {
+  // Whether the user has scrolled away from the end (shows "Jump to latest").
+  const [away, setAway] = useState(false);
+  const lastTop = useRef(0);
+  const toBottom = useCallback(() => {
     const el = scroller.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [entries]);
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+  const pin = useCallback(
+    (on: boolean) => {
+      pinned.current = on;
+      setAway(!on);
+      if (on) toBottom();
+    },
+    [toBottom],
+  );
+
+  // Follow the stream only while the user is already at the bottom; a message they send brings them back.
+  const seen = useRef(entries.length);
+  useEffect(() => {
+    const sent = entries.length > seen.current && entries[entries.length - 1]?.type === "user";
+    seen.current = entries.length;
+    if (sent) pin(true);
+    else if (pinned.current) toBottom();
+  }, [entries, pin, toBottom]);
+
+  // The log keeps growing after it draws: entries laid out for the first time (they start as a
+  // 120px estimate, see .transcript-entry), charts and maps that load, code that highlights.
+  // While pinned, every growth keeps the end in view, so a chat opens at its last message.
+  const column = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = column.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (pinned.current) toBottom();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [toBottom]);
 
   // Earlier entries go in above what's shown without moving it.
   const heightBefore = useRef<number | null>(null);
@@ -326,65 +373,85 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
   }, [hasEarlier, earlier]);
 
   return (
-    <div
-      ref={scroller}
-      onScroll={(e) => {
-        const el = e.currentTarget;
-        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      }}
-      className="@container min-h-0 flex-1 overflow-y-auto"
-    >
-      {hasEarlier && (
-        <button
-          ref={sentinel}
-          type="button"
-          onClick={() => void earlier()}
-          className="mx-auto mt-4 block text-xs text-muted-foreground hover:text-foreground"
-        >
-          Show earlier messages
-        </button>
-      )}
-      <div className="chat-column flex flex-col gap-3 py-6" role="log" aria-label="Conversation" aria-busy={running || !transcript}>
-        {transcript?.error ? (
-          <TranscriptEntry
-            entry={{ type: "error", message: transcript.error, loginAccount: null }}
-            index={0}
-            inTurn={false}
-            live={false}
-            onLogin={onLogin}
-          />
-        ) : !transcript ? (
-          <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>
-        ) : (
-          entries.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Send a message to start.</p>
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scroller}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          // Only the user moving up lets go of the end. Content growing, or the browser
+          // keeping the view steady while entries above lay out, never does.
+          const up = el.scrollTop < lastTop.current;
+          lastTop.current = el.scrollTop;
+          if (atEnd !== pinned.current && (atEnd || up)) {
+            pinned.current = atEnd;
+            setAway(!atEnd);
+          }
+        }}
+        className="@container min-h-0 flex-1 overflow-y-auto"
+      >
+        {hasEarlier && (
+          <button
+            ref={sentinel}
+            type="button"
+            onClick={() => void earlier()}
+            className="mx-auto mt-4 block text-xs text-muted-foreground hover:text-foreground"
+          >
+            Show earlier messages
+          </button>
         )}
-        {rows.map((row) => {
-          // Rust addresses entries by index and only ever appends or replaces in place, so the index is a stable key.
-          const i = row.kind === "entry" ? row.index : row.indices[0];
-          const last = row.kind === "entry" ? row.index : row.indices[row.indices.length - 1];
-          // Off-screen entries skip layout and paint (content-visibility), so long chats open fast.
-          const offScreen = last < entries.length - LIVE_TAIL ? "transcript-entry" : undefined;
-          if (row.kind === "entry")
+        <div ref={column} className="chat-column flex flex-col gap-3 py-6" role="log" aria-label="Conversation" aria-busy={running || !transcript}>
+          {transcript?.error ? (
+            <TranscriptEntry
+              entry={{ type: "error", message: transcript.error, loginAccount: null }}
+              index={0}
+              inTurn={false}
+              live={false}
+              onLogin={onLogin}
+            />
+          ) : !transcript ? (
+            <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>
+          ) : (
+            entries.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Send a message to start.</p>
+          )}
+          {rows.map((row) => {
+            // Rust addresses entries by index and only ever appends or replaces in place, so the index is a stable key.
+            const i = row.kind === "entry" ? row.index : row.indices[0];
+            const last = row.kind === "entry" ? row.index : row.indices[row.indices.length - 1];
+            // Off-screen entries skip layout and paint (content-visibility), so long chats open fast.
+            const offScreen = last < entries.length - LIVE_TAIL ? "transcript-entry" : undefined;
+            if (row.kind === "entry")
+              return (
+                <div key={i} className={offScreen}>
+                  {entryAt(i)}
+                </div>
+              );
+            const tools = row.indices.map((j) => entries[j]).filter((e): e is ToolEntry => e?.type === "tool");
             return (
-              <div key={i} className={offScreen}>
-                {entryAt(i)}
+              <div key={`g${i}`} className={offScreen}>
+                <ToolGroup
+                  id={`${sessionId}:${i}`}
+                  tools={tools}
+                  running={row.indices.map((j, k) => isRunning(tools[k], inTurnAt(j)))}
+                  autoAllowed={tools.filter((t) => ["readOnly", "trustedServer"].includes(folded.get(t.toolCallId)?.auto?.reason ?? "")).length}
+                  card={(k) => entryAt(row.indices[k])}
+                />
               </div>
             );
-          const tools = row.indices.map((j) => entries[j]).filter((e): e is ToolEntry => e?.type === "tool");
-          return (
-            <div key={`g${i}`} className={offScreen}>
-              <ToolGroup
-                id={`${sessionId}:${i}`}
-                tools={tools}
-                running={row.indices.map((j, k) => isRunning(tools[k], inTurnAt(j)))}
-                autoAllowed={tools.filter((t) => ["readOnly", "trustedServer"].includes(folded.get(t.toolCallId)?.auto?.reason ?? "")).length}
-                card={(k) => entryAt(row.indices[k])}
-              />
-            </div>
-          );
-        })}
-        {running && entries[entries.length - 1]?.type === "user" && <p className="text-xs text-muted-foreground">Working…</p>}
+          })}
+          {running && entries[entries.length - 1]?.type === "user" && <p className="text-xs text-muted-foreground">Working…</p>}
+        </div>
       </div>
+      {away && entries.length > 0 && (
+        <Button
+          size="sm"
+          variant="secondary"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full shadow-md"
+          onClick={() => pin(true)}
+        >
+          <ArrowDown /> Jump to latest
+        </Button>
+      )}
     </div>
   );
 }
@@ -662,7 +729,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
                           {s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : <FileText />)}
                           {s.path ? <FileLabel label={s.label} /> : <span className="shrink-0 font-mono">{s.label}</span>}
                           {s.local && (
-                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px]" title="yaah's own command, not sent to the agent">
+                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs" title="yaah's own command, not sent to the agent">
                               yaah
                             </Badge>
                           )}
@@ -769,7 +836,7 @@ export function StartingChat({ start, agents, onDismiss }: { start: Starting; ag
   const others = agents.filter((a) => a.id !== start.agentId);
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
-      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm">
+      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
         <h1 className="min-w-0 truncate font-medium">New chat</h1>
         <Badge variant="outline">{label}</Badge>
       </header>

@@ -18,6 +18,7 @@ import { hunkTop, rowsOf, useWrap, WRAP_MAX } from "@/components/diff/lines";
 import { DiffLine, DiffRows, HunkHeader, WrapToggle } from "@/components/diff/rows";
 import { plural } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
+import { scrollBehavior } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /** Changed lines up to which everything is shown inline. */
@@ -210,7 +211,10 @@ function HunkView({ file, hunk, index, wrap }: { file: DiffFile; hunk: Hunk; ind
   const ask = chat ? () => askAbout(chat, file, hunk) : null;
   return (
     // Right-clicking the hunk offers the same in the enclosing menu (e.g. a tool card's).
-    <div className="font-mono text-xs" ref={ask ? menuActions([{ label: "Ask about this", icon: <MessageSquareText />, onSelect: ask }]) : undefined}>
+    <div
+      className="font-mono text-code"
+      ref={ask ? menuActions([{ label: "Ask about this", icon: <MessageSquareText />, onSelect: ask }]) : undefined}
+    >
       <HunkHeader hunk={hunk} index={index} tools={ask && <AskButton onClick={ask} />} />
       {hunk.lines.map((l, i) => (
         <DiffLine key={i} line={l} wrap={wrap} />
@@ -276,7 +280,7 @@ function Review({
     setAt({ path: open, hunk: next });
     // The hunk's header row goes just under the file's sticky header.
     const el = body.current;
-    if (el) el.scrollTo({ top: hunkTop(el, starts, next), behavior: "smooth" });
+    if (el) el.scrollTo({ top: hunkTop(el, starts, next), behavior: scrollBehavior() });
   }
   function onKeyDown(e: KeyboardEvent) {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -360,9 +364,7 @@ function Review({
                     <Counts file={f} />
                   </span>
                   <span className="flex items-center gap-2 pl-5">
-                    <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
-                      {f.path.split("/").slice(0, -1).join("/") || "."}
-                    </span>
+                    <span className="min-w-0 flex-1 truncate text-2xs text-muted-foreground">{f.path.split("/").slice(0, -1).join("/") || "."}</span>
                     <Bar file={f} max={max} />
                   </span>
                 </button>

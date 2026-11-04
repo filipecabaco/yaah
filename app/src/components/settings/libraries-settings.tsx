@@ -18,6 +18,7 @@ import { NavNote, Section } from "@/components/settings/parts";
 import { events, libraryApi, type LibraryInfo, type LibraryPreview, type LibrarySource, type LibraryUpdate } from "@/lib/api";
 import { compactPath, formatAgo, plural } from "@/lib/format";
 import { isWebUrl, openExternal } from "@/lib/links";
+import { scrollBehavior } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /** How a source kind reads on a badge. */
@@ -197,7 +198,7 @@ function Meta({ lib }: { lib: LibraryInfo }) {
     lib.kind === "local" && "share them from the Component library page",
   ].filter(Boolean);
   return (
-    <div className="flex flex-col gap-0.5 text-[11px] text-muted-foreground">
+    <div className="flex flex-col gap-0.5 text-2xs text-muted-foreground">
       <p>{facts.join(" · ")}</p>
       {lib.source && (
         <p className="min-w-0">
@@ -240,12 +241,12 @@ function SourceLine({ source, commit }: { source: LibrarySource; commit?: string
 function Reads({ reads, needs, installedIds, bare }: { reads: string[]; needs: string[]; installedIds: string[]; bare?: boolean }) {
   if (!reads.length && !needs.length) return null;
   return (
-    <div className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground">
+    <div className="flex flex-wrap items-center gap-1 text-2xs text-muted-foreground">
       {reads.length > 0 && (
         <>
           {!bare && <span>Reads</span>}
           {reads.map((r) => (
-            <Badge key={r} variant="secondary" className="h-4 px-1.5 text-[10px]">
+            <Badge key={r} variant="secondary" className="h-4 px-1.5 text-2xs">
               {READS[r] ?? r}
             </Badge>
           ))}
@@ -257,7 +258,7 @@ function Reads({ reads, needs, installedIds, bare }: { reads: string[]; needs: s
           {needs.map((n) => {
             const missing = !installedIds.includes(n);
             return (
-              <Badge key={n} variant={missing ? "destructive" : "outline"} className="h-4 px-1.5 font-mono text-[10px]">
+              <Badge key={n} variant={missing ? "destructive" : "outline"} className="h-4 px-1.5 font-mono text-2xs">
                 {n}
                 {missing && <span className="font-sans">· not installed</span>}
               </Badge>
@@ -440,7 +441,7 @@ function PreviewCard({
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     // Braces matter: browsers' scrollIntoView can return a promise, and an effect must not.
-    void ref.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    void ref.current?.scrollIntoView({ block: "start", behavior: scrollBehavior() });
   }, [p.stagingId]);
   return (
     <section ref={ref} aria-label={`Preview of ${p.title}`} className="flex flex-col gap-4 rounded-lg border bg-card p-4">
@@ -465,7 +466,7 @@ function PreviewCard({
         {p.publisher && <p className="text-xs text-muted-foreground">by {p.publisher}</p>}
         {p.description && <p className="text-sm">{p.description}</p>}
         {p.source && (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-2xs text-muted-foreground">
             <SourceLine source={p.source} commit={p.commit} />
           </p>
         )}

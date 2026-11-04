@@ -629,7 +629,11 @@ mod tests {
             text.split("```json\n").skip(1).map(|b| serde_json::from_str(b.split("\n```").next().unwrap()).expect("a JSON example")).collect()
         };
         let ui = blocks(skill_text(skill("ui").unwrap(), &[]).as_str());
-        assert_eq!(ui.len(), 6, "three patterns, the pasted diff beside diff-review, and diff-review with `repo`");
+        assert_eq!(
+            ui.len(),
+            12,
+            "three patterns, the pasted diff beside diff-review, diff-review with `repo`, the dumbbell, three maps and two flow graphs"
+        );
         for tree in ui {
             lib.prepare(None, json!({}), Some(tree.clone())).unwrap_or_else(|e| panic!("{tree}: {e:?}"));
         }

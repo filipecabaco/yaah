@@ -62,6 +62,8 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 
 **Buttons.** A `button` with `prompt` sends that text to you as the user's next message; `draft` puts text in their message box to edit first.
 
+**Expand fills the dialog.** The user can expand any UI (Expand button or F) into a large dialog. `textfile`, `filetree`, `json`, `table`, `chart`, `map`, `gitgraph`, `gitstatus`, `diffstat`, `wordcount` and `diffreview`, and components built on them (`file-view`, `container-logs`, `pr-view`, …), then use all the height with no cap; forms and cards stay at their natural size. When your own tree has one main region that should take the space (a long `list`, `code`, `markdown`, a `stack` of rows), put `"grow": true` on that node (beside `type`, not in `props`); mark only one, and toolbars or headers around it keep their size.
+
 **Point with `find`.** `table`, `tests`, `filetree`, `json` and `textfile` take `find`: it fills their search box to show where something is (a file in a tree, a line in a file, a JSON key, some rows, a test). Re-render with the same `id` and a new `find` to point elsewhere.
 
 **Live data.** For data yaah reads itself (`system`, `docker.*`, `git.*`, `github.*`, `linear.*`, `postgres.*`; see `sources` in `ui_catalog`), look first with `source_read`, then wrap the UI in a `live` node with that `source` and `every` (ms) for refreshing. Children bind the latest result as `{{data}}`, and `history: N` keeps samples as `{{history}}` for charts over time. It keeps updating after your turn ends; you never see credentials.
@@ -73,9 +75,97 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 ] }
 ```
 
-**MDX in Markdown.** Chat text and `markdown` draw MDX (an `.mdx` docs page) safely; nothing in it runs. Frontmatter folds away, `import`/`export` lines are hidden, `{expressions}` show as code. `Admonition`, `Callout`, `Note`, `Tip`, `Info`, `Warning`, `Caution`, `Danger` (`type`, `title`) draw as an alert; `Tabs` with `TabPanel`, `Tab` or `TabItem` (`label`, `value`, `id`) as tabs; also `details`/`summary`, `Steps`/`Step`, `Cards`/`Card` and `img`/`Image`. Other components show their content in a box labelled with their name. Props are string or number literals only.
+**MDX in Markdown.** Chat text and `markdown` are read as MDX (an `.mdx` docs page) and drawn safely; nothing in it runs, and plain Markdown reads as usual. Frontmatter folds away, `import`/`export` lines and comments are hidden, `{braces}` are text. `Admonition`, `Callout`, `Note`, `Tip`, `Info`, `Warning`, `Caution`, `Danger` (`type`, `title`) draw as an alert; `Tabs` with `TabPanel`, `Tab` or `TabItem` (`label`, `value`, `id`) as tabs; also `details`/`summary`, `Steps`/`Step`, `Cards`/`Card`, `img`/`Image` and simple HTML (`<br>`, `<kbd>`, `<sup>`). Other components show their content in a box labelled with their name; close them (`</Name>` or `/>`) or they show as text. Props are string or number literals only.
 
 **Command output.** Pass short output as printed to the primitive or component made for it (`tests`, `filetree`, `json`, `textfile`, `wordcount`, `gitgraph`, `gitstatus`, `diffstat`). Don't restate it in prose. Anything long is referenced instead (next section).
+
+## Charts
+
+Pick the form from what the reader must do, before anything else:
+
+| The data | Use |
+| --- | --- |
+| One number, or a few headline numbers | `stat` (a row of them), not a one-bar chart |
+| A ratio against a limit | `progress` |
+| A trend over time | `chart` `line`; `area` with `stacked` for parts of a total |
+| Amounts to compare | `chart` `bar`, `sort: "value"` unless the order means something |
+| Two values per item: before → after, poll → result, target → actual | `chart` `dumbbell` |
+| A value per country or US state (geography) | `map` `choropleth` |
+| A value at a place: revenue by city, load by data centre (geography) | `map` `bubble` |
+| Links between places: flights between hubs, traffic between regions (geography) | `map` `connection` |
+| Many raw points where density matters: stations, incidents (geography) | `map` `hexbin` |
+| Where something is, or which regions are in a state | `map` `outline`; `markers` (the default) only for streets |
+| Quantities flowing through stages: CI runs, requests, cost by step | `flow` `sankey` |
+| Relationships: who calls whom, what depends on what | `flow` `network` (a layered architecture: `diagram`) |
+| More than about 7 classes that all matter | `table` |
+
+No pie or donut: ranked bars compare parts better. No dual axes: two charts, or index both series to 100.
+
+Colours are not yours to set. Series take the theme's chart colours in order, checked for colour-blind safety on its surface; past 5 series the rest fold into "Other". A dumbbell is two shades of one hue unless `scale` says otherwise: `diverging` (with its `midpoint`) colours each dot by its own value, so use it only for signed values with a meaningful middle, such as margins; for before → after of raw values (points, prices) keep the default or `categorical`; `sequential` for magnitude. At most 7 `bins` (a dumbbell's dots carry 5); the legend shows them.
+
+`refs` draws reference lines (`axis: "y"` is a value, `"x"` a category). `labels`: `ends` (default for line, area and dumbbell) labels the last values or the gaps; `none` (default for bar); avoid `all`. `orientation` overrides bar and dumbbell. `sort`: `value`, or `gap` for a dumbbell. A dumbbell takes exactly 2 series, and any chart at most 2,000 rows. There are no format strings or expressions; `unit` is a short suffix: symbols attach (`"k"` → 16k, `"%"`, `"°C"`, `"$"` leads), words get a space (`"ms"` → 42 ms), and a leading space you write is kept (`" pts"`).
+
+Bars and stacks start at 0. Lines and unstacked areas fit their data (with any refs), so a trend from 100 to 118 fills the chart; `zero: true` starts them at 0, `domain: [low, high]` sets the range (widened to fit the data). End labels and ref labels sit outside the plot, nudged apart when close; one that can't fit leaves its series to the legend.
+
+```json
+{ "type": "chart", "props": {
+  "kind": "dumbbell", "x": "state", "unit": " pts", "sort": "gap",
+  "data": [{ "state": "PA", "poll": -0.5, "result": 1.7 }, { "state": "MI", "poll": -0.8, "result": 1.4 }, { "state": "AZ", "poll": 1.2, "result": 5.5 }],
+  "series": [{ "key": "poll", "label": "Poll average" }, { "key": "result", "label": "Result" }],
+  "refs": [{ "axis": "y", "value": 0, "label": "Tie" }],
+  "scale": { "type": "diverging", "midpoint": 0, "bins": 5 } } }
+```
+
+## Maps
+
+`map` `kind` picks the form. Region kinds draw bundled geometry (`region`: `world`, `europe`, `us-states`), work offline, follow the theme, label small sets on the map and flip to a table; `markers` (the default) is a street map with tiles, for "where on the streets" only: `lines: [{ points: [[lat, lng] or a marker id, …], label? }]` draws routes, and from 40 markers close ones group into numbered clusters (`cluster: false` turns that off).
+
+- `choropleth`: `data: [{ id, value, detail? }]`, one row per region (`value: null` is "no data", hatched, never the lowest class). Regions without a row are hatched while most have one, else plain land (a few states of 51); `missing: "hatch"` or `"land"` decides, `noDataLabel` names them. Prefer it when regions are comparable in size. The shared `scale` colours it: `sequential` (default, 5 classes) for magnitude, `diverging` with a `midpoint` for signed values such as margins. Values past `domain` sit in the end classes, labelled "< low" and "> high"; without a `domain`, outliers are fenced off the same way.
+- `bubble`: `points: [{ lon, lat, value, label }]`; area is proportional to value (0 is no bubble), the biggest are labelled where they fit. Prefer it when the value belongs to a place, or when a big empty region would dominate a choropleth. Above about 150 points, use `hexbin`.
+- `connection`: `hubs: [{ id, label, lon, lat }]` and `links: [{ from, to, value? }]` between hub ids (at most 100 hubs, 200 links); each link is a great-circle arc as wide as its value, `directed: true` adds arrowheads. One row per pair: sum repeats first.
+- `hexbin`: `points: [{ lon, lat, weight? }]`, up to 5,000 raw points, binned into hexagons (`radius` 8 to 40 px) coloured by count, or `aggregate: "sum"` / `"mean"` of `weight`. Send the raw points, not bins.
+- `outline`: `highlight: [{ id, tone?, detail? }]` and `points: [{ lon, lat, label, tone? }]`; `tone` is said in words too.
+
+Ids are what you'd write: ISO alpha-3 (`"PRT"`), alpha-2 (`"PT"`) or an English name for countries; postal code (`"PA"`), FIPS or name for states. An unknown id is refused with the nearest names. `view: [west, south, east, north]` overrides the fit; by default bubble, connection and hexbin maps fit most places and show "N outside view" for the far-off ones, and a world map zoomed to a country draws the detailed coast. No URLs, no colours, no formatters.
+
+```json
+{ "type": "map", "props": {
+  "kind": "choropleth", "region": "us-states", "title": "2024 margin by state",
+  "data": [{ "id": "PA", "value": 1.7, "detail": "R +1.7" }, { "id": "MI", "value": 1.4, "detail": "R +1.4" }, { "id": "VA", "value": -5.8, "detail": "D +5.8" }, { "id": "WY", "value": 46.1, "detail": "R +46.1" }],
+  "scale": { "type": "diverging", "domain": [-20, 20], "midpoint": 0, "bins": 7, "unit": " pts" },
+  "legend": { "title": "Margin (R + / D −)" } } }
+```
+
+```json
+{ "type": "map", "props": {
+  "kind": "bubble", "region": "europe", "title": "Store revenue by city", "unit": "M EUR",
+  "points": [{ "lon": -9.14, "lat": 38.72, "label": "Lisbon", "value": 4.2 }, { "lon": 2.35, "lat": 48.86, "label": "Paris", "value": 7.9 }, { "lon": 13.4, "lat": 52.52, "label": "Berlin", "value": 3.1 }] } }
+```
+
+```json
+{ "type": "map", "props": {
+  "kind": "connection", "region": "world", "title": "Daily flights from Lisbon", "unit": " flights", "directed": true,
+  "hubs": [{ "id": "LIS", "label": "Lisbon", "lon": -9.14, "lat": 38.77 }, { "id": "GRU", "label": "Sao Paulo", "lon": -46.47, "lat": -23.43 }, { "id": "JFK", "label": "New York", "lon": -73.78, "lat": 40.64 }],
+  "links": [{ "from": "LIS", "to": "GRU", "value": 6 }, { "from": "LIS", "to": "JFK", "value": 9 }] } }
+```
+
+## Flow graphs
+
+`flow` `kind: "sankey"`: nodes and links with values, bands as wide as their values, flowing one way: a cycle is refused (split the stage that repeats, e.g. `test` and `retest`). Node `tone` marks an outcome (`success`, `danger`). At most 200 nodes and 1,000 links. `kind: "network"`: things and their links, laid out by force; `group` colours nodes (at most 3 groups), `size` weights them, link `value` thickens lines. At most 500 nodes and 2,000 links; past a few hundred, aggregate. Both take arrows node to node and Enter along a node's links, and flip to a table.
+
+```json
+{ "type": "flow", "props": {
+  "kind": "sankey", "unit": " jobs", "title": "CI runs by stage",
+  "nodes": [{ "id": "push", "label": "Push" }, { "id": "lint", "label": "Lint" }, { "id": "test", "label": "Test" }, { "id": "build", "label": "Build" }, { "id": "pass", "label": "Passed", "tone": "success" }, { "id": "fail", "label": "Failed", "tone": "danger" }],
+  "links": [{ "source": "push", "target": "lint", "value": 120 }, { "source": "push", "target": "test", "value": 120 }, { "source": "lint", "target": "pass", "value": 112 }, { "source": "lint", "target": "fail", "value": 8 }, { "source": "test", "target": "build", "value": 101 }, { "source": "test", "target": "fail", "value": 19 }, { "source": "build", "target": "pass", "value": 101 }] } }
+```
+
+```json
+{ "type": "flow", "props": {
+  "kind": "network", "title": "Service calls", "unit": " req/s",
+  "nodes": [{ "id": "web", "group": "edge", "size": 3 }, { "id": "api", "group": "core", "size": 5 }, { "id": "auth", "group": "core", "size": 2 }, { "id": "db", "label": "postgres", "group": "data", "size": 4 }],
+  "links": [{ "source": "web", "target": "api", "value": 900 }, { "source": "api", "target": "auth", "value": 700 }, { "source": "api", "target": "db", "value": 1500 }, { "source": "auth", "target": "db", "value": 300 }] } }
+```
 
 ## Reference data, don't paste it
 

@@ -11,9 +11,14 @@ A component is data: a tree of yaah's primitives (and other components) with `{{
 
 Where MCP tools are prefixed by server (Claude Code) they are `mcp__yaah-ui__ui_save_component`, `mcp__yaah-ui__ui_get_component`, `mcp__yaah-ui__ui_catalog` and `mcp__yaah-ui__ui_render`; elsewhere the bare `ui_save_component`, `ui_get_component`, `ui_catalog` and `ui_render`. Call the exact name your tool list shows.
 
+## Expanded
+
+A rendered component can be expanded into a large dialog. Blocks with a main scroll area (`textfile`, `filetree`, `json`, `table`, `gitgraph`, `diffreview`, …) fill it on their own, and the containers around them (`card`, `stack`, `live`) pass the height down. When a component's main region is something else (a long `list`, `code`, `markdown`), put `"grow": true` on that one node (beside `type`, not in `props`). Keep headers and toolbars as siblings: they stay at their natural size. Don't mark forms or small cards.
+
 ## Before saving
 
 - Call `ui_catalog` and reuse what is there. Improve an existing component of the user's (`ui_get_component`, then save with `expectedVersion`) instead of making a near-duplicate.
+- A chart in a component takes its rows as a prop (`"data": "{{rows}}"`) and keeps `kind` fixed, so it is checked when saved (a dumbbell needs exactly 2 series). The same goes for a `map` (keep `kind` and `region` fixed; a bound row's id is resolved when it renders, and bound `hubs` skip the link-to-hub check) and a `flow` (keep `kind` fixed). Colours come from the theme; a component can't set them.
 - yaah's own components (source `yaah`) and installed libraries' components (`library/name`) are read-only: compose them inside yours, or save a variant under a new unqualified name.
 - Save only shapes that will come up again. For a one-off, pass a `tree` to `ui_render`.
 

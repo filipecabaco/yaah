@@ -1,4 +1,7 @@
 # pnpm settings (pnpm 10+ reads them here, not from package.json).
 overrides:
-  # One immer: recharts asks for ^10 (and only uses castDraft, unchanged in 11), Redux Toolkit for ^11.
-  immer: 11.2.9
+  # d3-geo 3.1.1 asks for "d3-array": "2.5.0 - 3"; a fresh resolve would take 3.2.5 (3 Nov 2026, too new).
+  # Keep every d3-array 3 at 3.2.4 (d3-sankey's own 2.x copy is left alone). docs/research/map-types.md.
+  "d3-array@3": 3.2.4
+  # d3-shape 3.2.0 asks for "d3-path": "^3.1.0"; 3.1.1 is from 3 Nov 2026 (too new). docs/research/d3-everywhere.md.
+  "d3-path@3": 3.1.0

@@ -5,7 +5,8 @@
 // colour theme: the 65 Shiki bundles (pre-mapped in themes.json by
 // `pnpm themes`) or a .json the user drops in ~/.config/yaah/themes. A theme's
 // colours become the app's CSS variables through theme-map.ts, which keeps
-// every one readable. Chart colours are never themed.
+// every one readable. Chart colours follow the theme too: its own if they pass the dataviz
+// checks on its surface, else yaah's (lib/chart-palette.ts, run in toTokens on every apply).
 import { api, type Appearance } from "@/lib/api";
 import bundled from "@/lib/themes.json";
 import { toPalette, toTokens, type Palette } from "@/lib/theme-map";
@@ -26,7 +27,10 @@ let preview: string | null = null;
 const customPalettes = new Map<string, Palette>();
 /** CSS variables set on the root: at first, the ones public/theme-boot.js restored from the last run. */
 const rootStyle = document.documentElement.style;
-let applied: string[] = Array.from({ length: rootStyle.length }, (_, i) => rootStyle.item(i)).filter((k) => k.startsWith("--"));
+// (Not the fonts, which lib/fonts.ts keeps.)
+let applied: string[] = Array.from({ length: rootStyle.length }, (_, i) => rootStyle.item(i)).filter(
+  (k) => k.startsWith("--") && !k.startsWith("--font-"),
+);
 /** Where the last applied theme is kept for public/theme-boot.js, which applies it before the app loads. */
 export const THEME_CACHE = "yaah:theme";
 export type CachedTheme = { dark: boolean; tokens: Record<string, string> };

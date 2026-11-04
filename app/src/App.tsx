@@ -15,7 +15,7 @@ import { PanePicker } from "@/components/pane-picker";
 import { PaneGrid } from "@/components/panes";
 import { TerminalPane } from "@/components/terminal/terminal-pane";
 import { useTerminals } from "@/components/terminal/use-terminals";
-import { focusPaneDom } from "@/lib/pane-focus";
+import { focusMain, focusPaneDom } from "@/lib/pane-focus";
 import { CollapsedTitleBar, Sidebar } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
@@ -26,6 +26,7 @@ import { TranscriptsContext } from "@/hooks/use-transcript";
 import { api, canChat, mayListSessions, type AgentProfile, type SessionInfo } from "@/lib/api";
 import { onOpenAgentSwitch, onOpenComponent, onOpenSettings } from "@/lib/app-events";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
+import { stepFontSize } from "@/lib/fonts";
 import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
 
 // Not needed at startup, so not in the main chunk: fetched once the app is idle.
@@ -190,6 +191,7 @@ export default function App() {
     // Split panes: a new pane opens on the picker, with the keyboard in it.
     splitRight: () => focusPaneDom(panes.split("row")),
     splitDown: () => focusPaneDom(panes.split("column")),
+    balancePanes: panes.balance,
     // The last pane stays; there ⌘W closes the library, as Esc does.
     closePane: () => {
       if (panes.close()) focusPaneDom(panes.focusedId());
@@ -201,6 +203,9 @@ export default function App() {
     },
     toggleSidebar: panes.toggleSidebar,
     newTerminal: terminals.openHere,
+    sizeUp: () => void stepFontSize(1),
+    sizeDown: () => void stepFontSize(-1),
+    sizeReset: () => void stepFontSize(0),
   });
 
   const chatActions = useMemo(
@@ -234,7 +239,7 @@ export default function App() {
   );
 
   const home = (
-    <main className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto p-8">
+    <div className="flex min-w-0 flex-1 items-center justify-center overflow-y-auto p-8">
       <div className="flex max-w-md flex-col items-center gap-5 text-center">
         <Mark assemble className="size-16 text-foreground" title="yaah" />
         <p className="text-sm text-pretty text-muted-foreground">
@@ -268,7 +273,7 @@ export default function App() {
           </Button>
         </div>
       </div>
-    </main>
+    </div>
   );
 
   /** What pane `p` shows, and its name for assistive tech. Built here so a divider drag reuses the same elements. */
@@ -277,7 +282,7 @@ export default function App() {
   for (const p of panes.panes) {
     const c = p.content;
     const focused = p.id === panes.layout.focused;
-    const blank = <main className="min-w-0 flex-1" />;
+    const blank = <div className="min-w-0 flex-1" />;
     // A chat starting here covers what the pane showed, until it opens (or the pane moves on).
     const start = y.starting[p.id];
     if (start && contentKey(c) === start.over) {
@@ -415,6 +420,17 @@ export default function App() {
         <ChatActionsProvider value={chatActions}>
           <AppContextMenu>
             <div className="flex h-screen overflow-hidden bg-background text-foreground">
+              {/* First on the page: past the sidebar's dozen stops to the focused pane (SR-5). */}
+              <a
+                href="#main"
+                className="sr-only rounded-md bg-background text-sm font-medium shadow-md ring-3 ring-ring focus:not-sr-only focus:fixed focus:top-12 focus:left-3 focus:z-[100] focus:px-3 focus:py-2"
+                onClick={(e) => {
+                  e.preventDefault();
+                  focusMain(panes.focusedId());
+                }}
+              >
+                Skip to main content
+              </a>
               {y.loadError != null && (
                 <div className="fixed inset-x-0 top-0 z-50 border-b bg-background px-4 py-2">
                   <ErrorText error={y.loadError} prefix="Couldn't load your agents, projects and chats: " />
@@ -442,7 +458,19 @@ export default function App() {
 
               <div className="flex min-w-0 flex-1 flex-col">
                 <CollapsedTitleBar shown={panes.sidebar.collapsed} onToggle={panes.toggleSidebar} onPalette={sidebar.onPalette} />
-                <PaneGrid layout={panes.layout} contents={contents} labels={labels} onFocus={panes.focus} onResize={panes.resize} />
+                {/* The one main landmark: every pane, whatever it shows (they're sections in it). */}
+                <main id="main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
+                  <PaneGrid
+                    layout={panes.layout}
+                    contents={contents}
+                    labels={labels}
+                    onFocus={panes.focus}
+                    onResize={panes.resize}
+                    onClose={(id) => {
+                      if (panes.close(id)) focusPaneDom(panes.focusedId());
+                    }}
+                  />
+                </main>
               </div>
 
               <CommandPalette

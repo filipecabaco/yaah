@@ -13,6 +13,7 @@ import { api, PROJECT_STATUSES, canChat, needsProviderFix, type AgentProfile, ty
 import { baseName, compactPath } from "@/lib/format";
 import { ErrorText } from "@/components/error-text";
 import { ProjectLinkPill, ProjectLinkSection } from "@/components/project-link";
+import { scrollBehavior } from "@/lib/motion";
 
 type Props = {
   project: Project;
@@ -93,7 +94,7 @@ export function ProjectView({
 
   useEffect(() => {
     if (!askDelete) return;
-    deleteSection.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    deleteSection.current?.scrollIntoView({ behavior: scrollBehavior(), block: "nearest" });
     onAskDeleteSeen?.();
   }, [askDelete, onAskDeleteSeen]);
 
@@ -142,7 +143,7 @@ export function ProjectView({
   }
 
   return (
-    <main className="min-w-0 flex-1 overflow-y-auto">
+    <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-8">
         <header className="flex flex-wrap items-center gap-3">
           {/* In a narrow pane the name keeps its room and the selects wrap below it. */}
@@ -372,6 +373,6 @@ export function ProjectView({
           )}
         </section>
       </div>
-    </main>
+    </div>
   );
 }

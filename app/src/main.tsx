@@ -5,6 +5,7 @@ import "./index.css";
 
 import { followTheme, setAppearance, setThemes, settingsUnavailable } from "./lib/theme";
 import { api } from "./lib/api";
+import { applyFonts } from "./lib/fonts";
 import { setCardRules } from "./lib/tool-cards";
 import { setGroupToolCalls } from "./lib/tool-groups";
 import { installDragFallback, overlayTitlebar } from "./hooks/use-titlebar";
@@ -28,12 +29,13 @@ async function start() {
       return;
     }
   }
-  // Saved appearance, themes and tool-card rules. Until they arrive the app shows the theme of the
+  // Saved appearance, themes, fonts and tool-card rules. Until they arrive the app shows the theme of the
   // last run (public/theme-boot.js), or follows the OS in yaah's colours on a first start.
   api.generalSettings().then(
     (s) => {
       setThemes(s.theme);
       setAppearance(s.appearance);
+      applyFonts(s.fonts?.css);
       setCardRules(s.toolCards.rules);
       setGroupToolCalls(s.groupToolCalls ?? true);
     },

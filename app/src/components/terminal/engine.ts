@@ -46,6 +46,8 @@ export interface TerminalEngine {
   resize(cols: number, rows: number): void;
   focus(): void;
   setTheme(theme: TerminalTheme): void;
+  /** Draw in another font or size (Settings → Fonts); true when it changed, so the view re-fits the grid. */
+  setFont(fontFamily: string, fontSize: number): boolean;
   /** Find `query` from the current match on; false when there's none. */
   search(query: string, direction?: "next" | "previous"): boolean;
   /** The text on screen and in scrollback (for copy-all and tests). */

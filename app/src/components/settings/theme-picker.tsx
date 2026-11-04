@@ -130,7 +130,7 @@ export function ThemePicker({
               >
                 <Swatch p={swatch(t)} />
                 <span className="min-w-0 flex-1 truncate">{t.label}</span>
-                {t.custom && <span className="text-[10px] text-muted-foreground">yours</span>}
+                {t.custom && <span className="text-2xs text-muted-foreground">yours</span>}
                 {t.id === value && <span className="sr-only">(current)</span>}
               </CommandItem>
             ))}

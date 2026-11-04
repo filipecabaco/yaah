@@ -152,14 +152,19 @@ export const Sidebar = memo(function Sidebar(props: Props) {
             <span className="px-1 text-xs text-muted-foreground">Agent</span>
             <div className="flex gap-1.5">
               <Select value={agentId} onValueChange={props.onAgent}>
-                <SelectTrigger className="min-w-0 flex-1" aria-label="Agent for new chats">
+                {/* The email is clipped in a narrow sidebar or at a large interface size: the tooltip has it whole (LV-2). */}
+                <SelectTrigger
+                  className="min-w-0 flex-1"
+                  aria-label="Agent for new chats"
+                  title={account ? [account.label, agentDetail(account)].filter(Boolean).join(" · ") : undefined}
+                >
                   <SelectValue placeholder="No agent" />
                 </SelectTrigger>
                 <SelectContent>
                   {agents.map((a) => (
                     <SelectItem key={a.id} value={a.id}>
                       <span>{a.label}</span>
-                      <span className="text-xs text-muted-foreground">{agentDetail(a)}</span>
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">{agentDetail(a)}</span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -466,7 +471,7 @@ function ProjectNode({
             {project.name}
           </button>
           {project.status !== "ongoing" && (
-            <Badge variant="outline" className="h-4 px-1 text-[10px]">
+            <Badge variant="outline" className="h-4 px-1 text-2xs">
               {project.status}
             </Badge>
           )}
@@ -682,7 +687,7 @@ function QuickChats({
             >
               <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{c.title}</span>
-              {folder && <span className="max-w-20 shrink-0 truncate font-mono text-[10px] text-muted-foreground">{folder}</span>}
+              {folder && <span className="max-w-20 shrink-0 truncate font-mono text-2xs text-muted-foreground">{folder}</span>}
               {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
             </button>
           </ChatMenu>

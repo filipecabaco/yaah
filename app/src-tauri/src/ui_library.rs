@@ -38,6 +38,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod chart;
+mod flow;
+mod map;
+mod regions;
+
 const PRIMITIVES_JSON: &str = include_str!("../../src/ui-primitives.json");
 const MAX_DEPTH: usize = 30;
 const MAX_NODES: usize = 3000;
@@ -859,6 +864,12 @@ impl<'a> Expansion<'a> {
         }
         let Some(t) = obj.get("type").and_then(Value::as_str) else { return Value::Object(out) };
         if is_primitive(t) {
+            // A region map's ids, as its geometry names them (map.rs), so React needs no alias table.
+            if t == "map"
+                && let Some(Value::Object(props)) = out.get_mut("props")
+            {
+                map::normalize(props);
+            }
             return Value::Object(out);
         }
         if stack.iter().any(|s| s == t) {
@@ -1009,6 +1020,12 @@ fn validate(node: &Value, path: &str, lib: &dyn Resolve, ctx: &mut Ctx, depth: u
             if obj.contains_key("children") && p["children"] != true {
                 errs.push(format!("{path}: `{t}` takes no children; use its props"));
             }
+            match t {
+                "chart" => chart::check(props, path, errs),
+                "map" => map::check(props, path, errs),
+                "flow" => flow::check(props, path, errs),
+                _ => {}
+            }
             walk("children", ctx, errs);
         } else {
             match lib.resolve(t, false) {
@@ -1031,7 +1048,7 @@ pub(crate) fn shown(v: &Value) -> String {
     if text.chars().count() > 80 { format!("{}…", text.chars().take(80).collect::<String>()) } else { text }
 }
 
-fn is_binding(v: &Value) -> bool {
+pub(crate) fn is_binding(v: &Value) -> bool {
     v.as_str().is_some_and(|s| s.contains("{{"))
 }
 
@@ -1189,8 +1206,9 @@ mod tests {
             ]}),
         )
         .unwrap();
-        assert_eq!(dash.uses, vec!["react-markdown", "recharts", "remark-gfm"]);
-        assert!(lib.catalog().unwrap()["components"].as_array().unwrap().iter().any(|c| c["uses"] == json!(["recharts"])));
+        // A chart is React SVG over d3-scale (axes, colour scales) and d3-shape (line and area paths).
+        assert_eq!(dash.uses, vec!["d3-scale", "d3-shape", "react-markdown", "remark-gfm"]);
+        assert!(lib.catalog().unwrap()["components"].as_array().unwrap().iter().any(|c| c["uses"] == json!(["d3-scale", "d3-shape"])));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1259,9 +1277,9 @@ mod tests {
         let started = std::time::Instant::now();
         let catalog = lib.catalog().unwrap();
         let top = catalog["components"].as_array().unwrap().iter().find(|c| c["name"] == "lvl-6").unwrap();
-        assert_eq!(top["uses"], json!(["recharts"]), "libraries still come through every level");
+        assert_eq!(top["uses"], json!(["d3-scale", "d3-shape"]), "libraries still come through every level");
         assert_eq!(lib.list().unwrap().len(), 7);
-        assert_eq!(lib.get("lvl-6").unwrap().unwrap().uses, ["recharts"]);
+        assert_eq!(lib.get("lvl-6").unwrap().unwrap().uses, ["d3-scale", "d3-shape"]);
         let errs = lib.prepare(Some("lvl-6"), json!({}), None).unwrap_err();
         assert_eq!(errs.len(), 1, "said once: {errs:?}");
         assert!(errs[0].contains("more than 3000 nodes"), "{errs:?}");

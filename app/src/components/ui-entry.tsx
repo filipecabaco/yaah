@@ -16,6 +16,7 @@ import { UiViewContext, type UiView } from "@/components/ui-view";
 import { api, type Entry } from "@/lib/api";
 import { openComponent } from "@/lib/app-events";
 import { compactPath } from "@/lib/format";
+import { uiTitle } from "@/lib/ui-title";
 import { cn } from "@/lib/utils";
 
 type Of<T extends Entry["type"]> = Extract<Entry, { type: T }>;
@@ -77,9 +78,9 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
   );
   const [expanded, setExpanded] = useState(false);
   const expand = useCallback(() => setExpanded(true), []);
-  const view = useMemo<UiView>(() => ({ expanded, expand: expanded ? undefined : expand }), [expanded, expand]);
+  const name = uiTitle(entry);
+  const view = useMemo<UiView>(() => ({ expanded, expand: expanded ? undefined : expand, name }), [expanded, expand, name]);
   const { host, inline, setSlot } = useMovable(expanded);
-  const name = entry.title ?? entry.component ?? "UI";
 
   // F expands it: with focus inside the entry, or with the pointer over it (unless typing elsewhere).
   const [hovered, setHovered] = useState(false);
@@ -119,12 +120,12 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
             <LayoutPanelTop className="size-3" />
             {entry.title ?? (entry.component ? null : "UI")}
             {entry.askId && entry.answer == null && (
-              <Badge variant="secondary" className="h-4 px-1 text-[10px]">
+              <Badge variant="secondary" className="h-4 px-1 text-2xs">
                 waiting for you
               </Badge>
             )}
             {entry.component && entry.version != null && (
-              <Badge variant="outline" className="h-4 px-1 font-mono text-[10px]">
+              <Badge variant="outline" className="h-4 px-1 font-mono text-2xs">
                 {entry.component} v{entry.version}
               </Badge>
             )}
@@ -132,7 +133,7 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
               variant="ghost"
               size="icon-xs"
               className="ml-auto"
-              aria-label="Expand"
+              aria-label={`Expand ${name}`}
               title="Expand (F)"
               aria-pressed={expanded}
               onClick={expand}

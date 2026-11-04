@@ -99,7 +99,7 @@ export function NavRow({
             {label}
             {note && <span className="sr-only">, {note}</span>}
           </span>
-          {hint && <span className="truncate text-[11px] text-muted-foreground">{hint}</span>}
+          {hint && <span className="truncate text-2xs text-muted-foreground">{hint}</span>}
         </span>
         {end}
       </button>

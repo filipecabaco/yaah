@@ -141,7 +141,7 @@ describe("the Component library in a narrow window", () => {
   it("shows the list or the component, one at a time, with a way back to the list", async () => {
     const { user } = renderApp();
     const nav = await openLibrary(user);
-    const page = nav.closest("main")!;
+    const page = nav.closest<HTMLElement>('[class*="@container/library"]')!;
     // A container query on the page: under 36rem wide, one pane at a time (happy-dom has no layout,
     // so this checks which pane is up and the classes that hide the other).
     expect(page).toHaveClass("@container/library");

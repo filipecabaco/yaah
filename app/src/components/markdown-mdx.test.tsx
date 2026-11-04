@@ -1,17 +1,14 @@
-// MDX drawn as data: frontmatter folded, ESM hidden, a few docs components on
-// yaah's primitives, unknown ones in a labelled box, `{expressions}` as code,
-// and nothing ever evaluated. Text that isn't MDX renders exactly as before.
+// Every text is read as MDX, drawn as data: frontmatter folded, ESM hidden, a few
+// docs components on yaah's primitives, unknown ones in a labelled box, braces as
+// text, and nothing ever evaluated. Plain Markdown renders as it did with
+// react-markdown + remark-gfm alone, except for the HTML differences listed below.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { Markdown, WholeMarkdown } from "@/components/markdown";
-import { loadMdx, looksLikeMdx, mdxBlocks, openTags, prepareMdx, splitFrontmatter } from "@/lib/mdx";
-
-beforeAll(async () => {
-  await loadMdx();
-});
+import { mdxBlocks, openTags, prepareMdx, scanJsx, splitFrontmatter } from "@/lib/mdx";
 
 const draw = (text: string) => render(<Markdown>{text}</Markdown>).container;
 const html = (el: React.ReactElement) => {
@@ -65,30 +62,54 @@ Typed *channels* with \`<T>\`.
 That's all.
 `;
 
-describe("detection", () => {
-  it("knows MDX by frontmatter, ESM, or a capitalised JSX tag that closes", () => {
-    expect(looksLikeMdx(DOCS)).toBe(true);
-    expect(looksLikeMdx("---\ntitle: X\n---\n\nBody")).toBe(true);
-    expect(looksLikeMdx('import { Tabs } from "nextra/components"\n\nHi')).toBe(true);
-    expect(looksLikeMdx("export const meta = { a: 1 }\n\nHi")).toBe(true);
-    expect(looksLikeMdx("<Note>\n\nCareful.\n\n</Note>")).toBe(true);
-    expect(looksLikeMdx('<Image src="a.png" />')).toBe(true);
+describe("the compatibility pass", () => {
+  it("keeps a < that doesn't start JSX as text", () => {
+    expect(prepareMdx("a < b, a<=b, Vec<T>, Option<String>, Map<K, V>, <Enter> to go, <foo>x</foo>, </div>")).toBe(
+      "a \\< b, a\\<=b, Vec\\<T>, Option\\<String>, Map\\<K, V>, \\<Enter> to go, \\<foo>x\\</foo>, \\</div>",
+    );
+    // `<Tab>` is mapped, but only opens unclosed alone on its line; `<>` only as a fragment on lines of its own.
+    expect(prepareMdx("Press <Tab> to complete, where a <> b")).toBe("Press \\<Tab> to complete, where a \\<> b");
+    // A tag still streaming in is text until it ends.
+    expect(prepareMdx('<Note type="x')).toBe('\\<Note type="x');
   });
 
-  it("leaves ordinary messages alone", () => {
-    for (const text of [
-      "a < b and b > c",
-      "Use `<Tabs>` here, and {braces} in prose.",
-      "Line one<br>line two",
-      "<!-- a note -->\nVisible",
-      "Vec<T> and Option<String>",
-      "<Enter> to continue",
-      "export PATH=$HOME/bin:$PATH",
-      "import os",
-      "---\n\nJust a rule\n\n---",
-      "```tsx\nimport x from 'y';\n<Tabs></Tabs>\n```",
-    ])
-      expect(looksLikeMdx(text), text).toBe(false);
+  it("keeps closed, self-closing and void tags, and mapped components opening alone on a line", () => {
+    expect(prepareMdx("<Badge>new</Badge>, <Thing />, <kbd>K</kbd>, a<br>b, <hr>")).toBe(
+      "<Badge>new</Badge>, <Thing />, <kbd>K</kbd>, a<br />b, <hr />",
+    );
+    expect(prepareMdx("<Note>\n\nStreaming…")).toBe("<Note>\n\nStreaming…");
+    expect(prepareMdx('  <Tabs defaultValue="a">')).toBe('  <Tabs defaultValue="a">');
+    expect(prepareMdx("<>\n\nfragment\n\n</>")).toBe("<>\n\nfragment\n\n</>");
+  });
+
+  it("writes autolinks as links, and leaves link destinations alone", () => {
+    expect(prepareMdx("See <https://example.com/a_b> or <me@example.com>.")).toBe(
+      "See [https\\:\\/\\/example\\.com\\/a\\_b](<https://example.com/a_b>) or [me\\@example\\.com](<mailto:me@example.com>).",
+    );
+    expect(prepareMdx("[a](<b c>) and\n\n[ref]: <https://x.com>")).toBe("[a](<b c>) and\n\n[ref]: <https://x.com>");
+  });
+
+  it("takes out HTML and MDX comments, inline or over several lines", () => {
+    expect(prepareMdx("a <!-- x --> b {/* y */} c\n<!--\nhidden\n-->\nd")).toBe("a  b  c\n\nd");
+    expect(prepareMdx("a\n{/* own line */}\nb")).toBe("a\nb");
+  });
+
+  it("leaves braces, code spans, fenced and indented code alone", () => {
+    const src = "{x} and `a < b` and ``<T>``\n\n```\n<T> {y}\n```\n\n    if a < b {}\n\n- item\n\n      <T> code\n\n- next";
+    expect(prepareMdx(src)).toBe(src);
+  });
+
+  it("only takes out import and export lines that are ESM", () => {
+    for (const text of ["export PATH=$HOME/bin:$PATH", "import os", "export default is the usual choice", "export function names, then import them"])
+      expect(prepareMdx(text), text).toBe(text);
+    expect(prepareMdx('import { A } from "a"\nexport const b = 1\nexport default function C() {}\n\nText')).toBe("\nText");
+  });
+
+  it("turns indented code off only for a block with a component on its own lines", () => {
+    expect(scanJsx("Para.\n\n    code").flow).toBe(false);
+    expect(scanJsx("Press <kbd>K</kbd>.").flow).toBe(false);
+    expect(scanJsx("<Note>\n    indented content\n</Note>").flow).toBe(true);
+    expect(scanJsx("- <Note>x</Note>").flow).toBe(true);
   });
 });
 
@@ -121,18 +142,20 @@ describe("MDX", () => {
     expect(fm.querySelector("pre")).toHaveTextContent("description: Listen to database changes.");
     // Not a rule and a setext heading.
     expect(c.querySelector("hr")).toBeNull();
-    expect(c.querySelector("h2")).toBeNull();
+    expect(c.querySelector('[data-md="h2"]')).toBeNull();
   });
 
   it("hides import and export lines", () => {
     const c = draw(DOCS);
     expect(c.textContent).not.toMatch(/import|export|@site|sidebar/);
-    expect(c.querySelector("h1")).toHaveTextContent("Postgres changes");
+    // An agent's `#` sits one level under the pane's title (SR-5): an h2 that remembers it was an h1.
+    expect(c.querySelector('h2[data-md="h1"]')).toHaveTextContent("Postgres changes");
   });
 
-  it("draws an expression as code, and drops MDX comments", () => {
+  it("shows braces as text, as Markdown does, and drops MDX comments", () => {
     const c = draw(DOCS);
-    expect([...c.querySelectorAll("code")].map((e) => e.textContent)).toContain("{props.projectRef}");
+    expect(c.querySelector('[data-md="h1"] + p')).toHaveTextContent("Listen to inserts on the messages table for project {props.projectRef}.");
+    expect([...c.querySelectorAll("code")].map((e) => e.textContent)).not.toContain("{props.projectRef}");
     expect(c.textContent).not.toContain("An MDX comment");
     expect(c.textContent).toContain("That's all.");
   });
@@ -180,14 +203,13 @@ describe("MDX", () => {
   });
 
   it("maps details and summary", () => {
-    // In an MDX text (lowercase HTML alone doesn't make a message MDX).
-    const c = draw('import X from "x"\n\n<details>\n<summary>More **info**</summary>\n\nHidden text.\n\n</details>');
+    const c = draw("<details>\n<summary>More **info**</summary>\n\nHidden text.\n\n</details>");
     const d = c.querySelector("details")!;
     expect(d.firstElementChild?.tagName).toBe("SUMMARY");
     expect(d.querySelector("summary strong")).toHaveTextContent("info");
     expect(d).toHaveTextContent("Hidden text.");
     expect(d).not.toHaveAttribute("open");
-    const bare = draw('import X from "x"\n\n<details>\n\nNo summary.\n\n</details>').querySelector("details")!;
+    const bare = draw("<details>\n\nNo summary.\n\n</details>").querySelector("details")!;
     expect(bare.firstElementChild).toHaveTextContent("Details");
     expect(bare.querySelectorAll("summary")).toHaveLength(1);
   });
@@ -293,7 +315,8 @@ describe("never evaluates anything", () => {
       ].join("\n"),
     );
     expect(g.__pwned).toBeUndefined();
-    expect([...c.querySelectorAll("code")].map((e) => e.textContent)).toEqual(["{globalThis.__pwned = 3}", "{(() => { globalThis.__pwned = 4 })()}"]);
+    // Braces are text: shown as written.
+    expect(c).toHaveTextContent("Text {globalThis.__pwned = 3} here. {(() => { globalThis.__pwned = 4 })()}");
     // The title was an expression: ignored, so the alert falls back to its type.
     expect(c.querySelector('[data-slot="alert-title"]')).toHaveTextContent("Note");
   });
@@ -327,36 +350,67 @@ describe("malformed and partial MDX", () => {
     expect(draw("import A from 'a'\n\nTotal {count")).toHaveTextContent("Total {count");
   });
 
-  it("falls back to plain text for prose MDX can't read, keeping the rest", () => {
+  it("keeps prose MDX can't read as text, beside components", () => {
     const c = draw("<Note>\n\nCareful\n\n</Note>\n\nIf a<b then <!-- hidden --> x {y.\n\nAn autolink <https://example.com>.");
     expect(c.querySelector('[data-mdx="admonition"]')).toBeInTheDocument();
     expect(c).toHaveTextContent("If a<b then x {y.");
-    expect(c).toHaveTextContent("An autolink");
+    expect(c.querySelector("a")).toHaveAttribute("href", "https://example.com");
     expect(c.textContent).not.toContain("hidden");
+  });
+
+  it("shows inline JSX that doesn't close in its own paragraph as text", () => {
+    const c = draw("Use <b>bold\n\nstill</b> here, then <Note>x</Note>");
+    expect(c).toHaveTextContent("Use <b>bold");
+    expect(c).toHaveTextContent("still</b> here, then");
   });
 });
 
-describe("non-MDX messages", () => {
+describe("plain Markdown", () => {
   const plain = (text: string) =>
     html(
       <div className="markdown">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
       </div>,
     );
+  // (No links or images here: the baseline is react-markdown without yaah's overrides.)
   it.each([
     "a < b, and b > c",
     "Braces {like this} and {unclosed",
-    "Line one<br>line two",
-    "Before <!-- a comment --> after",
     "Vec<T> and Option<String> and <div>",
     "<Enter> to continue",
+    "Press <Tab> to complete, and x <= y, a <> b, Map<K, V>",
     "export PATH=$HOME/bin:$PATH",
     "Install it:\n\n```tsx\nimport { Tabs } from 'ui';\n<Tabs>{x}</Tabs>\n```",
-    "A tag-like <T> in *emphasis*, and <span>html</span>.",
+    "Run `<Tabs>` and ``a ` <b> ``.",
     "---\n\nBetween rules\n\n---",
-    "| a < b | {c} |\n|---|---|\n| <br> | <!-- x --> |",
+    "Para.\n\n    if a < b { Vec<T> }\n\n    more\n\nPara.",
+    "- item\n\n      code <T>\n\n- next",
+    "| a < b | {c} |\n|---|---|\n| x | y |",
   ])("draws %j exactly as before", (text) => {
-    // (No links or images here: the baseline is react-markdown without yaah's overrides.)
     expect(html(<Markdown>{text}</Markdown>)).toBe(plain(text));
+  });
+
+  it("draws autolinks as the same links", () => {
+    for (const url of ["https://example.com/a_b*c", "me@example.com"]) {
+      const href = url.includes("@") ? `mailto:${url}` : url;
+      expect(html(<Markdown>{`See <${url}>.`}</Markdown>)).toBe(html(<Markdown>{`See [${url.replace(/[_*]/g, "\\$&")}](${href}).`}</Markdown>));
+    }
+  });
+
+  // Deliberate differences: closed HTML that yaah draws is drawn (it used to show as
+  // its source), and comments are hidden (they used to show).
+  it.each([
+    ["Line one<br>line two", "<p>Line one<br>line two</p>"],
+    ["Before <!-- a comment --> after", "<p>Before  after</p>"],
+    ["Text {/* an MDX comment */} after", "<p>Text  after</p>"],
+    ["A tag-like <T> in *emphasis*, and <span>html</span>.", "<p>A tag-like &lt;T&gt; in <em>emphasis</em>, and html.</p>"],
+    ["Press <kbd>Ctrl</kbd>+<kbd>C</kbd>", "<p>Press <kbd>Ctrl</kbd>+<kbd>C</kbd></p>"],
+    [
+      "| a | b |\n|---|---|\n| <br> | <!-- x --> |",
+      "<table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td><br></td><td></td></tr></tbody></table>",
+    ],
+    ["<div>\n*inside*\n</div>", "<p><em>inside</em></p>"],
+  ])("draws %j as HTML would", (text, expected) => {
+    expect(html(<Markdown>{text}</Markdown>)).toBe(`<div class="markdown">${expected}</div>`);
   });
 });

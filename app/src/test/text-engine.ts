@@ -4,8 +4,14 @@
 // shortcuts that pass through and the Rust protocol are what's tested.
 import type { EngineFactory, TerminalEngine } from "@/components/terminal/engine";
 
-/** Engines made so far, newest last, with the element each draws in. */
-export const engines: { el: HTMLElement; engine: TerminalEngine; interactive: boolean }[] = [];
+/** Engines made so far, newest last, with the element each draws in, the font it draws in and how often it was fitted. */
+export const engines: {
+  el: HTMLElement;
+  engine: TerminalEngine;
+  interactive: boolean;
+  font: { family: string; size: number };
+  fits: number;
+}[] = [];
 
 const KEYS: Record<string, string> = { Enter: "\r", Backspace: "\x7f", Tab: "\t", Escape: "\x1b", ArrowUp: "\x1b[A", ArrowDown: "\x1b[B" };
 
@@ -37,6 +43,13 @@ export const textEngine: EngineFactory = (el, o) => {
     else if (e.key.length === 1 && !e.metaKey && !e.ctrlKey) o.onData(e.key);
     e.preventDefault();
   });
+  const record: (typeof engines)[number] = {
+    el,
+    engine: null as unknown as TerminalEngine,
+    interactive: o.interactive,
+    font: { family: o.fontFamily, size: o.fontSize },
+    fits: 0,
+  };
   let cols = o.size?.cols ?? 80;
   let rows = o.size?.rows ?? 24;
   const engine: TerminalEngine = {
@@ -44,13 +57,21 @@ export const textEngine: EngineFactory = (el, o) => {
       draw(decoder.decode(data, { stream: true }));
       done?.();
     },
-    fit: () => null,
+    fit: () => {
+      record.fits++;
+      return null;
+    },
     resize(c, r) {
       cols = c;
       rows = r;
     },
     focus: () => input.focus(),
     setTheme: () => undefined,
+    setFont(family, size) {
+      if (record.font.family === family && record.font.size === size) return false;
+      record.font = { family, size };
+      return true;
+    },
     search: (q) => text.includes(q),
     serialize: () => text,
     renderer: "other",
@@ -65,6 +86,7 @@ export const textEngine: EngineFactory = (el, o) => {
       input.remove();
     },
   };
-  engines.push({ el, engine, interactive: o.interactive });
+  record.engine = engine;
+  engines.push(record);
   return engine;
 };

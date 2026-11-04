@@ -254,7 +254,7 @@ function AgentMark({ on }: { on: boolean }) {
   if (!on) return null;
   return (
     <span
-      className="inline-flex items-center gap-0.5 rounded-sm bg-primary/10 px-1 text-[10px] font-normal text-primary"
+      className="inline-flex items-center gap-0.5 rounded-sm bg-primary/10 px-1 text-2xs font-normal text-primary"
       title="Filled in by the agent; change it if it's wrong"
     >
       <Bot className="size-3" /> agent

@@ -25,7 +25,12 @@ export type Direction = "left" | "right" | "up" | "down";
 /** A box in the main area, as fractions of it (0–1). */
 export type Rect = { x: number; y: number; w: number; h: number };
 
-/** Narrowest and shortest a pane gets when dragging a divider, in CSS pixels. */
+/**
+ * Narrowest and shortest a pane gets when dragging a divider, in CSS pixels at the default interface
+ * size (17.5rem × 10rem). It grows with the interface size (the `scale` of `clampRatio`, which panes.tsx
+ * reads off the root font size, Settings → Fonts), so a pane at 20px keeps room for its header. Rust
+ * (layout.rs) only bounds ratios and never sees pixels, so it has nothing to keep in step.
+ */
 export const MIN_PANE = { w: 280, h: 160 };
 /** A divider's share never goes past these, whatever the size. */
 const RATIO_MIN = 0.05;
@@ -127,6 +132,28 @@ export function setRatio(layout: Layout, splitId: string, ratio: number): Layout
   return { ...layout, root: mapTree(layout.root, (n) => (n.type === "split" && n.id === splitId && n.ratio !== r ? { ...n, ratio: r } : n)) };
 }
 
+/** How many panes sit side by side (`row`) or stacked (`column`) along `dir`: a split the other way counts once. */
+function panesAlong(node: LayoutNode, dir: Split["dir"]): number {
+  return node.type === "split" && node.dir === dir ? panesAlong(node.a, dir) + panesAlong(node.b, dir) : 1;
+}
+
+/**
+ * Every pane the same share of its row or column, as Ghostty's "equalize splits" does: each
+ * divider moves to the share of panes on its side, so three side by side get a third each.
+ */
+export function balance(layout: Layout): Layout {
+  const even = (n: LayoutNode): LayoutNode => {
+    if (n.type !== "split") return n;
+    const a = even(n.a);
+    const b = even(n.b);
+    const before = panesAlong(n.a, n.dir);
+    const ratio = clamp(before / (before + panesAlong(n.b, n.dir)), RATIO_MIN, 1 - RATIO_MIN);
+    return a === n.a && b === n.b && ratio === n.ratio ? n : { ...n, ratio, a, b };
+  };
+  const root = even(layout.root);
+  return root === layout.root ? layout : { ...layout, root };
+}
+
 export const focusPane = (layout: Layout, id: string): Layout =>
   layout.focused === id || !findPane(layout, id) ? layout : { ...layout, focused: id };
 
@@ -203,26 +230,27 @@ export function nextPane(layout: Layout, from: string, step: 1 | -1 = 1): string
   return list[(Math.max(0, i) + step + list.length) % list.length].id;
 }
 
-/** The least room a subtree needs along `axis` for each of its panes to keep `MIN_PANE`. */
-export function minExtent(node: LayoutNode, axis: "x" | "y"): number {
-  if (node.type === "pane") return axis === "x" ? MIN_PANE.w : MIN_PANE.h;
+/** The least room a subtree needs along `axis` for each of its panes to keep `MIN_PANE`, times the interface `scale`. */
+export function minExtent(node: LayoutNode, axis: "x" | "y", scale = 1): number {
+  if (node.type === "pane") return (axis === "x" ? MIN_PANE.w : MIN_PANE.h) * scale;
   const along = (node.dir === "row") === (axis === "x");
-  const a = minExtent(node.a, axis);
-  const b = minExtent(node.b, axis);
+  const a = minExtent(node.a, axis, scale);
+  const b = minExtent(node.b, axis, scale);
   return along ? a + b : Math.max(a, b);
 }
 
 /**
  * The ratio a divider may take in a split `px` pixels long: both sides keep their panes'
- * minimum size when there's room for it; otherwise (or with no size yet) a plain bound.
+ * minimum size (times `scale`, the interface size over its default) when there's room for it;
+ * otherwise (or with no size yet) a plain bound.
  */
-export function clampRatio(split: Split, ratio: number, px: number): number {
+export function clampRatio(split: Split, ratio: number, px: number, scale = 1): number {
   const axis = split.dir === "row" ? "x" : "y";
   let lo = RATIO_MIN;
   let hi = 1 - RATIO_MIN;
   if (px > 0) {
-    const a = minExtent(split.a, axis) / px;
-    const b = minExtent(split.b, axis) / px;
+    const a = minExtent(split.a, axis, scale) / px;
+    const b = minExtent(split.b, axis, scale) / px;
     if (a + b <= 1) {
       lo = Math.max(lo, a);
       hi = Math.min(hi, 1 - b);

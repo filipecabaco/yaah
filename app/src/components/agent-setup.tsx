@@ -136,7 +136,8 @@ export function AgentSetupDialog({ target, onClose, ...agentProps }: AgentProps 
 
   return (
     <Dialog open={!!target} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="flex h-[min(46rem,92vh)] flex-col gap-0 p-0 sm:max-w-5xl">
+      {/* Capped by the window too: at a 20px interface 64rem is wider than the screen (LV-3). */}
+      <DialogContent className="flex h-[min(46rem,92vh)] flex-col gap-0 p-0 sm:max-w-[min(64rem,calc(100vw-2rem))]">
         <Tabs value={tab} onValueChange={(v) => pick(v as SettingsTab)} className="min-h-0 flex-1 flex-col gap-0">
           <DialogHeader className="gap-3 border-b px-4 pt-4">
             <div className="flex flex-col gap-1 pr-8">

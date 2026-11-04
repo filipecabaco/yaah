@@ -4,11 +4,11 @@
 // "Open in terminal", and an agent's command live in its tool card with Stop.
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
 import { TranscriptEntry } from "@/components/entries";
 import { setTerminalEngine } from "@/components/terminal/engine";
-import { RESTARTED_NOTE } from "@/components/terminal/terminal-pane";
+import { QUICK_EXIT_MS, RESTARTED_NOTE } from "@/components/terminal/terminal-pane";
 import { installBrowserMock } from "@/dev/browser-mock";
 import { startAgentTerminal } from "@/dev/mock/terminals";
 import type { Entry } from "@/lib/api";
@@ -227,5 +227,108 @@ describe("an agent's command in its tool card", () => {
     await waitFor(() => expect(textIn(card)).toContain("2 failing\nok"));
     expect(within(card).getByText("exit 1")).toBeInTheDocument();
     expect(within(card).queryByRole("button", { name: /stop/i })).toBeNull();
+  });
+});
+
+describe("a shell that exits", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** A terminal pane from the home screen, its shell at the prompt; `now` drives Date.now. */
+  async function openShell() {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const r = await started();
+    await r.user.click(screen.getByRole("button", { name: /new terminal/i }));
+    await waitFor(() => expect(terminalPanes()).toHaveLength(1));
+    const pane = terminalPanes()[0];
+    await waitFor(() => expect(textIn(pane)).toContain("dev@yaah %"));
+    const input = within(pane).getByRole("textbox", { name: "Terminal input" });
+    return { ...r, pane, input, later: (ms: number) => (now += ms) };
+  }
+
+  it("closes its pane, as terminal apps do", async () => {
+    const { user, input, later } = await openShell();
+    later(5_000);
+    await user.type(input, "exit{Enter}");
+    await waitFor(() => expect(terminalPanes()).toHaveLength(0));
+    // The only pane goes back to the home screen.
+    expect(await screen.findByRole("button", { name: /new terminal/i })).toBeInTheDocument();
+  });
+
+  it("closes only its own pane when the window is split", async () => {
+    const { user, input, later } = await openShell();
+    pressInTerminal("d", "KeyD");
+    await screen.findByRole("combobox", { name: /search chats and projects/i });
+    expect(paneEls()).toHaveLength(2);
+    later(5_000);
+    await user.type(input, "exit{Enter}");
+    await waitFor(() => expect(terminalPanes()).toHaveLength(0));
+    expect(paneEls()).toHaveLength(1);
+  });
+
+  it("keeps its pane open, saying so, when it dies right after starting", async () => {
+    const { user, pane, input, later } = await openShell();
+    later(QUICK_EXIT_MS - 1);
+    await user.type(input, "exit{Enter}");
+    expect(await within(pane).findByText("The shell has exited.")).toBeInTheDocument();
+    expect(terminalPanes()).toHaveLength(1);
+    // Its own buttons still work: a new shell in the same pane.
+    await user.click(within(pane).getByRole("button", { name: /new shell/i }));
+    await waitFor(() => expect(within(pane).queryByText("The shell has exited.")).not.toBeInTheDocument());
+  });
+});
+
+describe("an expanded terminal", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  async function shellPane() {
+    const r = await started();
+    await r.user.click(screen.getByRole("button", { name: /new terminal/i }));
+    await waitFor(() => expect(terminalPanes()).toHaveLength(1));
+    const pane = terminalPanes()[0];
+    await waitFor(() => expect(textIn(pane)).toContain("dev@yaah %"));
+    return { ...r, pane };
+  }
+  const expandKey = () =>
+    fireEvent.keyDown(document.activeElement ?? window, {
+      key: "Enter",
+      code: "Enter",
+      metaKey: isMac,
+      ctrlKey: !isMac,
+      shiftKey: true,
+      bubbles: true,
+    });
+
+  it("opens the same shell in a large dialog, keeps Esc for the shell, and goes back", async () => {
+    const { user, pane, mock } = await shellPane();
+    await user.click(within(pane).getByRole("button", { name: "Expand terminal" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(pane).getByText("Shown expanded")).toBeInTheDocument();
+    // The dialog's own view of the shell, with its scrollback, taking keys.
+    await waitFor(() => expect(textIn(dialog)).toContain("dev@yaah %"));
+    const input = within(dialog).getByRole("textbox", { name: "Terminal input" });
+    await user.type(input, "echo big{Enter}");
+    await waitFor(() => expect(textIn(dialog)).toContain("big\ndev@yaah %"));
+    expect(Object.values(mock.terminals).filter((t) => !t.agent)).toHaveLength(1);
+    // Esc is the shell's: the dialog stays.
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // ⌘⇧Enter goes back to the pane, which shows the shell again.
+    expandKey();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(textIn(terminalPanes()[0])).toContain("big\ndev@yaah %"));
+  });
+
+  it("opens with ⌘⇧Enter from the pane, and closes with the pane when the shell exits", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { user, pane } = await shellPane();
+    within(pane).getByRole("textbox", { name: "Terminal input" }).focus();
+    expandKey();
+    const dialog = await screen.findByRole("dialog");
+    now += 5_000;
+    await user.type(within(dialog).getByRole("textbox", { name: "Terminal input" }), "exit{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(terminalPanes()).toHaveLength(0));
   });
 });

@@ -21,6 +21,7 @@ import { draftFor, NARROW, reviewFiles, STATUS, type ReviewFile, type Status } f
 import { api } from "@/lib/api";
 import { plural } from "@/lib/format";
 import { asObj } from "@/lib/narrow";
+import { scrollBehavior } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 const baseName = (p: string) => p.split("/").pop() || p;
@@ -70,16 +71,16 @@ async function copy(text: string) {
 function StatusMark({ status }: { status: Status }) {
   const s = STATUS[status];
   return (
-    <span className={cn("w-3 shrink-0 text-center font-mono text-[11px] font-semibold", s.tone)} title={status} aria-label={status}>
+    <span className={cn("w-3 shrink-0 text-center font-mono text-2xs font-semibold", s.tone)} title={status} aria-label={status}>
       {s.letter}
     </span>
   );
 }
 
 function Counts({ file }: { file: ReviewFile }) {
-  if (file.binary) return <span className="shrink-0 text-[11px] text-muted-foreground">binary</span>;
+  if (file.binary) return <span className="shrink-0 text-2xs text-muted-foreground">binary</span>;
   return (
-    <span className="shrink-0 font-mono text-[11px] tabular-nums">
+    <span className="shrink-0 font-mono text-2xs tabular-nums">
       <span className="text-green-700 dark:text-green-400">+{file.added}</span>{" "}
       <span className="text-red-700 dark:text-red-400">−{file.removed}</span>
     </span>
@@ -112,7 +113,7 @@ export default function DiffReview({
 }) {
   const chat = useChat();
   // In the expanded dialog the list and the diff fill its height; inline they stop at 34 rem.
-  const { expanded, expand } = useUiView();
+  const { expanded, expand, name: uiName } = useUiView();
   const files = useMemo(() => reviewFiles(text, meta), [text, meta]);
   const [viewed, setViewed] = useViewed(name || "viewed", range || "HEAD");
   const isViewed = useCallback((f: ReviewFile) => viewed[f.path] === f.hash, [viewed]);
@@ -175,7 +176,7 @@ export default function DiffReview({
     const next = Math.max(0, Math.min(current.hunks.length - 1, hunk + by));
     setAt({ path: current.path, hunk: next });
     const el = body.current;
-    if (el) el.scrollTo({ top: hunkTop(el, starts, next), behavior: "smooth" });
+    if (el) el.scrollTo({ top: hunkTop(el, starts, next), behavior: scrollBehavior() });
   }
   function onKeyDown(e: KeyboardEvent) {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -302,7 +303,7 @@ export default function DiffReview({
             <StatusMark status={f.status} />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className={cn("truncate font-mono text-xs", isViewed(f) && "text-muted-foreground")}>{baseName(f.path)}</span>
-              {dirName(f.path) && <span className="truncate text-[11px] text-muted-foreground">{dirName(f.path)}</span>}
+              {dirName(f.path) && <span className="truncate text-2xs text-muted-foreground">{dirName(f.path)}</span>}
             </span>
             <Counts file={f} />
           </button>
@@ -346,7 +347,7 @@ export default function DiffReview({
           )}
           <WrapToggle wrap={wrap} onChange={setWrap} disabled={rows.length > WRAP_MAX} />
           {expand && (
-            <Button variant="ghost" size="icon-xs" aria-label="Expand" title="Expand (F)" onClick={expand}>
+            <Button variant="ghost" size="icon-xs" aria-label={uiName ? `Expand ${uiName}` : "Expand"} title="Expand (F)" onClick={expand}>
               <Maximize2 />
             </Button>
           )}
@@ -373,13 +374,13 @@ export default function DiffReview({
               </span>
               <Counts file={current} />
               {current.hunks.length > 1 && (
-                <span className="text-[11px] text-muted-foreground tabular-nums">
+                <span className="text-2xs text-muted-foreground tabular-nums">
                   hunk {Math.min(hunk + 1, current.hunks.length)} / {current.hunks.length}
                 </span>
               )}
               <span className="ml-auto flex flex-wrap items-center gap-0.5">
                 {notice && (
-                  <span role="status" className="mr-1 text-[11px] text-muted-foreground">
+                  <span role="status" className="mr-1 text-2xs text-muted-foreground">
                     {notice}
                   </span>
                 )}

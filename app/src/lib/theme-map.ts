@@ -5,7 +5,10 @@
 // colours, some four hundred, and plenty set `focusBorder` to something
 // invisible. So every token resolves as: candidate keys in order → the first
 // that is actually legible → otherwise the theme's own hue, corrected until it is.
-// Chart colours are not themed: they stay the validated colour-blind-safe palette.
+// Chart colours follow the theme too, but only through chart-palette.ts, which checks each
+// set against the theme's own surface and falls back to yaah's validated palette.
+
+import { chartPalette, chartTokens, type Candidate, type ChartPalette } from "./chart-palette.ts";
 
 export type VsCodeTheme = {
   name?: string;
@@ -27,7 +30,12 @@ export type Palette = {
   removeFg: string;
   selection: string;
   dark: boolean;
+  /** The theme's own chart colour candidates (`rgb()`), checked when the theme is applied (chart-palette.ts). */
+  chartSources?: ChartSources;
 };
+
+/** Series candidates in yaah's slot order (blue, orange, aqua, yellow, magenta), with a red for the diverging warm pole. */
+export type ChartSources = { charts?: string[]; chartsRed?: string; ansi?: string[]; ansiRed?: string };
 
 type Rgb = [number, number, number];
 type Rgba = [number, number, number, number];
@@ -183,6 +191,21 @@ export function toPalette(theme: VsCodeTheme): Palette {
     dark ? [248, 113, 113] : [215, 58, 73],
   );
   const selection = pick(c, bg, ["editor.selectionBackground", "selection.background"]) ?? mix(bg, accent, 0.35);
+  // Only a full set counts: a theme that names three chart colours hasn't designed a palette.
+  const set = (keys: string[]) => {
+    const got = keys.map((k) => pick(c, bg, [k]));
+    return got.every((x) => x != null) ? got.map((x) => toCss(x)) : undefined;
+  };
+  const one = (key: string) => {
+    const x = pick(c, bg, [key]);
+    return x ? toCss(x) : undefined;
+  };
+  const chartSources: ChartSources = {
+    charts: set(["charts.blue", "charts.orange", "charts.green", "charts.yellow", "charts.purple"]),
+    chartsRed: one("charts.red"),
+    ansi: set([ansi("Blue"), ansi("Red"), ansi("Cyan"), ansi("Yellow"), ansi("Magenta")]),
+    ansiRed: one(ansi("Red")),
+  };
   return {
     canvas: toCss(bg),
     surface: toCss(surface),
@@ -194,7 +217,17 @@ export function toPalette(theme: VsCodeTheme): Palette {
     removeFg: toCss(removeFg),
     selection: toCss(selection),
     dark,
+    chartSources,
   };
+}
+
+/** The chart colours a palette gets on its canvas (cards are the canvas): the theme's own if they pass, else yaah's. */
+export function chartPaletteFor(p: Palette): ChartPalette {
+  const s = p.chartSources ?? {};
+  const candidates: Candidate[] = [];
+  if (s.charts) candidates.push({ source: "theme charts", colors: s.charts.map(rgb), red: s.chartsRed ? rgb(s.chartsRed) : undefined });
+  if (s.ansi) candidates.push({ source: "terminal ANSI", colors: s.ansi.map(rgb), red: s.ansiRed ? rgb(s.ansiRed) : undefined });
+  return chartPalette(candidates, rgb(p.canvas), rgb(p.fg));
 }
 
 /** Text on a filled accent (buttons): whichever of the theme's text, white or black reads best. */
@@ -202,40 +235,98 @@ function onAccent(accent: Rgb, fg: Rgb, canvas: Rgb): Rgb {
   return [canvas, fg, WHITE, BLACK].sort((a, b) => contrast(b, accent) - contrast(a, accent))[0];
 }
 
+// ── Accessibility floors (docs/research/accessibility-personas.md: TH-1, TH-2, FO-1, FO-2) ──
+// The palette keeps a theme's own picks; these floors hold for the tokens built from it, on
+// every surface the token is drawn on, so a stored palette (themes.json) or a user's file
+// gets them too without being remapped. index.css keeps yaah's own light and dark to the same
+// floors (theme-contrast.test.ts checks both).
+
+/** WCAG 2.x minimums per token: small text 4.5:1, focus indicators and control borders 3:1. */
+export const FLOORS = { mutedText: 4.5, destructive: 4.5, ring: 3, input: 3 } as const;
+
+/** Tints the destructive colour is drawn on (badges, buttons, failed output): its own 10% and 20%. */
+export const DESTRUCTIVE_TINTS = [0.1, 0.2] as const;
+
+/**
+ * `color` pushed until it clears `min` on every one of `surfaces`: first toward `via` (muted text
+ * goes toward the body text, so it doesn't outshine it where the body text itself suffices), then
+ * toward white or black, whichever the surfaces aren't. `onTints` also checks it on its own tints
+ * over the first surface.
+ */
+function clearOn(color: Rgb, surfaces: Rgb[], min: number, { onTints = [], via }: { onTints?: readonly number[]; via?: Rgb } = {}): Rgb {
+  const target = luminance(surfaces[0]) < 0.5 ? WHITE : BLACK;
+  const fails = (c: Rgb) => surfaces.some((s) => contrast(c, s) < min) || onTints.some((a) => contrast(c, mix(surfaces[0], c, a)) < min);
+  let out = color;
+  if (via) {
+    for (let i = 0; i < 48 && fails(out); i++) out = mix(out, via, 0.08);
+    // Rounding stalls a step or two short: land on it.
+    if (fails(out)) out = via;
+  }
+  for (let i = 0; i < 48 && fails(out); i++) out = mix(out, target, 0.06);
+  return out;
+}
+
+/** The surfaces muted text, the focus ring and the destructive colour sit on, as `toTokens` builds them. */
+type TokenSurfaces = { bg: Rgb; raised: Rgb; popover: Rgb; sidebar: Rgb; sidebarAccent: Rgb };
+
+/** Muted text, destructive, focus ring and input border, each floored on the surfaces it is drawn on. */
+function flooredTokens(p: Palette, s: TokenSurfaces, colors: { fg: Rgb; border: Rgb; accent: Rgb }) {
+  const { fg, border, accent } = colors;
+  // The soft reply bubble is `bg-muted/50` over the page.
+  const bubble = mix(s.bg, s.raised, 0.5);
+  // Dark controls are filled with `bg-input/30` (outline buttons, fields, the sidebar's search), and `--input`
+  // is the theme's border: a strong one (Dracula's purple) tints them enough to matter for the text on them.
+  const fields = p.dark ? [mix(s.bg, border, 0.3), mix(s.sidebar, border, 0.3)] : [];
+  const textSurfaces = [s.bg, s.raised, bubble, s.popover, s.sidebar, s.sidebarAccent, ...fields];
+  return {
+    // Body text clears the page by construction (toPalette); dark popovers sit a step lighter.
+    popoverForeground: clearOn(fg, [s.popover], 4.5),
+    mutedForeground: clearOn(rgb(p.muted), textSurfaces, FLOORS.mutedText, { via: fg }),
+    destructive: clearOn(rgb(p.removeFg), [s.bg, s.popover, s.raised], FLOORS.destructive, { onTints: DESTRUCTIVE_TINTS }),
+    ring: clearOn(accent, [s.bg, s.popover, s.sidebar], FLOORS.ring),
+    // Light themes only: in dark ones `--input` also fills fields and outline buttons (`dark:bg-input/30`).
+    input: p.dark ? border : clearOn(border, [s.bg, s.popover], FLOORS.input),
+  };
+}
+
 /** The app's CSS variables (shadcn tokens) from a palette. */
 export function toTokens(p: Palette): Record<string, string> {
   const [bg, surface, border, fg, accent] = [p.canvas, p.surface, p.border, p.fg, p.accent].map(rgb);
   const raised = mix(bg, fg, p.dark ? 0.08 : 0.05);
   const onPrimary = onAccent(accent, fg, bg);
+  const popover = p.dark ? mix(bg, WHITE, 0.03) : bg;
+  const sidebarAccent = mix(surface, fg, p.dark ? 0.08 : 0.06);
+  const floored = flooredTokens(p, { bg, raised, popover, sidebar: surface, sidebarAccent }, { fg, border, accent });
   const tokens: Record<string, Rgb | string> = {
     background: bg,
     foreground: fg,
     card: bg,
     "card-foreground": fg,
-    popover: p.dark ? mix(bg, WHITE, 0.03) : bg,
-    "popover-foreground": fg,
+    popover,
+    "popover-foreground": floored.popoverForeground,
     primary: accent,
     "primary-foreground": onPrimary,
     secondary: raised,
     "secondary-foreground": fg,
     muted: raised,
-    "muted-foreground": p.muted,
+    "muted-foreground": floored.mutedForeground,
     accent: raised,
     "accent-foreground": fg,
-    destructive: p.removeFg,
+    destructive: floored.destructive,
     border,
-    input: border,
-    ring: accent,
+    input: floored.input,
+    ring: floored.ring,
     sidebar: surface,
     "sidebar-foreground": fg,
     "sidebar-primary": accent,
     "sidebar-primary-foreground": onPrimary,
-    "sidebar-accent": mix(surface, fg, p.dark ? 0.08 : 0.06),
+    "sidebar-accent": sidebarAccent,
     "sidebar-accent-foreground": fg,
     "sidebar-border": border,
-    "sidebar-ring": accent,
+    "sidebar-ring": floored.ring,
   };
-  return Object.fromEntries(Object.entries(tokens).map(([k, v]) => [k, typeof v === "string" ? v : toCss(v)]));
+  const out = Object.fromEntries(Object.entries(tokens).map(([k, v]) => [k, typeof v === "string" ? v : toCss(v)]));
+  return { ...out, ...chartTokens(chartPaletteFor(p)) };
 }
 
 /** Readability of the tokens that matter, for the audit. */
@@ -249,5 +340,12 @@ export function legibility(p: Palette) {
     onPrimary: contrast(rgb(t["primary-foreground"]), rgb(t.primary)),
     sidebarText: contrast(rgb(t["sidebar-foreground"]), rgb(t.sidebar)),
     sidebarMuted: contrast(rgb(t["muted-foreground"]), rgb(t.sidebar)),
+    // The accessibility floors (FLOORS): the reply bubble, the focus ring, destructive on its tints, input borders.
+    mutedOnBubble: contrast(rgb(t["muted-foreground"]), mix(rgb(t.background), rgb(t.muted), 0.5)),
+    ring: Math.min(...[t.background, t.popover, t.sidebar].map((s) => contrast(rgb(t.ring), rgb(s)))),
+    destructive: contrast(rgb(t.destructive), rgb(t.background)),
+    destructiveOnTint: Math.min(...DESTRUCTIVE_TINTS.map((a) => contrast(rgb(t.destructive), mix(rgb(t.background), rgb(t.destructive), a)))),
+    // Dark themes keep `--input` as their border (it also fills controls there): not floored.
+    input: p.dark ? Infinity : Math.min(contrast(rgb(t.input), rgb(t.background)), contrast(rgb(t.input), rgb(t.popover))),
   };
 }

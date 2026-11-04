@@ -9,6 +9,7 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ErrorText } from "@/components/error-text";
 import { Page, Section } from "@/components/settings/parts";
+import { FontsSection } from "@/components/settings/font-settings";
 import { ThemePicker } from "@/components/settings/theme-picker";
 import { api, type Appearance, type GeneralSettings } from "@/lib/api";
 import { compactPath } from "@/lib/format";
@@ -16,9 +17,9 @@ import { terminalApi } from "@/lib/terminal-api";
 import { BUNDLED, setAppearance, setThemes } from "@/lib/theme";
 
 const APPEARANCE: { id: Appearance; label: string; icon: ReactNode }[] = [
-  { id: "system", label: "System", icon: <Monitor className="size-4" /> },
-  { id: "light", label: "Light", icon: <Sun className="size-4" /> },
-  { id: "dark", label: "Dark", icon: <Moon className="size-4" /> },
+  { id: "system", label: "System", icon: <Monitor className="size-5 shrink-0" /> },
+  { id: "light", label: "Light", icon: <Sun className="size-5 shrink-0" /> },
+  { id: "dark", label: "Dark", icon: <Moon className="size-5 shrink-0" /> },
 ];
 
 export function GeneralSettings() {
@@ -58,7 +59,7 @@ export function GeneralSettings() {
       <Section title="Appearance">
         <RadioGroup
           aria-label="Appearance"
-          className="grid w-full max-w-md grid-cols-3 gap-2"
+          className="grid w-full grid-cols-3 gap-2"
           value={s.appearance}
           onValueChange={(v) => pick(v as Appearance)}
         >
@@ -66,7 +67,7 @@ export function GeneralSettings() {
             <Label
               key={a.id}
               htmlFor={`appearance-${a.id}`}
-              className="flex cursor-pointer flex-col items-center gap-1.5 rounded-lg border p-3 font-normal transition-colors hover:bg-muted has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5 has-[[data-state=checked]]:font-medium"
+              className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border px-3 py-4 leading-none font-normal transition-colors hover:bg-muted has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5 has-[[data-state=checked]]:font-medium"
             >
               <RadioGroupItem id={`appearance-${a.id}`} value={a.id} className="sr-only" />
               {a.icon}
@@ -87,6 +88,7 @@ export function GeneralSettings() {
             <ThemePicker slot="dark" value={s.theme.dark} custom={s.customThemes} onPick={(id) => pickTheme({ ...s.theme, dark: id })} />
           )}
         </div>
+        <FontsSection initial={s.fonts} />
       </Section>
 
       <Section title="Workspace folders" about="Where the repo picker looks for git repos when you add repos to a project.">
@@ -145,7 +147,7 @@ export function GeneralSettings() {
               <div className="flex min-w-0 flex-col gap-0.5">
                 <span className="text-sm font-medium">{d.label}</span>
                 <span className="text-xs text-muted-foreground">{d.about}</span>
-                <span className="truncate font-mono text-[11px] text-muted-foreground" title={d.path}>
+                <span className="truncate font-mono text-2xs text-muted-foreground" title={d.path}>
                   {compactPath(d.path)}
                 </span>
               </div>

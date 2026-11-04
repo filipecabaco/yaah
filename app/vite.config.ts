@@ -16,18 +16,7 @@ export default defineConfig(() => ({
   // Libraries only reached through lazy imports (ui-blocks/*) are pre-bundled with the rest,
   // so the dev server never discovers them mid-session and ends up with two copies of React.
   optimizeDeps: {
-    include: [
-      "recharts",
-      "leaflet",
-      "react-leaflet",
-      "@tanstack/react-table",
-      "mermaid",
-      "codemirror",
-      "@codemirror/lang-sql",
-      "micromark-extension-mdx",
-      "mdast-util-mdx-jsx",
-      "mdast-util-mdx-expression",
-    ],
+    include: ["leaflet", "react-leaflet", "@tanstack/react-table", "mermaid", "codemirror", "@codemirror/lang-sql"],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
