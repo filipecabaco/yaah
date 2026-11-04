@@ -39,14 +39,14 @@ const STATIONS: [string, number, number, number][] = [
   ["Alameda", 38.7367, -9.1337, 16],
   ["Arroios", 38.7335, -9.1355, 5],
   ["Intendente", 38.7206, -9.1352, 8],
-  ["Martim Moniz", 38.7172, -9.1360, 14],
+  ["Martim Moniz", 38.7172, -9.136, 14],
   ["Graça", 38.7191, -9.1289, 2],
   ["Santa Apolónia", 38.7138, -9.1226, 17],
   ["Campo das Cebolas", 38.7098, -9.1317, 6],
   ["Alfama", 38.7105, -9.1295, 1],
   ["Estrela", 38.7128, -9.1595, 9],
   ["Santos", 38.7066, -9.1536, 12],
-  ["Alcântara", 38.7034, -9.1760, 19],
+  ["Alcântara", 38.7034, -9.176, 19],
   ["Belém", 38.6979, -9.2064, 21],
   ["Jardim da Estrela", 38.7137, -9.1604, 8],
   ["Campo de Ourique", 38.7168, -9.1672, 10],
@@ -55,10 +55,20 @@ const STATIONS: [string, number, number, number][] = [
 const bikes = card(
   "City scale: bike stations in Lisbon",
   "28 made-up stations close together. The label is the station and its free bikes.",
-  statRow(stat("Stations", "28"), stat("Free bikes now", String(STATIONS.reduce((s, x) => s + x[3], 0))), stat("Empty stations", String(STATIONS.filter((x) => x[3] <= 2).length), { hint: "2 bikes or fewer" })),
+  statRow(
+    stat("Stations", "28"),
+    stat("Free bikes now", String(STATIONS.reduce((s, x) => s + x[3], 0))),
+    stat("Empty stations", String(STATIONS.filter((x) => x[3] <= 2).length), { hint: "2 bikes or fewer" }),
+  ),
   map(
     420,
-    STATIONS.map(([label, lat, lng, n]) => ({ lat, lng, label: `${label}: ${n} bikes`, detail: `${n} free bikes`, tone: (n <= 2 ? "danger" : n <= 6 ? "warning" : "success") as Tone })),
+    STATIONS.map(([label, lat, lng, n]) => ({
+      lat,
+      lng,
+      label: `${label}: ${n} bikes`,
+      detail: `${n} free bikes`,
+      tone: n <= 2 ? "danger" : n <= 6 ? "warning" : "success",
+    })),
   ),
   text("Green: 7 or more bikes. Amber: 3 to 6. Red: 2 or fewer. The number is in every label."),
 );
@@ -78,9 +88,31 @@ const STORES: [string, number, number, number][] = [
 const stores = card(
   "Country scale: store revenue in Portugal",
   "Nine made-up stores, yearly revenue in millions of euros, in the marker labels.",
-  statRow(stat("Revenue", `€${STORES.reduce((s, x) => s + x[3], 0).toFixed(1)}M`, { delta: "+7%", trend: "up" }), stat("Top store", "Lisboa"), stat("Stores", String(STORES.length))),
-  map(380, STORES.map(([label, lat, lng, v]) => ({ lat, lng, label: `${label}: €${v}M`, detail: `€${v}M a year`, tone: (v >= 3 ? "success" : v < 0.8 ? "warning" : "default") as Tone }))),
-  chart({ kind: "bar", x: "store", sort: "value", labels: "ends", unit: "M", height: 240, data: STORES.map(([store, , , v]) => ({ store, revenue: v })), series: [{ key: "revenue", label: "Revenue, € millions" }] }),
+  statRow(
+    stat("Revenue", `€${STORES.reduce((s, x) => s + x[3], 0).toFixed(1)}M`, { delta: "+7%", trend: "up" }),
+    stat("Top store", "Lisboa"),
+    stat("Stores", String(STORES.length)),
+  ),
+  map(
+    380,
+    STORES.map(([label, lat, lng, v]) => ({
+      lat,
+      lng,
+      label: `${label}: €${v}M`,
+      detail: `€${v}M a year`,
+      tone: v >= 3 ? "success" : v < 0.8 ? "warning" : "default",
+    })),
+  ),
+  chart({
+    kind: "bar",
+    x: "store",
+    sort: "value",
+    labels: "ends",
+    unit: "M",
+    height: 240,
+    data: STORES.map(([store, , , v]) => ({ store, revenue: v })),
+    series: [{ key: "revenue", label: "Revenue, € millions" }],
+  }),
 );
 
 // Continent scale: edge locations with status.
@@ -107,10 +139,23 @@ const edge = card(
     stat("Degraded", String(EDGE.filter((e) => e[3] === "degraded").length), { trend: "down" }),
     stat("Down", String(EDGE.filter((e) => e[3] === "down").length), { trend: "down" }),
   ),
-  map(400, EDGE.map(([label, lat, lng, s, ms]) => ({ lat, lng, label: `${label} (${s})`, detail: s === "down" ? "No response" : `${ms} ms median`, tone: TONE[s] }))),
+  map(
+    400,
+    EDGE.map(([label, lat, lng, s, ms]) => ({
+      lat,
+      lng,
+      label: `${label} (${s})`,
+      detail: s === "down" ? "No response" : `${ms} ms median`,
+      tone: TONE[s],
+    })),
+  ),
   text("Legend: green is ok, amber is degraded (over 40 ms), red is down."),
   table(
-    [["site", "Site"], ["status", "Status"], ["latency", "Median latency", "right"]],
+    [
+      ["site", "Site"],
+      ["status", "Status"],
+      ["latency", "Median latency", "right"],
+    ],
     EDGE.map(([site, , , status, ms]) => ({ site, status, latency: status === "down" ? "none" : `${ms} ms` })),
   ),
 );
@@ -132,7 +177,10 @@ const world = card(
   "World scale: offices on six continents",
   "Ten made-up offices. The map fits them all, so it opens zoomed far out.",
   statRow(stat("Offices", String(OFFICES.length)), stat("Continents", "6"), stat("Time zones", "9")),
-  map(380, OFFICES.map(([label, lat, lng]) => ({ lat, lng, label, detail: "Office" }))),
+  map(
+    380,
+    OFFICES.map(([label, lat, lng]) => ({ lat, lng, label, detail: "Office" })),
+  ),
 );
 
 // Route-like: a delivery round.
@@ -152,10 +200,20 @@ const route = card(
   statRow(stat("Stops", String(STOPS.length - 1)), stat("Duration", "2 h 50 min"), stat("Distance", "11.4 km")),
   map(
     380,
-    STOPS.map(([label, lat, lng, t], i) => ({ lat, lng, label: `${i + 1}. ${label}`, detail: `Arrive ${t}`, tone: (i === 0 || i === STOPS.length - 1 ? "default" : "success") as Tone })),
+    STOPS.map(([label, lat, lng, t], i) => ({
+      lat,
+      lng,
+      label: `${i + 1}. ${label}`,
+      detail: `Arrive ${t}`,
+      tone: i === 0 || i === STOPS.length - 1 ? "default" : "success",
+    })),
   ),
   table(
-    [["n", "Stop", "right"], ["name", "Name"], ["eta", "Arrive", "right"]],
+    [
+      ["n", "Stop", "right"],
+      ["name", "Name"],
+      ["eta", "Arrive", "right"],
+    ],
     STOPS.map(([name, , , eta], i) => ({ n: i + 1, name, eta })),
   ),
 );
@@ -170,7 +228,14 @@ const single = card(
 
 // Dense: about 200 weather stations around central Europe.
 const rand = rng(42);
-const CENTRES: [number, number, number][] = [[48.5, 9, 16], [46.5, 2.5, 14], [51, 10.5, 20], [50, 20, 12], [45, 12, 12], [52.5, 0, 8]];
+const CENTRES: [number, number, number][] = [
+  [48.5, 9, 16],
+  [46.5, 2.5, 14],
+  [51, 10.5, 20],
+  [50, 20, 12],
+  [45, 12, 12],
+  [52.5, 0, 8],
+];
 const stations = Array.from({ length: 200 }, (_, i) => {
   const [lat, lng, spread] = CENTRES[i % CENTRES.length];
   const t = Math.round((12 + (lat - 48) * -1.2 + (rand() - 0.5) * 8) * 10) / 10;
@@ -184,7 +249,16 @@ const dense = card(
     stat("Hottest", `${Math.max(...stations.map((s) => s.t))} °C`),
     stat("Coldest", `${Math.min(...stations.map((s) => s.t))} °C`),
   ),
-  map(460, stations.map((s) => ({ lat: s.lat, lng: s.lng, label: `${s.id}: ${s.t} °C`, detail: `${s.t} °C`, tone: (s.t >= 18 ? "danger" : s.t <= 6 ? "warning" : "default") as Tone }))),
+  map(
+    460,
+    stations.map((s) => ({
+      lat: s.lat,
+      lng: s.lng,
+      label: `${s.id}: ${s.t} °C`,
+      detail: `${s.t} °C`,
+      tone: s.t >= 18 ? "danger" : s.t <= 6 ? "warning" : "default",
+    })),
+  ),
   text("Red: 18 °C or more. Amber: 6 °C or less. Each label carries the reading."),
 );
 
@@ -211,8 +285,26 @@ const mixed = card(
     type: "grid",
     props: { columns: 2, gap: "md" },
     children: [
-      map(320, REGIONS.map(([label, lat, lng, v, g]) => ({ lat, lng, label: `${label}: €${v}M`, detail: `${g > 0 ? "+" : ""}${g}% on last year`, tone: (g < 0 ? "danger" : g >= 10 ? "success" : "default") as Tone }))),
-      chart({ kind: "bar", x: "region", sort: "value", labels: "ends", unit: "M", height: 320, data: REGIONS.map(([region, , , sales]) => ({ region, sales })), series: [{ key: "sales", label: "Sales, € millions" }] }),
+      map(
+        320,
+        REGIONS.map(([label, lat, lng, v, g]) => ({
+          lat,
+          lng,
+          label: `${label}: €${v}M`,
+          detail: `${g > 0 ? "+" : ""}${g}% on last year`,
+          tone: g < 0 ? "danger" : g >= 10 ? "success" : "default",
+        })),
+      ),
+      chart({
+        kind: "bar",
+        x: "region",
+        sort: "value",
+        labels: "ends",
+        unit: "M",
+        height: 320,
+        data: REGIONS.map(([region, , , sales]) => ({ region, sales })),
+        series: [{ key: "sales", label: "Sales, € millions" }],
+      }),
     ],
   },
 );
