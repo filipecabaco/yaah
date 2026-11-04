@@ -423,8 +423,22 @@ pub fn edit_ui(hub: State<'_, Arc<Hub>>, session_id: String, index: usize, value
 }
 
 #[tauri::command]
-pub async fn send_prompt(hub: State<'_, Arc<Hub>>, session_id: String, text: String, mentions: Option<Vec<String>>) -> Result<(), String> {
-    hub.prompt(&session_id, text, mentions.unwrap_or_default()).await
+pub async fn send_prompt(
+    hub: State<'_, Arc<Hub>>,
+    staging: State<'_, crate::attachments::Staging>,
+    session_id: String,
+    text: String,
+    mentions: Option<Vec<String>>,
+    // Ids of what the composer attached (`attachments::stage_attachments`); empty when absent.
+    attachments: Option<Vec<String>>,
+) -> Result<(), String> {
+    let ids = attachments.unwrap_or_default();
+    let files = staging.get(&session_id, &ids)?;
+    // `github#o/r#9`, `linear#ENG-1`… in the text, read (read-only) before the turn starts.
+    let references = crate::references::resolve_text(crate::integrations::Integrations::user(), &text).await;
+    hub.prompt_with_references(&session_id, text, mentions.unwrap_or_default(), files, references).await?;
+    staging.remove(&ids);
+    Ok(())
 }
 
 /// Move a chat to another agent: its next prompt goes there, with the conversation handed off.

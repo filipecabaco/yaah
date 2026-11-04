@@ -1,0 +1,163 @@
+// The composer's Model and Effort pickers: shown only for what the chat's agent
+// offers (ACP session config options, or the older `models`), as Rust marks them
+// (`role` in session/config.rs). A pick goes to Rust, which checks it, sends it to
+// the agent and emits what the agent answers; this only renders that. Disabled
+// while a turn runs: a change applies to the next message.
+import { useEffect, useId, useRef, useState } from "react";
+import { ChevronDown, Cpu, Gauge, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { isFocusedPane } from "@/components/chat-context";
+import { ErrorText } from "@/components/error-text";
+import { api, type ConfigChoice, type ConfigOption, type SessionInfo } from "@/lib/api";
+import { onOpenComposerConfig, type ConfigRole } from "@/lib/app-events";
+import { choiceName, configOption } from "@/lib/composer-config";
+
+/** Past this many values the list gets a search box. */
+const SEARCH_FROM = 8;
+
+const LABELS: Record<ConfigRole, { label: string; icon: typeof Cpu }> = {
+  model: { label: "Model", icon: Cpu },
+  effort: { label: "Effort", icon: Gauge },
+};
+
+export function ComposerConfig({ session, pane }: { session: SessionInfo; pane?: string }) {
+  const [open, setOpen] = useState<ConfigRole | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  const roles = (["model", "effort"] as const).filter((r) => configOption(session, r));
+
+  // ⌘K "Change model…" / "Change effort…" open a picker in the pane they came from.
+  useEffect(
+    () =>
+      onOpenComposerConfig((r) => {
+        if (r.sessionId === session.sessionId && (r.pane === pane || (!r.pane && isFocusedPane(pane)))) setOpen(r.role);
+      }),
+    [session.sessionId, pane],
+  );
+
+  if (roles.length === 0) return null;
+  return (
+    <div className="chat-column mt-1.5">
+      <div role="group" aria-label="Model and effort for the next message" className="-ml-2 flex flex-wrap items-center gap-1">
+        {roles.map((role) => (
+          <ConfigPicker
+            key={role}
+            role={role}
+            session={session}
+            option={configOption(session, role)!}
+            open={open === role}
+            onOpenChange={(o) => setOpen(o ? role : null)}
+            onError={setError}
+          />
+        ))}
+      </div>
+      <ErrorText error={error} className="mt-1" />
+    </div>
+  );
+}
+
+function ConfigPicker({
+  role,
+  session,
+  option,
+  open,
+  onOpenChange,
+  onError,
+}: {
+  role: ConfigRole;
+  session: SessionInfo;
+  option: ConfigOption;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onError: (e: unknown) => void;
+}) {
+  const { label, icon: Icon } = LABELS[role];
+  const [saving, setSaving] = useState<string | null>(null);
+  const listId = useId();
+  const list = useRef<HTMLDivElement>(null);
+  const name = choiceName(option);
+  const busy = session.running;
+  const searchable = option.choices.length > SEARCH_FROM;
+  // Values in the agent's groups, or one list.
+  const groups = Object.entries(option.choices.reduce<Record<string, ConfigChoice[]>>((acc, c) => ((acc[c.group ?? ""] ??= []).push(c), acc), {}));
+
+  async function pick(value: string) {
+    onOpenChange(false);
+    if (value === option.current) return;
+    onError(null);
+    setSaving(value);
+    try {
+      await api.setChatConfig(session.sessionId, option.id, value);
+    } catch (e) {
+      onError(e);
+    } finally {
+      setSaving(null);
+    }
+  }
+
+  const title = busy
+    ? `${label}: ${name}. Wait for the turn to end to change it.`
+    : `${option.description ? `${option.description}. ` : ""}Applies to your next message.`;
+  return (
+    <Popover open={open && !busy} onOpenChange={onOpenChange}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={busy || saving != null}
+          aria-label={`${label}: ${name}`}
+          title={title}
+          data-config={role}
+          className="max-w-[16rem] text-muted-foreground"
+        >
+          {saving != null ? <Loader2 className="animate-spin" aria-hidden /> : <Icon aria-hidden />}
+          <span className="truncate text-foreground">{saving != null ? (option.choices.find((c) => c.value === saving)?.name ?? saving) : name}</span>
+          <ChevronDown aria-hidden />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        side="top"
+        className="w-[min(24rem,calc(100vw-2rem))] p-0"
+        // Without a search box the list itself takes the focus, so ↑↓ and Enter work at once.
+        onOpenAutoFocus={(e) => {
+          if (searchable) return;
+          e.preventDefault();
+          list.current?.focus();
+        }}
+      >
+        <Command ref={list} tabIndex={-1} label={label} defaultValue={option.current} loop className="outline-none">
+          {searchable && (
+            <CommandInput
+              autoFocus
+              aria-label={`Search ${label.toLowerCase()} choices`}
+              placeholder={`Search ${option.choices.length} ${role === "model" ? "models" : "levels"}`}
+            />
+          )}
+          <CommandList id={listId} label={`${label} choices`} className="max-h-72">
+            <CommandEmpty>No {role === "model" ? "model" : "level"} matches.</CommandEmpty>
+            {groups.map(([group, choices]) => (
+              <CommandGroup key={group} heading={group || label}>
+                {choices.map((c) => (
+                  <CommandItem
+                    key={c.value}
+                    value={c.value}
+                    keywords={[c.name, c.description ?? ""]}
+                    data-checked={c.value === option.current}
+                    onSelect={() => void pick(c.value)}
+                  >
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate">{c.name}</span>
+                      {c.description && <span className="truncate text-xs text-muted-foreground">{c.description}</span>}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}

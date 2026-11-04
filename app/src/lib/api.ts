@@ -2,6 +2,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { Layout } from "@/lib/layout";
+import type { Attachment, ImageBlock } from "@/lib/attachments";
 
 /** A login method an agent offers (ACP `authMethods`). */
 export type AuthMethod = {
@@ -354,6 +355,40 @@ export type SessionInfo = {
   remembered?: Record<string, string>;
   /** A quick chat's trusted MCP servers (a project chat's are its project's). */
   trustedMcpServers?: string[];
+  /** The agent's settings (model, effort, …) and the user's picks (session/config.rs). */
+  config?: ChatConfig;
+};
+
+/** One value of a config option. */
+export type ConfigChoice = { value: string; name: string; description?: string; group?: string };
+
+/** A session setting the agent offers (ACP session config options; session/config.rs `ConfigOption`). */
+export type ConfigOption = {
+  id: string;
+  name: string;
+  description?: string;
+  /** ACP category: "model", "thought_level", "mode", … */
+  category?: string;
+  kind: "select" | "boolean";
+  /** The value in use, one of `choices`. */
+  current: string;
+  choices: ConfigChoice[];
+  /** "models": the older unstable `models` field. */
+  source?: "models";
+  /** Set by Rust on the one option the composer shows as Model and the one it shows as Effort. */
+  role?: "model" | "effort";
+};
+
+export type ChatConfig = { options?: ConfigOption[]; choices?: Record<string, string> };
+
+/** Settings → Agents, "New chats start with" (session/config.rs `AgentDefaults`). */
+export type AgentConfigDefaults = {
+  /** The profile's model and effort options, as its newest chat last saw them; empty before its first chat. */
+  options: ConfigOption[];
+  /** Option id → the value new chats start with. */
+  defaults: Record<string, string>;
+  /** Set when a model provider binding gives the profile its model: then there is no model default. */
+  providerModel?: string;
 };
 
 export type SlashCommand = { name: string; description: string; input?: { hint?: string } | null };
@@ -471,6 +506,33 @@ export type ConnectionInfo = { name: string; kind: string; target: string };
 
 export type FileMatch = { path: string; label: string };
 
+// References to tracker items in a message (`github#owner/repo#9`, `gitlab#group/proj!45`, `linear#ENG-123`). Mirrors `src-tauri/src/references.rs`.
+export type ReferenceService = "github" | "gitlab" | "linear";
+export type Reference = {
+  service: ReferenceService;
+  kind: "pr" | "mr" | "issue";
+  /** `owner/repo#9`, `group/proj!45`, `ENG-123`. */
+  id: string;
+  /** What goes in the text: `github#owner/repo#9`. */
+  token: string;
+  title: string;
+  url: string;
+  state: "open" | "draft" | "merged" | "closed" | "done" | "canceled" | "";
+  /** The tracker's own name when it says more (Linear's "In Review", GitHub's "Not planned"). */
+  status?: string;
+  /** `owner/repo`, `group/proj` or a Linear team key. */
+  scope: string;
+  updatedAt?: string;
+  /** On a sent reference that couldn't be read: why. */
+  error?: string;
+};
+/** The composer's `#` list, ranked in Rust: the chat's repos first, then yours. `connected`: the services asked for that are. */
+export type ReferenceSuggestions = {
+  items: Reference[];
+  connected: ReferenceService[];
+  errors: { service: WorkService; kind: WorkErrorKind; message: string }[];
+};
+
 export type PermissionOption = {
   optionId: string;
   name: string;
@@ -493,8 +555,10 @@ export type PlanItem = {
 };
 
 export type Entry =
-  | { type: "user"; text: string; attachments: string[] }
-  | { type: "agent"; text: string; messageId: string | null }
+  /** `files`: what the user attached (lib/attachments.ts), as sent. `references`: tracker items the text names, as read when sent. */
+  | { type: "user"; text: string; attachments: string[]; files?: Attachment[]; references?: Reference[] }
+  /** `images`: image blocks in the message, their bytes in the chat's image store. */
+  | { type: "agent"; text: string; messageId: string | null; images?: ImageBlock[] }
   | { type: "thought"; text: string; messageId: string | null }
   | {
       type: "tool";
@@ -816,7 +880,9 @@ export const api = {
   answerUi: (sessionId: string, index: number, values: Record<string, unknown>) => invoke<void>("answer_ui", { sessionId, index, values }),
   /** Change fields of an unsent form (the agent edits the same draft). */
   editUi: (sessionId: string, index: number, values: Record<string, unknown>) => invoke<unknown>("edit_ui", { sessionId, index, values }),
-  sendPrompt: (sessionId: string, text: string, mentions: string[] = []) => invoke<void>("send_prompt", { sessionId, text, mentions }),
+  /** `attachments`: ids of what the composer attached (lib/attachments.ts `stage`). */
+  sendPrompt: (sessionId: string, text: string, mentions: string[] = [], attachments: string[] = []) =>
+    invoke<void>("send_prompt", { sessionId, text, mentions, ...(attachments.length ? { attachments } : {}) }),
   /** The chat's next message goes to `accountId`'s agent, in a fresh session, with the conversation so far. Refused mid-turn. */
   switchAgent: (sessionId: string, accountId: string) => invoke<SessionInfo>("switch_agent", { sessionId, accountId }),
   /** A page of `accountId`'s own sessions (started in its CLI, say), from that profile's agent; optionally only those in `cwd`. */
@@ -828,7 +894,16 @@ export const api = {
   renameSession: (sessionId: string, title: string) => invoke<SessionInfo>("rename_session", { sessionId, title }),
   deleteSession: (sessionId: string) => invoke<void>("delete_session", { sessionId }),
   searchFiles: (sessionId: string, query: string, limit = 30) => invoke<FileMatch[]>("search_files", { sessionId, query, limit }),
+  /** The composer's `#` list: `service` null for every connected one. Rust searches, caches (60 s) and ranks. */
+  referenceSuggestions: (sessionId: string, service: ReferenceService | null, query: string) =>
+    invoke<ReferenceSuggestions>("reference_suggestions", { sessionId, service, query }),
   cancelTurn: (sessionId: string) => invoke<void>("cancel_turn", { sessionId }),
+  /** Change a chat's model, effort or other setting to a value its agent offered (refused mid-turn). */
+  setChatConfig: (sessionId: string, configId: string, value: string) => invoke<SessionInfo>("set_chat_config", { sessionId, configId, value }),
+  agentConfigDefaults: (accountId: string) => invoke<AgentConfigDefaults>("agent_config_defaults", { accountId }),
+  /** `value: null` clears it. */
+  setAgentConfigDefault: (accountId: string, configId: string, value: string | null) =>
+    invoke<AgentConfigDefaults>("set_agent_config_default", { accountId, configId, value }),
   respondPermission: (sessionId: string, index: number, optionId: string | null) =>
     invoke<void>("respond_permission", { sessionId, index, optionId }),
   /** "Always allow tools from <server>": trusts the request's MCP server in the chat's project, or in a quick chat. */

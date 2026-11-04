@@ -1,6 +1,8 @@
 // All of the mock's mutable state, built fresh by each `installBrowserMock()`.
 import { seedAgents } from "./agents";
+import { seedAttachments } from "./attachments";
 import { seedChats } from "./chats";
+import { seedConfig } from "./config";
 import { seedIntegrations } from "./integrations";
 import { seedLibrary } from "./library";
 import { seedMcp } from "./mcp";
@@ -16,6 +18,8 @@ export function createState({ firstRun }: { firstRun: boolean }) {
   const state = {
     ...seedProjects(),
     ...seedChats(),
+    ...seedAttachments(),
+    ...seedConfig(),
     ...seedAgents(firstRun),
     ...seedSources(),
     ...seedIntegrations(),

@@ -5,7 +5,9 @@
 import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { agentReplies } from "./mock/agents";
+import { attachmentReplies, installDragBridge, pickAttachments } from "./mock/attachments";
 import { chatReplies, stopTurn } from "./mock/chats";
+import { configReplies } from "./mock/config";
 import type { Mock, Replies } from "./mock/context";
 import { integrationReplies } from "./mock/integrations";
 import { libraryReplies, pickFolder } from "./mock/library";
@@ -18,6 +20,7 @@ import { skillReplies } from "./mock/skills";
 import { sourceReplies } from "./mock/sources";
 import { createState } from "./mock/state";
 import { workItemReplies } from "./mock/work-items";
+import { referenceReplies } from "./mock/references";
 import { terminalReplies } from "./mock/terminals";
 import { flushTranscripts } from "@/lib/transcripts";
 
@@ -57,7 +60,10 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     },
     emit: (event, payload) => emit(event, structuredClone(payload)),
   };
+  // Files dragged in from the OS arrive as Tauri's drag-drop events, as in the app.
+  const removeDragBridge = installDragBridge(m);
   disposePrevious = () => {
+    removeDragBridge();
     for (const turn of Object.values(state.turns)) stopTurn(turn);
     for (const t of timers) clearTimeout(t);
     for (const t of Object.values(state.terminals)) clearInterval(t.timer);
@@ -67,6 +73,7 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
   const replies: Replies = {
     ...projectReplies(m),
     ...chatReplies(m),
+    ...configReplies(m),
     ...libraryReplies(m),
     ...sourceReplies(m),
     ...agentReplies(m),
@@ -76,10 +83,12 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     ...mcpReplies(m),
     ...providerReplies(m),
     ...workItemReplies(m),
+    ...referenceReplies(m),
     ...terminalReplies(m),
     ...resumeReplies(m),
+    ...attachmentReplies(m),
     // Plugins: a folder picker (a sample folder on the library screens, cancelled elsewhere), and links and folders that open nowhere.
-    "plugin:dialog|open": (args: unknown) => pickFolder(args),
+    "plugin:dialog|open": (args: unknown) => pickAttachments(args) ?? pickFolder(args),
     "plugin:opener|open_url": () => null,
     "plugin:opener|reveal_item_in_dir": () => null,
   };

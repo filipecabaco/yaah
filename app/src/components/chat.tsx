@@ -8,6 +8,7 @@ import {
   FileText,
   FolderGit2,
   FolderPlus,
+  Plug,
   Repeat,
   RotateCw,
   ShieldCheck,
@@ -17,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
+import { ComposerConfig } from "@/components/composer-config";
 import { Mark } from "@/components/brand/mark";
 import { Hint } from "@/components/shortcuts";
 import { ErrorText } from "@/components/error-text";
@@ -40,6 +42,8 @@ import { baseName, compactPath, elapsedText, plural, startingText } from "@/lib/
 import { errorMessage } from "@/lib/narrow";
 import type { Starting } from "@/hooks/use-yaah";
 import { fuzzyRank } from "@/lib/fuzzy";
+import { applyEdit, markdownKey, pasteLink } from "@/lib/markdown-input";
+import { isMac } from "@/lib/shortcuts";
 import { ChatContext, isFocusedPane, onDraft } from "@/components/chat-context";
 import { TranscriptEntry } from "@/components/entries";
 import { ToolGroup } from "@/components/tool-group";
@@ -47,6 +51,14 @@ import { foldedPermissions } from "@/lib/permissions";
 import { isRunning, transcriptRows, useGroupToolCalls } from "@/lib/tool-groups";
 import { FolderMenu } from "@/components/menus";
 import { useTranscript, useTranscripts } from "@/hooks/use-transcript";
+import { AttachButton, AttachmentChips, DropOverlay } from "@/components/composer-attachments";
+import { ReferenceChips, ReferenceRow } from "@/components/references";
+import { ActiveDescendant } from "@/components/active-descendant";
+import { useReferenceSuggestions } from "@/hooks/use-reference-suggestions";
+import { connectLabel, findReferenceTrigger, referenceHeading, standing } from "@/lib/references";
+import { openSettings } from "@/lib/app-events";
+import type { Reference, ReferenceService } from "@/lib/api";
+import { useChatDrop, useComposerAttachments } from "@/hooks/use-attachments";
 
 const RepoPicker = lazy(() => import("@/components/repo-picker").then((m) => ({ default: m.RepoPicker })));
 
@@ -80,10 +92,13 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
       }),
     [session.sessionId, pane],
   );
+  // Files dropped anywhere on the pane attach to its composer (components/composer-attachments.tsx).
+  const dropRoot = useRef<HTMLDivElement>(null);
+  const { drag, handlers: dropHandlers } = useChatDrop(dropRoot, session.sessionId, pane);
 
   return (
     // `@container/chat`: the header drops what matters least as its pane narrows (in rem, so it follows the interface size).
-    <div className="@container/chat flex h-full min-w-0 flex-1 flex-col">
+    <div ref={dropRoot} {...dropHandlers} className="@container/chat relative flex h-full min-w-0 flex-1 flex-col">
       {/* Drags the window (its buttons stay buttons): there's no title bar on macOS. */}
       <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
         {project && (
@@ -161,6 +176,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
         <Transcript key={session.sessionId} sessionId={session.sessionId} running={session.running} onLogin={onLogin} />
       </ChatContext.Provider>
       <Composer key={session.sessionId} session={session} agentLabel={agent?.label} pane={pane} />
+      <DropOverlay drag={drag} agent={agent?.label ?? "This agent"} report={agent?.report} />
     </div>
   );
 }
@@ -456,8 +472,8 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
   );
 }
 
-/** What the text before the caret is asking to complete: `/cmd` at the start, or `@file` anywhere. */
-type Trigger = { kind: "command" | "file"; start: number; query: string };
+/** What the text before the caret is asking to complete: `/cmd` at the start, `@file` anywhere, or a `#` reference (lib/references.ts). */
+type Trigger = { kind: "command" | "file" | "reference"; start: number; query: string; service?: ReferenceService | null; link?: boolean };
 
 function findTrigger(text: string, caret: number): Trigger | null {
   const before = text.slice(0, caret);
@@ -465,6 +481,8 @@ function findTrigger(text: string, caret: number): Trigger | null {
   if (slash) return { kind: "command", start: 0, query: slash[1] };
   const at = /(^|\s)@([^\s@]*)$/.exec(before);
   if (at) return { kind: "file", start: caret - at[2].length - 1, query: at[2] };
+  const ref = findReferenceTrigger(text, caret);
+  if (ref) return { kind: "reference", ...ref };
   return null;
 }
 
@@ -479,6 +497,10 @@ type Suggestion = {
   local?: () => void;
   /** Its icon in the list, when not the default. */
   icon?: ReactNode;
+  /** A tracker item from the `#` list: drawn as one, remembered once picked. */
+  reference?: Reference;
+  /** Runs instead of inserting, leaving the text as it is (e.g. open Settings → Integrations). */
+  action?: () => void;
 };
 
 /** yaah's own slash commands, listed before the agent's. */
@@ -512,6 +534,9 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   const [error, setError] = useState<unknown>(null);
   /** Files picked from the @ list: label → absolute path. */
   const [mentions, setMentions] = useState<Record<string, string>>({});
+  /** Tracker items picked from the # list, by token (Rust reads every token in the text on send). */
+  const [picked, setPicked] = useState<Record<string, Reference>>({});
+  const [sending, setSending] = useState(false);
   /** The last file search, for the @ trigger that started at `start`. */
   const [found, setFound] = useState<{ start: number; files: FileMatch[] } | null>(null);
   const [active, setActive] = useState(0);
@@ -522,6 +547,14 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   const list = useRef<HTMLDivElement>(null);
   const moveCaret = useRef<number | null>(null);
   const listId = useId();
+  // Dropped text goes in at the caret; dropped, pasted and picked files become attachments.
+  const attached = useComposerAttachments(session.sessionId, pane, (add) => {
+    const at = Math.min(caret, text.length);
+    moveCaret.current = at + add.length;
+    setText(text.slice(0, at) + add + text.slice(at));
+    setCaret(at + add.length);
+    input.current?.focus();
+  });
 
   // Other components (e.g. "Ask about this" on a diff) can draft into this composer.
   useEffect(
@@ -570,6 +603,13 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   }, [fileQuery, openStart, session.sessionId]);
   const files = fileQuery != null && found?.start === openStart ? found.files : null;
 
+  // `#` references: Rust searches the connected trackers and ranks (debounced, cached there).
+  const refService = open?.kind === "reference" ? (open.service ?? null) : null;
+  const refs = useReferenceSuggestions(
+    session.sessionId,
+    open?.kind === "reference" ? { service: refService, query: openQuery, link: !!open.link } : null,
+  );
+
   const items: Suggestion[] = useMemo(() => {
     if (openKind === "command") {
       const own = fuzzyRank(localCommands(session, pane), openQuery, (c) => [c.name, c.detail ?? ""]);
@@ -583,8 +623,21 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
       return [...own, ...agents];
     }
     if (openKind === "file") return (files ?? []).map((f) => ({ id: f.path, label: f.label, insert: `@${f.label} `, path: f.path }));
+    if (openKind === "reference") {
+      if (refs.connected?.length === 0)
+        return [
+          {
+            id: "yaah:connect",
+            label: connectLabel(refService),
+            detail: "Settings → Integrations",
+            insert: "",
+            action: () => openSettings("integrations"),
+          },
+        ];
+      return (refs.items ?? []).map((r) => ({ id: r.token, label: r.token, insert: `${r.token} `, reference: r }));
+    }
     return [];
-  }, [openKind, openQuery, session, pane, files]);
+  }, [openKind, openQuery, session, pane, files, refs.connected, refs.items, refService]);
 
   // A new list starts at its first item.
   const listKey = `${openKind}:${openQuery}`;
@@ -612,6 +665,10 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   function accept(s: Suggestion) {
     if (!open) return;
     if (s.local) return runLocal(s.local);
+    if (s.action) {
+      setDismissed(open.start);
+      return s.action();
+    }
     // Replace the whole token under the caret, plus one following space.
     const rest = text.slice(caret).replace(/^\S*/, "").replace(/^ /, "");
     const pos = open.start + s.insert.length;
@@ -620,11 +677,13 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
     moveCaret.current = pos;
     const path = s.path;
     if (path) setMentions((m) => ({ ...m, [s.label]: path }));
+    const reference = s.reference;
+    if (reference) setPicked((p) => ({ ...p, [reference.token]: reference }));
   }
 
   async function send() {
     const prompt = text.trim();
-    if (!prompt) return;
+    if ((!prompt && !attached.items.length) || attached.pending) return;
     const own = localCommands(session, pane).find((c) => prompt === c.label);
     if (own) {
       setText("");
@@ -636,12 +695,19 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
     const paths = Object.entries(mentions)
       .filter(([label]) => mentioned(prompt, label))
       .map(([, path]) => path);
+    // References in the text are read in Rust before the turn starts; the chips say so meanwhile.
+    setSending(true);
     try {
-      await api.sendPrompt(session.sessionId, prompt, paths);
+      const files = attached.items.map((a) => a.id);
+      await api.sendPrompt(session.sessionId, prompt, paths, files);
       setText("");
       setMentions({});
+      setPicked({});
+      attached.clear();
     } catch (e) {
       setError(e);
+    } finally {
+      setSending(false);
     }
   }
 
@@ -671,25 +737,45 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
         return;
       }
     }
+    // Markdown help: lists continue on Shift+Enter, Tab indents an item, marks wrap a selection.
+    const el = e.currentTarget;
+    const mod = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+    const md = markdownKey(
+      e.nativeEvent,
+      { text: el.value, start: el.selectionStart, end: el.selectionEnd },
+      { listOpen: !!(open && items.length), mod },
+    );
+    if (md) {
+      e.preventDefault();
+      // ⌘B over a selection is bold here, not the sidebar.
+      e.stopPropagation();
+      applyEdit(el, md);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void send();
     }
   }
 
-  const showList = open != null && focused;
-  // yaah's own commands, then the agent's; files in one group.
+  // A pasted link only opens the list when Rust says it is a PR, MR or issue.
+  const showList = open != null && focused && !(open.link && items.length === 0);
+  // yaah's own commands, then the agent's; files in one group; references in one.
   const groups = (
     openKind === "command"
       ? [
           { heading: "yaah", list: items.filter((s) => s.local) },
           { heading: `Commands from ${agentLabel ?? "the agent"}`, list: items.filter((s) => !s.local) },
         ]
-      : [{ heading: "Files in this chat's folders", list: items }]
+      : openKind === "reference"
+        ? [{ heading: referenceHeading(refService), list: items }]
+        : [{ heading: "Files in this chat's folders", list: items }]
   ).filter((g) => g.list.length > 0);
+  const attaches = Object.values(picked).filter((r) => standing(text, r.token));
   return (
     // The composer lines up with the transcript's column: the same edges as the cards and UI above it.
     <div className="@container border-t py-3">
+      <AttachmentChips sessionId={session.sessionId} state={attached} className="chat-column mb-2" />
       <div className="chat-column relative flex items-end gap-2">
         {showList && (
           <Command
@@ -709,6 +795,8 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
             onMouseDown={(e) => e.preventDefault()}
             className="absolute bottom-full left-(--chat-gutter) z-10 mb-2 h-auto w-[min(42rem,calc(100%-2*var(--chat-gutter)))] shadow-md ring-1 ring-foreground/10"
           >
+            {/* The textarea is the combobox: it names the highlighted option. */}
+            <ActiveDescendant target={input} list={list} />
             <CommandList id={listId}>
               {items.length === 0 ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">
@@ -716,9 +804,15 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
                     ? session.commands.length
                       ? "No command matches."
                       : "This chat has no slash commands yet."
-                    : files == null
-                      ? "Searching…"
-                      : "No file matches."}
+                    : open.kind === "reference"
+                      ? refs.items == null
+                        ? "Searching…"
+                        : open.query
+                          ? "Nothing matches. Keep typing to search, or paste a link."
+                          : "Nothing recent here."
+                      : files == null
+                        ? "Searching…"
+                        : "No file matches."}
                 </p>
               ) : (
                 <>
@@ -726,8 +820,16 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
                     <CommandGroup key={g.heading} heading={g.heading}>
                       {g.list.map((s) => (
                         <CommandItem key={s.id} value={s.id} onSelect={() => accept(s)}>
-                          {s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : <FileText />)}
-                          {s.path ? <FileLabel label={s.label} /> : <span className="shrink-0 font-mono">{s.label}</span>}
+                          {s.reference ? (
+                            <ReferenceRow reference={s.reference} />
+                          ) : (
+                            (s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : s.action ? <Plug /> : <FileText />))
+                          )}
+                          {s.reference ? null : s.path ? (
+                            <FileLabel label={s.label} />
+                          ) : (
+                            <span className={s.action ? "shrink-0" : "shrink-0 font-mono"}>{s.label}</span>
+                          )}
                           {s.local && (
                             <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs" title="yaah's own command, not sent to the agent">
                               yaah
@@ -741,6 +843,12 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
                   ))}
                 </>
               )}
+              {open.kind === "reference" &&
+                refs.errors.map((e) => (
+                  <p key={e.service} className="px-3 py-1.5 text-xs [overflow-wrap:anywhere] text-destructive" role="status">
+                    {e.message}
+                  </p>
+                ))}
             </CommandList>
             <footer className="flex items-center gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
               <span>
@@ -755,6 +863,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
             </footer>
           </Command>
         )}
+        <AttachButton onPick={attached.pick} />
         <Textarea
           data-composer
           ref={input}
@@ -767,9 +876,22 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
           }}
           onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
           onKeyDown={onKeyDown}
+          onPaste={(e) => {
+            // A URL pasted over selected text becomes a link; files and images go to the attachments.
+            const el = e.currentTarget;
+            const link = e.clipboardData.files.length
+              ? null
+              : pasteLink({ text: el.value, start: el.selectionStart, end: el.selectionEnd }, e.clipboardData.getData("text/plain"));
+            if (link) {
+              e.preventDefault();
+              applyEdit(el, link);
+              return;
+            }
+            attached.onPaste(e);
+          }}
           onFocus={() => setFocused(true)}
           onBlur={() => setFocused(false)}
-          placeholder={`Message ${agentLabel ?? "the agent"}…  / for commands, @ to mention a file`}
+          placeholder={`Message ${agentLabel ?? "the agent"}…  / for commands, @ to mention a file, # for an issue or PR`}
           aria-label="Message"
           className="max-h-48 min-h-10 resize-none"
           rows={1}
@@ -786,13 +908,17 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
           </Hint>
         ) : (
           <Hint label="Send ↵">
-            <Button size="icon" onClick={() => void send()} disabled={!text.trim()} aria-label="Send">
+            <Button size="icon" onClick={() => void send()} disabled={(!text.trim() && !attached.items.length) || attached.pending} aria-label="Send">
               <ArrowUp />
             </Button>
           </Hint>
         )}
       </div>
+      {/* The tokens stay plain text (robust to edit, undo, copy); what they'll attach shows here. */}
+      <ReferenceChips references={attaches} sending={sending} className="chat-column mt-1.5" />
       <ErrorText error={error} className="chat-column mt-1" />
+      {/* Model and effort, when the agent offers them (components/composer-config.tsx). */}
+      <ComposerConfig session={session} pane={pane} />
     </div>
   );
 }

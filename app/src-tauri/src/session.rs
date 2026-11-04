@@ -40,6 +40,9 @@ use terminal_chats::TerminalChats;
 /// Which permission requests yaah answers itself (read-only, trusted MCP servers), and the server a request is for.
 pub mod permissions;
 use permissions::{Auto, McpServer};
+/// Model, effort and the agent's other settings (ACP session config options).
+mod config;
+pub use config::{AgentDefaults, ChatConfig, ConfigOption, summary as config_summary};
 
 /// Sends an event to the UI. The app wires this to `AppHandle::emit`; tests to a channel.
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
@@ -68,10 +71,19 @@ pub enum Entry {
         text: String,
         /// Names of context sent alongside the text (e.g. the project brief).
         attachments: Vec<String>,
+        /// What the user attached (dropped, pasted or picked), as sent (`attachments.rs`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<crate::attachments::Attachment>,
+        /// Tracker items the text references (`github#o/r#9`, `linear#ENG-1`), as read when sent (`references.rs`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        references: Vec<crate::references::Reference>,
     },
     Agent {
         text: String,
         message_id: Option<String>,
+        /// Image blocks in the message, their bytes in the chat's image store (`attachments::externalize_block`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Value>,
     },
     Thought {
         text: String,
@@ -258,6 +270,9 @@ pub struct SessionInfo {
     /// are its project's), by id: their tools are allowed without asking.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trusted_mcp_servers: Vec<String>,
+    /// The agent's settings (model, effort, …) and the user's picks, kept across restarts (`session/config.rs`).
+    #[serde(default, skip_serializing_if = "ChatConfig::is_empty")]
+    pub config: ChatConfig,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref, reason = "serde's skip_serializing_if passes a reference")]
@@ -1006,6 +1021,8 @@ pub struct Hub {
     store: Option<PathBuf>,
     /// What agents are told about yaah's UI (`agent_guide.rs`); unset, they're told nothing.
     guide: OnceLock<Arc<Guide>>,
+    /// Where profiles' "New chats start with" defaults are kept (`session/config.rs`); unset, there are none.
+    config_defaults: OnceLock<&'static crate::json_file::JsonFile>,
 }
 
 impl Hub {
@@ -1038,6 +1055,7 @@ impl Hub {
             asks: Mutex::default(),
             store,
             guide: OnceLock::new(),
+            config_defaults: OnceLock::new(),
         }
     }
 
@@ -1291,6 +1309,7 @@ impl Hub {
         stage(if servers.is_empty() { StartStage::Session } else { StartStage::McpServers }, &servers);
 
         let res = agent.conn.request("session/new", params).await;
+        let offered = res.as_ref().map(config::offered).unwrap_or_default();
         let session_id = res
             .map_err(|e| self.shared.rpc_error(&account.id, &e, "session/new failed"))
             .and_then(|r| {
@@ -1325,6 +1344,7 @@ impl Hub {
             dirs_changed: false,
             remembered: BTreeMap::new(),
             trusted_mcp_servers: vec![],
+            config: ChatConfig { options: offered, ..ChatConfig::default() },
         };
         let mut session = Session::new(info.clone(), vec![], self.store.as_ref().map(|d| d.join(file_name(&session_id))));
         session.brief = brief;
@@ -1342,19 +1362,24 @@ impl Hub {
             }
             taken
         };
-        let mut tokens = self.ui_tokens.lock().unwrap();
-        if taken {
-            tokens.remove(&ui_token);
-            return Err(format!("the agent started a chat with the id of one yaah already has ({session_id}); refused"));
+        // In a block of its own: the guard mustn't live across the `await` below.
+        {
+            let mut tokens = self.ui_tokens.lock().unwrap();
+            if taken {
+                tokens.remove(&ui_token);
+                return Err(format!("the agent started a chat with the id of one yaah already has ({session_id}); refused"));
+            }
+            if let Some(slot) = tokens.get_mut(&ui_token) {
+                *slot = Some(session_id);
+            }
         }
-        if let Some(slot) = tokens.get_mut(&ui_token) {
-            *slot = Some(session_id);
+        {
+            let mut s = chat.lock().unwrap();
+            self.shared.save(&mut s);
+            self.shared.emit_info(&mut s);
         }
-        drop(tokens);
-        let mut s = chat.lock().unwrap();
-        self.shared.save(&mut s);
-        self.shared.emit_info(&mut s);
-        Ok(info)
+        // The profile's "New chats start with" model and effort, when the agent offers them.
+        Ok(self.settle_config(&info.session_id, &agent, None, true).await.unwrap_or(info))
     }
 
     /// Give a chat its own URL on the UI MCP server (in `session/new` or
@@ -1409,7 +1434,9 @@ impl Hub {
             s.attached = res.is_ok().then_some(agent.generation);
             self.shared.save(s);
         });
-        res.map(|_| ()).map_err(|e| self.shared.rpc_error(&account.id, &e, "Couldn't reopen this chat"))
+        let loaded = res.map_err(|e| self.shared.rpc_error(&account.id, &e, "Couldn't reopen this chat"))?;
+        // The agent may not have kept the chat's model and effort: they're sent again.
+        self.settle_config(session_id, agent, Some(config::offered(&loaded)), false).await.map(|_| ())
     }
 
     /// Move a chat to another agent profile. The chat keeps its id and its
@@ -1435,6 +1462,8 @@ impl Hub {
             }
             s.info.account_id.clone_from(&to.id);
             s.info.commands.clear();
+            // Another agent's settings: its new session says what it offers.
+            s.info.config = ChatConfig::default();
             s.attached = None;
             s.brief = None;
             s.guide = None;
@@ -1471,6 +1500,7 @@ impl Hub {
         crate::mcp_servers::inject(&mut params, agent.caps.mcp_http, agent.caps.mcp_sse, account);
 
         let res = agent.conn.request("session/new", params).await;
+        let offered = res.as_ref().ok().map(config::offered);
         let acp_id = res.map_err(|e| self.shared.rpc_error(&account.id, &e, "session/new failed")).and_then(|r| {
             r.get("sessionId")
                 .and_then(Value::as_str)
@@ -1496,7 +1526,9 @@ impl Hub {
             s.guide = guide;
             s.brief = brief;
             self.shared.save(s);
-        })
+        })?;
+        // A switched chat starts with the new profile's defaults; a reopened one keeps its picks.
+        self.settle_config(session_id, agent, offered, true).await.map(|_| ())
     }
 
     /// The agent profile with this id.
@@ -1698,16 +1730,30 @@ impl Hub {
         if let Some(host) = self.ui_host.get().and_then(Weak::upgrade) {
             host.revoke(session_id);
         }
-        if let Some(path) = path {
+        if let Some(path) = &path {
             // After any write of it already under way, so a save can't bring the file back.
             let _io = self.shared.io.lock().unwrap();
-            if let Err(e) = std::fs::remove_file(&path)
+            if let Err(e) = std::fs::remove_file(path)
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 eprintln!("[sessions] could not delete {}: {e}", path.display());
             }
         }
+        // Its images (attachments and agents' screenshots) go with it.
+        let images = crate::attachments::image_dir(path.as_deref(), session_id);
+        if let Err(e) = std::fs::remove_dir_all(&images)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!("[sessions] could not delete {}: {e}", images.display());
+        }
         Ok(())
+    }
+
+    /// Where a chat keeps its images (`attachments.rs`).
+    pub fn image_dir(&self, session_id: &str) -> Result<PathBuf, String> {
+        let chat = self.shared.chat(session_id).ok_or("unknown session")?;
+        let s = chat.lock().unwrap();
+        Ok(image_dir(&s))
     }
 
     /// Every chat's info. Reads no transcript.
@@ -1742,6 +1788,32 @@ impl Hub {
     /// to the agent as ACP `resource_link` blocks (baseline in every agent).
     /// Starts the chat's agent if it isn't running, and reattaches the chat to it.
     pub async fn prompt(&self, session_id: &str, text: String, mentions: Vec<String>) -> Result<(), String> {
+        self.prompt_with(session_id, text, mentions, vec![]).await
+    }
+
+    /// [`Hub::prompt`] with what the user attached in the composer (`attachments.rs`): sent as
+    /// ACP image, embedded resource or resource link blocks, as the agent's capabilities allow.
+    pub async fn prompt_with(
+        &self,
+        session_id: &str,
+        text: String,
+        mentions: Vec<String>,
+        files: Vec<crate::attachments::Attachment>,
+    ) -> Result<(), String> {
+        self.prompt_with_references(session_id, text, mentions, files, vec![]).await
+    }
+
+    /// [`Hub::prompt_with`] with the message's tracker references, already read
+    /// (`references::resolve_text`): embedded resources before the text when the agent
+    /// takes them, else text after it; the transcript keeps them as chips.
+    pub async fn prompt_with_references(
+        &self,
+        session_id: &str,
+        text: String,
+        mentions: Vec<String>,
+        files: Vec<crate::attachments::Attachment>,
+        references: Vec<crate::references::Resolved>,
+    ) -> Result<(), String> {
         const BUSY: &str = "a turn is already running in this session";
         let (account_id, attached, handoff, dirs_changed) = self
             .shared
@@ -1763,6 +1835,9 @@ impl Hub {
         } else if dirs_changed || attached != Some(agent.generation) {
             self.attach(session_id, &agent, &account).await?;
         }
+        // Read before the chat is locked: images are up to megabytes each.
+        let (file_blocks, files) =
+            if files.is_empty() { (vec![], vec![]) } else { crate::attachments::blocks(&files, &agent.caps, &self.image_dir(session_id)?)? };
 
         let blocks = self.shared.with(session_id, |s| {
             if s.info.running {
@@ -1772,7 +1847,8 @@ impl Hub {
             s.info.stop_reason = None;
             s.plan_index = None;
             if s.entries.is_empty() {
-                s.info.title = truncate(text.lines().next().unwrap_or_default(), TITLE_MAX_CHARS);
+                let first = text.lines().find(|l| !l.trim().is_empty()).or_else(|| files.first().map(|f| f.name.as_str()));
+                s.info.title = truncate(first.unwrap_or_default(), TITLE_MAX_CHARS);
             }
             let mut blocks = vec![];
             let mut attachments = vec![];
@@ -1801,8 +1877,14 @@ impl Hub {
                 blocks.push(json!({ "type": "resource_link", "uri": format!("file://{path}"), "name": name }));
                 attachments.push(name);
             }
-            blocks.push(json!({ "type": "text", "text": text }));
-            self.shared.push(s, Entry::User { text, attachments });
+            blocks.extend(file_blocks);
+            let refs = crate::references::content(&references, agent.caps.embedded_context);
+            blocks.extend(refs.before);
+            if !text.is_empty() || files.is_empty() {
+                blocks.push(json!({ "type": "text", "text": text }));
+            }
+            blocks.extend(refs.after);
+            self.shared.push(s, Entry::User { text, attachments, files, references: refs.chips });
             self.shared.emit_info(s);
             self.shared.save(s);
             Ok((blocks, s.info.agent_session().to_owned()))
@@ -2196,6 +2278,10 @@ fn mcp_startup_notice(update: &Value) -> Option<Notice> {
 }
 
 fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
+    // The agent's settings changed (the full set), also while a reload replays.
+    if update["sessionUpdate"] == "config_option_update" {
+        return config::on_update(shared, s, update);
+    }
     if s.replaying {
         return;
     }
@@ -2230,6 +2316,7 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
             };
             push_notice(shared, s, notice);
         }
+        "agent_message_chunk" if update["content"]["type"] == "image" => agent_image(shared, s, update),
         "agent_message_chunk" | "agent_thought_chunk" => {
             let thought = kind == "agent_thought_chunk";
             let text = content_text(&update["content"]);
@@ -2245,7 +2332,7 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
             } else {
                 let message_id = message_id.map(str::to_owned);
                 let len = text.encode_utf16().count();
-                let i = shared.push(s, if thought { Entry::Thought { text, message_id } } else { Entry::Agent { text, message_id } });
+                let i = shared.push(s, if thought { Entry::Thought { text, message_id } } else { Entry::Agent { text, message_id, images: vec![] } });
                 s.stream.text_len = Some((i, len));
             }
         }
@@ -2274,10 +2361,45 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
     }
 }
 
+/// Where the chat keeps images (`attachments.rs`): beside its transcript.
+fn image_dir(s: &Session) -> PathBuf {
+    crate::attachments::image_dir(s.save_to.as_deref(), &s.info.session_id)
+}
+
+/// An image in the agent's message: its bytes go to the chat's image store, and it shows with
+/// the message it belongs to (a message of its own when it starts one).
+fn agent_image(shared: &Shared, s: &mut Session, update: &Value) {
+    let mut block = update["content"].clone();
+    crate::attachments::externalize_block(&mut block, &image_dir(s));
+    let message_id = update.get("messageId").and_then(Value::as_str);
+    let continued = s
+        .entries
+        .len()
+        .checked_sub(1)
+        .filter(|&i| matches!(&*s.entries[i], Entry::Agent { message_id: m, .. } if same_message(m.as_deref(), message_id)));
+    if let Some(i) = continued {
+        if let Some(Entry::Agent { images, .. }) = s.entry_mut(i) {
+            images.push(block);
+        }
+        shared.emit_entry(s, i);
+    } else {
+        let i = shared.push(s, Entry::Agent { text: String::new(), message_id: message_id.map(str::to_owned), images: vec![block] });
+        s.stream.text_len = Some((i, 0));
+    }
+}
+
 /// Insert a tool call, or merge the non-null fields of an update into it.
 fn upsert_tool(shared: &Shared, s: &mut Session, update: &Value) {
     let Some(id) = update.get("toolCallId").and_then(Value::as_str) else { return };
-    let field = |k: &str| update.get(k).filter(|v| !v.is_null()).cloned();
+    // Images in the content (a browser screenshot) go to the chat's image store; the entry keeps an id.
+    let images = image_dir(s);
+    let field = |k: &str| {
+        let mut v = update.get(k).filter(|v| !v.is_null()).cloned();
+        if let Some(content) = v.as_mut().filter(|_| k == "content") {
+            crate::attachments::externalize_content(content, &images);
+        }
+        v
+    };
     let str_field = |k: &str| update.get(k).and_then(Value::as_str).map(str::to_owned);
 
     let Some(&i) = s.tool_index.get(id) else {
@@ -2607,6 +2729,7 @@ fn test_info(id: &str) -> SessionInfo {
         dirs_changed: false,
         remembered: BTreeMap::new(),
         trusted_mcp_servers: vec![],
+        config: ChatConfig::default(),
     }
 }
 
@@ -3199,7 +3322,7 @@ mod persistence_tests {
     fn restores_saved_chats_as_stopped() {
         let dir = std::env::temp_dir().join(format!("yaah-sessions-{}", random_token()));
         let entries = vec![
-            Entry::User { text: "hi".into(), attachments: vec![] },
+            Entry::User { text: "hi".into(), attachments: vec![], files: vec![], references: vec![] },
             Entry::Tool {
                 tool_call_id: "t1".into(),
                 title: "Write x".into(),
@@ -3427,6 +3550,46 @@ mod stream_tests {
 
     fn update(hub: &Hub, update: &Value) {
         hub.shared.with("s", |s| apply_update(&hub.shared, s, update)).unwrap();
+    }
+
+    /// A browser screenshot in a tool result, or an image in the agent's message: the bytes go to
+    /// the chat's image store once, the entry (saved, sent to the UI on every update) keeps an id.
+    #[test]
+    fn agents_images_are_kept_out_of_the_transcript() {
+        use base64::Engine;
+        let (hub, events) = hub(COALESCE);
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(3, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(png.get_ref());
+        let shot = json!([{ "type": "content", "content": { "type": "image", "mimeType": "image/png", "data": data } }]);
+        update(&hub, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "mcp__vitro__screenshot", "status": "pending" }));
+        update(&hub, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed", "content": shot }));
+        let entries = hub.transcript("s").unwrap().entries;
+        let Entry::Tool { content, .. } = &entries[0] else { panic!("{:?}", entries[0]) };
+        let img = &content[0]["content"];
+        assert!(img.get("data").is_none());
+        assert_eq!((img["width"].as_u64(), img["height"].as_u64()), (Some(3), Some(2)));
+        let (bytes, _) = crate::attachments::load_image(&hub.image_dir("s").unwrap(), img["image"].as_str().unwrap()).unwrap();
+        assert_eq!(&bytes, png.get_ref());
+        assert!(!events.lock().unwrap().iter().any(|(_, _, p)| p.to_string().contains(&data)), "the UI never gets the base64");
+
+        // An image in the agent's message joins it, and the text after it continues it.
+        update(
+            &hub,
+            &json!({ "sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": { "type": "image", "mimeType": "image/png", "data": data } }),
+        );
+        update(&hub, &json!({ "sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": { "type": "text", "text": "Here it is" } }));
+        let entries = hub.transcript("s").unwrap().entries;
+        assert_eq!(entries.len(), 2);
+        let Entry::Agent { text, images, .. } = &entries[1] else { panic!("{:?}", entries[1]) };
+        assert_eq!((text.as_str(), images.len()), ("Here it is", 1));
+        assert_eq!(images[0]["image"], img["image"], "the same image is kept once");
+
+        // Chats saved before attachments read as they were.
+        let old: Entry = serde_json::from_value(json!({ "type": "user", "text": "hi", "attachments": [] })).unwrap();
+        assert!(matches!(old, Entry::User { files, .. } if files.is_empty()));
+        let old: Entry = serde_json::from_value(json!({ "type": "agent", "text": "hi", "messageId": null })).unwrap();
+        assert!(matches!(old, Entry::Agent { images, .. } if images.is_empty()));
     }
 
     /// `_auth/status_update` from claude-agent-acp: external, gateway and API-key auth count as signed in.
@@ -3888,7 +4051,8 @@ mod lazy_tests {
     }
 
     fn write_chat(dir: &Path, id: &str, entries: usize) {
-        let entries: Vec<Entry> = (0..entries).map(|i| Entry::User { text: format!("message {i}"), attachments: vec![] }).collect();
+        let entries: Vec<Entry> =
+            (0..entries).map(|i| Entry::User { text: format!("message {i}"), attachments: vec![], files: vec![], references: vec![] }).collect();
         std::fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(&Transcript { info: test_info(id), entries }).unwrap()).unwrap();
     }
 
@@ -3970,9 +4134,9 @@ mod switch_tests {
     #[test]
     fn the_handoff_keeps_messages_and_one_liners_in_order() {
         let entries = shared(vec![
-            Entry::User { text: "  Fix the build  ".into(), attachments: vec!["project.md".into()] },
+            Entry::User { text: "  Fix the build  ".into(), attachments: vec!["project.md".into()], files: vec![], references: vec![] },
             Entry::Thought { text: "secret musing".into(), message_id: None },
-            Entry::Agent { text: "Looking.".into(), message_id: None },
+            Entry::Agent { text: "Looking.".into(), message_id: None, images: vec![] },
             tool("cargo build", "failed"),
             Entry::Plan { entries: json!([{ "content": "a plan step" }]) },
             Entry::Permission {
@@ -4029,7 +4193,11 @@ mod switch_tests {
 
     #[test]
     fn a_long_handoff_keeps_the_newest_and_says_what_was_left_out() {
-        let entries = shared((0..100).map(|i| Entry::User { text: format!("{i:03} {}", "x".repeat(996)), attachments: vec![] }).collect());
+        let entries = shared(
+            (0..100)
+                .map(|i| Entry::User { text: format!("{i:03} {}", "x".repeat(996)), attachments: vec![], files: vec![], references: vec![] })
+                .collect(),
+        );
         let text = handoff_text("Claude", &entries);
         assert!(text.chars().count() <= HANDOFF_MAX_CHARS + 200, "{}", text.len());
         assert!(text.contains("User: 099 ") && !text.contains("User: 000 "), "the newest stay");
@@ -4041,8 +4209,8 @@ mod switch_tests {
 
         // One message longer than the whole budget keeps its end.
         let huge = shared(vec![
-            Entry::User { text: "old".into(), attachments: vec![] },
-            Entry::Agent { text: format!("start{}end", "y".repeat(50_000)), message_id: None },
+            Entry::User { text: "old".into(), attachments: vec![], files: vec![], references: vec![] },
+            Entry::Agent { text: format!("start{}end", "y".repeat(50_000)), message_id: None, images: vec![] },
         ]);
         let text = handoff_text("Claude", &huge);
         assert!(text.ends_with("end") && !text.contains("start") && text.contains("(1 earlier entry left out)"));
@@ -4084,7 +4252,7 @@ mod switch_tests {
         let mut info = test_info("sw");
         info.account_id.clone_from(&alpha);
         info.commands = vec![json!({ "name": "review" })];
-        let mut s = Session::new(info, vec![Entry::User { text: "hi".into(), attachments: vec![] }], None);
+        let mut s = Session::new(info, vec![Entry::User { text: "hi".into(), attachments: vec![], files: vec![], references: vec![] }], None);
         s.attached = Some(7);
         hub.shared.insert(s);
 

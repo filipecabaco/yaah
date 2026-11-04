@@ -3,6 +3,8 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRightLeft,
+  Cpu,
+  Gauge,
   Equal,
   ZoomIn,
   ZoomOut,
@@ -37,7 +39,8 @@ import {
 import { focusComposer } from "@/components/chat-context";
 import { focusPaneDom } from "@/lib/pane-focus";
 import { terminalActions, type Terminals } from "@/components/terminal/palette-actions";
-import { openAddRepos } from "@/lib/app-events";
+import { openAddRepos, openComposerConfig } from "@/lib/app-events";
+import { choiceName, configOption } from "@/lib/composer-config";
 import { ErrorText } from "@/components/error-text";
 import { connectionReady } from "@/components/settings/form-state";
 import { Badge } from "@/components/ui/badge";
@@ -447,6 +450,20 @@ function PaletteBody({
         detail: chat.projectId ? `to ${projectName(chat.projectId)}` : "to this chat",
         onSelect: () => close(() => openAddRepos(chat.sessionId, y.panes.focusedId())),
       },
+      // The composer's pickers, when the chat's agent offers them (components/composer-config.tsx); not mid-turn.
+      ...(["model", "effort"] as const).map((role) => {
+        const o = chat && !chat.running ? configOption(chat, role) : undefined;
+        return (
+          chat &&
+          o && {
+            id: `change-${role}`,
+            icon: role === "model" ? <Cpu /> : <Gauge />,
+            label: role === "model" ? "Change model…" : "Change effort…",
+            detail: choiceName(o),
+            onSelect: () => close(() => openComposerConfig(chat.sessionId, role, y.panes.focusedId())),
+          }
+        );
+      }),
       chat && { id: "rename", icon: <Pencil />, label: "Rename chat…", onSelect: () => onPage({ kind: "rename", chat }) },
       chat && {
         id: "move-chat",

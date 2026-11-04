@@ -187,7 +187,13 @@ impl Agent {
             "session/new" => {
                 self.sessions += 1;
                 let sid = std::env::var("YAAH_AGENT_SESSION_ID").unwrap_or_else(|_| format!("s{}-{}", self.sessions, std::process::id()));
-                Self::respond(id, &json!({ "sessionId": sid }));
+                Self::respond(id, &crate::agent_config::opened(json!({ "sessionId": sid }), &sid));
+            }
+            "session/set_config_option" | "session/set_model" if crate::agent_config::on() => {
+                match crate::agent_config::set(msg["method"].as_str().unwrap_or_default(), params, update) {
+                    Ok(result) => Self::respond(id, &result),
+                    Err(e) => send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32602, "message": e } })),
+                }
             }
             "session/list" => Self::respond(id, &list_sessions(params)),
             "session/load" => {
@@ -204,7 +210,7 @@ impl Agent {
                         chunk(sid, "replayed history");
                     }
                 }
-                Self::respond(id, &json!({}));
+                Self::respond(id, &crate::agent_config::opened(json!({}), sid));
             }
             "session/prompt" => self.prompt(id, params),
             "session/cancel" => {}
@@ -289,6 +295,7 @@ impl Agent {
                 chunk(&sid, &format!("outcomes: {}", chosen(&got[&ask.to_string()])));
                 stop = "cancelled";
             }
+            "config" => chunk(&sid, &crate::agent_config::describe(&sid)),
             "crash" => {
                 chunk(&sid, "bye");
                 eprintln!("scripted agent: crashing on purpose");

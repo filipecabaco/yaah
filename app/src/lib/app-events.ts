@@ -55,3 +55,19 @@ export function onOpenAddRepos(cb: (request: AddRepos) => void): () => void {
   window.addEventListener(ADD_REPOS, listener);
   return () => window.removeEventListener(ADD_REPOS, listener);
 }
+
+const COMPOSER_CONFIG = "yaah:composer-config";
+/** The composer's pickers (components/composer-config.tsx). */
+export type ConfigRole = "model" | "effort";
+type ComposerConfigRequest = { sessionId: string; role: ConfigRole; pane?: string };
+
+/** Ask a chat's composer to open its Model or Effort picker (⌘K "Change model…"). `pane`: where it was asked from. */
+export function openComposerConfig(sessionId: string, role: ConfigRole, pane?: string) {
+  window.dispatchEvent(new CustomEvent<ComposerConfigRequest>(COMPOSER_CONFIG, { detail: { sessionId, role, pane } }));
+}
+
+export function onOpenComposerConfig(cb: (request: ComposerConfigRequest) => void): () => void {
+  const listener = (e: Event) => cb((e as CustomEvent<ComposerConfigRequest>).detail);
+  window.addEventListener(COMPOSER_CONFIG, listener);
+  return () => window.removeEventListener(COMPOSER_CONFIG, listener);
+}

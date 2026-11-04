@@ -11,6 +11,10 @@ import { mapTypes } from "./map-types";
 import { flowGraphs } from "./flow-graphs";
 import { addProject } from "./projects";
 import { permissionsReply, trustedAnswer, trustedFor } from "./permissions";
+import { initialConfig } from "./config";
+import { screenshotChat, takeStaged } from "./attachments";
+import { referenceEntry, referencesIn } from "./references";
+import type { Attachment } from "@/lib/attachments";
 
 /** A new, empty chat (session.rs `new_session`). */
 export function openChat({ state }: Mock, fields: Pick<SessionInfo, "projectId" | "accountId" | "cwd" | "additionalDirs">): SessionInfo {
@@ -25,6 +29,7 @@ export function openChat({ state }: Mock, fields: Pick<SessionInfo, "projectId" 
     commands: slashCommands,
     createdAt: now(),
     extraDirs: [],
+    config: initialConfig(state, fields.accountId),
   });
 }
 
@@ -758,6 +763,7 @@ const routes: [RegExp, Recording][] = [
   [/flow graphs?/i, flowGraphsRecording],
   [/diff of my project|workspace of yaah|request folders/i, folderRequest],
   [/big diff/i, bigDiff],
+  [/screenshot|browser/i, screenshotChat],
   [/expand fill/i, expandFill],
   [/assembl|deploys/i, assembling],
   [/\bmdx\b|docs page/i, mdxReply],
@@ -848,7 +854,7 @@ export function chatReplies(m: Mock): Replies {
   };
 
   /** Replays the recording for `text`, after what the chat already shows. */
-  async function replay(sessionId: string, text: string, mentions: string[]) {
+  async function replay(sessionId: string, text: string, mentions: string[], files: Attachment[] = []) {
     const s = session(sessionId);
     stopTurn(state.turns[sessionId]);
     const turn: Turn = { cancelled: false, answered: new Set() };
@@ -880,7 +886,13 @@ export function chatReplies(m: Mock): Replies {
       // The user's own prompt replaces the recorded one (later recorded prompts stay).
       const entry: Entry =
         step === firstUser && step.entry.type === "user"
-          ? { ...step.entry, text, attachments: [...(handoff ? [`hand-off from ${handoff}`] : []), ...mentions.map(baseName)] }
+          ? {
+              ...step.entry,
+              text,
+              attachments: [...(handoff ? [`hand-off from ${handoff}`] : []), ...mentions.map(baseName)],
+              ...(files.length ? { files } : {}),
+              ...referenceEntry(state, text),
+            }
           : step.entry;
       const isUpdate = entry.type === "ui" && rendered.has(index);
       if (entry.type === "ui") rendered.add(index);
@@ -1017,11 +1029,25 @@ export function chatReplies(m: Mock): Replies {
       return null;
     },
 
-    send_prompt: ({ sessionId, text, mentions = [] }: { sessionId: string; text: string; mentions?: string[] }) => {
+    send_prompt: async ({
+      sessionId,
+      text,
+      mentions = [],
+      attachments = [],
+    }: {
+      sessionId: string;
+      text: string;
+      mentions?: string[];
+      attachments?: string[];
+    }) => {
       const s = session(sessionId);
+      // What the composer attached, as attachments.rs sends it for this agent.
+      const files = takeStaged(m, attachments, state.profiles.find((p) => p.id === s.accountId)?.report);
+      // references.rs reads the message's `github#…` tokens before the turn starts.
+      if (referencesIn(state, text).length) await m.wait(400);
       if (!state.transcripts[sessionId]?.length) s.title = (text.split("\n")[0] ?? "").slice(0, 60);
       // The turn runs on after the command returns, as in Rust.
-      replay(sessionId, text, mentions).catch((e: unknown) => console.error("[browser-mock] replay failed", e));
+      replay(sessionId, text, mentions, files).catch((e: unknown) => console.error("[browser-mock] replay failed", e));
       return null;
     },
     // session.rs `switch_agent`: the next prompt goes to another agent (a fresh session there, with a hand-off).
@@ -1032,7 +1058,8 @@ export function chatReplies(m: Mock): Replies {
       const to = need(label(accountId), `unknown agent ${accountId}; add it again in Manage agents`);
       if (accountId === s.accountId) throw new Error(`This chat already uses ${to}.`);
       const from = label(s.accountId) ?? null;
-      Object.assign(s, { accountId, handoffFrom: from ?? s.accountId });
+      // The new agent's settings (Rust learns them from its fresh session on the next message).
+      Object.assign(s, { accountId, handoffFrom: from ?? s.accountId, config: initialConfig(state, accountId) });
       const list = (state.transcripts[sessionId] ??= []);
       await show(sessionId, list.length, { type: "switch", accountId, label: to, from });
       await showInfo(s);

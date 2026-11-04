@@ -1129,6 +1129,7 @@ mod tests {
                 dirs_changed: false,
                 remembered: std::collections::BTreeMap::default(),
                 trusted_mcp_servers: vec![],
+                config: crate::session::ChatConfig::default(),
             };
             std::fs::write(dir.join(format!("sessions/{id}.json")), json!({ "info": info, "entries": [] }).to_string()).unwrap();
         }

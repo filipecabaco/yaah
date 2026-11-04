@@ -49,6 +49,10 @@ import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardM
 import { readToolText, toolTextLayout } from "@/lib/tool-output";
 import { cn } from "@/lib/utils";
 import { toolLabel } from "@/lib/ui-tool-label";
+import { toolImages } from "@/lib/attachments";
+import { ImageStrip } from "@/components/image-preview";
+import { SentAttachments } from "@/components/composer-attachments";
+import { ReferenceNotes, ReferenceText } from "@/components/references";
 
 type Of<T extends Entry["type"]> = Extract<Entry, { type: T }>;
 
@@ -105,15 +109,24 @@ const quoted = (text: string) =>
     .join("\n") + "\n\n";
 
 function UserMessage({ entry }: { entry: Of<"user"> }) {
-  const pane = useChat()?.pane;
+  const chat = useChat();
+  const pane = chat?.pane;
   return (
     <div data-align="end" className="ml-auto flex w-fit max-w-[min(75ch,85%)] flex-col items-end gap-1 text-sm">
-      <CopyMenu
-        act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }, pane) }]}
-        actions={[{ label: "Copy text", text: () => entry.text }]}
-      >
-        <div className="max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">{entry.text}</div>
-      </CopyMenu>
+      {/* What the user attached (dropped, pasted, picked), above what they wrote. */}
+      <SentAttachments sessionId={chat?.sessionId} files={entry.files ?? []} />
+      {(entry.text !== "" || !entry.files?.length) && (
+        <CopyMenu
+          act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }, pane) }]}
+          actions={[{ label: "Copy text", text: () => entry.text }]}
+        >
+          <div className="max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">
+            {/* `github#o/r#9` and the like as links to the item (components/references.tsx). */}
+            <ReferenceText text={entry.text} references={entry.references} />
+          </div>
+        </CopyMenu>
+      )}
+      <ReferenceNotes references={entry.references} />
       {entry.attachments.length > 0 && (
         <div className="flex gap-1">
           {entry.attachments.map((a) => (
@@ -135,24 +148,29 @@ function UserMessage({ entry }: { entry: Of<"user"> }) {
  * inside have a width to fill); `.agent-reply` in index.css loosens the prose spacing inside.
  */
 function AgentMessage({ entry }: { entry: Of<"agent"> }) {
-  const pane = useChat()?.pane;
+  const chat = useChat();
+  const pane = chat?.pane;
+  const images = entry.images ?? [];
   // A run that hasn't streamed any text yet would be an empty bubble.
-  if (!entry.text.trim()) return null;
+  if (!entry.text.trim()) return images.length ? <ImageStrip sessionId={chat?.sessionId} images={images} alt="Image from the agent" /> : null;
   return (
-    <CopyMenu
-      // The selected part of this message, if any; else all of it.
-      act={(t) => [
-        { label: "Quote in reply", icon: <Quote />, onSelect: () => draftIntoComposer({ text: quoted(t.ownSelection || entry.text) }, pane) },
-      ]}
-      actions={[{ label: "Copy text", text: () => entry.text }]}
-    >
-      <div
-        data-align="start"
-        className="agent-reply w-fit max-w-[min(140ch,100%)] rounded-lg bg-muted/50 px-4 py-3 text-sm leading-relaxed [overflow-wrap:anywhere]"
+    <>
+      <CopyMenu
+        // The selected part of this message, if any; else all of it.
+        act={(t) => [
+          { label: "Quote in reply", icon: <Quote />, onSelect: () => draftIntoComposer({ text: quoted(t.ownSelection || entry.text) }, pane) },
+        ]}
+        actions={[{ label: "Copy text", text: () => entry.text }]}
       >
-        <Markdown>{entry.text}</Markdown>
-      </div>
-    </CopyMenu>
+        <div
+          data-align="start"
+          className="agent-reply w-fit max-w-[min(140ch,100%)] rounded-lg bg-muted/50 px-4 py-3 text-sm leading-relaxed [overflow-wrap:anywhere]"
+        >
+          <Markdown>{entry.text}</Markdown>
+        </div>
+      </CopyMenu>
+      <ImageStrip sessionId={chat?.sessionId} images={images} alt="Image from the agent" className="mt-2" />
+    </>
   );
 }
 
@@ -250,6 +268,9 @@ function ToolCall({ entry, turnActive, permission }: { entry: Of<"tool">; turnAc
     setOpen(wanted);
   }
   const Icon = TOOL_ICONS[entry.kind ?? ""] ?? Wrench;
+  const sessionId = useChat()?.sessionId;
+  // Images it returned (a browser screenshot) show under the title, open or not.
+  const images = useMemo(() => toolImages(entry.content), [entry.content]);
   const output = toolOutput(entry.content);
   const label = toolLabel({ title: entry.title, status: entry.status, rawInput: entry.rawInput, output });
   const hasBody = entry.content.length > 0 || entry.rawInput != null;
@@ -291,6 +312,7 @@ function ToolCall({ entry, turnActive, permission }: { entry: Of<"tool">; turnAc
           )}
           {hasBody && <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />}
         </CollapsibleTrigger>
+        <ImageStrip sessionId={sessionId} images={images} alt={label ? label.text : entry.title} className="border-t px-3 py-2" />
         <CollapsibleContent>
           <div className="flex flex-col gap-2 border-t px-3 py-2">
             {entry.content.length > 0 ? (
@@ -319,6 +341,8 @@ function toolPaths(entry: Of<"tool">): string[] {
 function ToolContentView({ content, failed }: { content: ToolContent; failed: boolean }) {
   switch (content.type) {
     case "content":
+      // Images are drawn under the card's title (ToolCall).
+      if (content.content.type === "image") return null;
       return content.content.text == null ? <Pre>{`[${content.content.type}]`}</Pre> : <ToolText raw={content.content.text} failed={failed} />;
     case "diff":
       return <TextDiff path={content.path} oldText={content.oldText ?? ""} newText={content.newText} />;

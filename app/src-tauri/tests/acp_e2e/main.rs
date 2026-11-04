@@ -6,6 +6,8 @@
 //! tests by name, as with libtest.
 
 mod agent;
+mod agent_config;
+mod config_tests;
 
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -83,6 +85,16 @@ fn main() {
         ("resume_refuses_agents_that_cant_list_or_reopen", resume_refuses_agents_that_cant_list_or_reopen),
         ("resume_lists_each_profiles_own_sessions_on_its_own_agent", resume_lists_each_profiles_own_sessions_on_its_own_agent),
         ("agents_run_commands_in_yaahs_terminals", agents_run_commands_in_yaahs_terminals),
+        (
+            "model_and_effort_reach_the_agent_and_come_back_after_a_reload",
+            config_tests::model_and_effort_reach_the_agent_and_come_back_after_a_reload,
+        ),
+        (
+            "changes_wait_for_the_turn_and_a_detached_chat_sends_them_with_its_next_message",
+            config_tests::changes_wait_for_the_turn_and_a_detached_chat_sends_them_with_its_next_message,
+        ),
+        ("the_older_models_field_goes_through_set_model", config_tests::the_older_models_field_goes_through_set_model),
+        ("new_chats_start_with_the_profiles_defaults", config_tests::new_chats_start_with_the_profiles_defaults),
     ];
     let filters: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let chosen: Vec<_> = tests.iter().filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))).collect();
@@ -338,7 +350,7 @@ fn initialize_advertises_notices_and_a_turn_streams() {
         .collect();
     assert_eq!(kinds, ["user", "thought", "agent", "tool", "plan", "agent"], "chunks merge, updates update in place");
     assert!(matches!(&t.entries[1], Entry::Thought { text, .. } if text == "Thinking hard"));
-    assert!(matches!(&t.entries[2], Entry::Agent { text, message_id: Some(m) } if text == "Hello world" && m == "m1"));
+    assert!(matches!(&t.entries[2], Entry::Agent { text, message_id: Some(m), .. } if text == "Hello world" && m == "m1"));
     let Entry::Tool { title, status, content, locations, .. } = &t.entries[3] else { panic!() };
     assert_eq!((title.as_str(), status.as_deref()), ("Read notes.md", Some("completed")), "a null title keeps the one there");
     assert_eq!(content[0]["content"]["text"], "notes");
@@ -842,7 +854,7 @@ fn the_ui_guide_goes_with_the_first_prompt_otherwise() {
     assert_eq!(prompts[1]["prompt"].as_array().unwrap().len(), 1, "the guide goes once");
     let t = f.hub.transcript(&sid).unwrap();
     assert!(
-        matches!(&t.entries[0], Entry::User { text, attachments } if text == "echo first" && attachments == &[agent_guide::ATTACHMENT]),
+        matches!(&t.entries[0], Entry::User { text, attachments, .. } if text == "echo first" && attachments == &[agent_guide::ATTACHMENT]),
         "the chat shows it was attached, not its text: {:?}",
         t.entries[0]
     );

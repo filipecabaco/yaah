@@ -7,6 +7,13 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import type { Entry } from "@/lib/api";
 import { plural } from "@/lib/format";
 import { groupPreview, setGroupOpen, useGroupOpen } from "@/lib/tool-groups";
+import { useChat } from "@/components/chat-context";
+import { ImageThumb } from "@/components/image-preview";
+import { toolImages } from "@/lib/attachments";
+import { toolLabel } from "@/lib/ui-tool-label";
+
+/** Images a folded group shows under its row: the latest few. */
+const PREVIEW_IMAGES = 4;
 
 type Tool = Extract<Entry, { type: "tool" }>;
 
@@ -38,6 +45,8 @@ export function ToolGroup({ id, tools, running, autoAllowed, card }: Props) {
         {autoAllowed > 0 && <span className="shrink-0">· {autoAllowed} auto-allowed</span>}
         {busy && <span className="sr-only">, one still running</span>}
       </CollapsibleTrigger>
+      {/* Folded, the group still shows what its calls returned as images (a browser's screenshots), newest last. */}
+      {!open && <GroupImages tools={tools.filter((_, k) => !running[k])} />}
       {done.length > 0 && (
         <CollapsibleContent className="flex flex-col gap-3">
           {done.map((k) => (
@@ -47,5 +56,26 @@ export function ToolGroup({ id, tools, running, autoAllowed, card }: Props) {
       )}
       {tools.map((_, k) => running[k] && <div key={k}>{card(k)}</div>)}
     </Collapsible>
+  );
+}
+
+function GroupImages({ tools }: { tools: Tool[] }) {
+  const sessionId = useChat()?.sessionId;
+  // Named as their cards are ("vitro: screenshot").
+  const all = tools.flatMap((t) =>
+    toolImages(t.content).map((image) => ({
+      image,
+      title: toolLabel({ title: t.title, status: t.status, rawInput: t.rawInput, output: "" })?.text ?? t.title,
+    })),
+  );
+  const shown = all.slice(-PREVIEW_IMAGES);
+  if (!shown.length) return null;
+  return (
+    <div className="-mt-1.5 flex flex-wrap items-center gap-2 pl-7" data-slot="tool-group-images">
+      {shown.map(({ image, title }, i) => (
+        <ImageThumb key={image.image ?? i} sessionId={sessionId} image={image} alt={title} variant="strip" />
+      ))}
+      {all.length > shown.length && <span className="text-xs text-muted-foreground">+{all.length - shown.length} more inside</span>}
+    </div>
   );
 }

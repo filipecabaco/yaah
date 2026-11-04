@@ -155,7 +155,14 @@ pub type Notify = Arc<dyn Fn(Value) + Send + Sync>;
 /// their own overall timeout.
 pub(crate) fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
-    CLIENT.get_or_init(|| reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).user_agent("yaah").build().unwrap_or_default())
+    CLIENT.get_or_init(|| {
+        let b = reqwest::Client::builder().connect_timeout(Duration::from_secs(10)).user_agent("yaah");
+        // Each #[tokio::test] has its own runtime, and a stub server's port is soon reused: a pooled
+        // connection from a test that ended would hang the next one until its timeout. The app has one.
+        #[cfg(test)]
+        let b = b.pool_max_idle_per_host(0);
+        b.build().unwrap_or_default()
+    })
 }
 
 /// A response body, refusing one larger than `max` bytes instead of holding it.
