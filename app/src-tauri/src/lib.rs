@@ -124,6 +124,7 @@ pub fn run() {
             data_commands::read_custom_theme,
             data_commands::installed_fonts,
             data_commands::set_fonts,
+            data_commands::step_font_size,
             data_commands::reveal_data_dir,
             data_commands::window_layout,
             data_commands::set_layout,

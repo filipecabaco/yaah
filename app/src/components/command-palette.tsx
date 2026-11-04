@@ -4,6 +4,9 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode 
 import {
   ArrowRightLeft,
   Equal,
+  ZoomIn,
+  ZoomOut,
+  ALargeSmall,
   CircleDot,
   Columns2,
   PanelLeft,
@@ -58,6 +61,7 @@ import {
   type SessionInfo,
 } from "@/lib/api";
 import { baseName } from "@/lib/format";
+import { stepFontSize } from "@/lib/fonts";
 import { fuzzyBest, rankTop } from "@/lib/fuzzy";
 import { formatKeys, SHORTCUTS, type ShortcutId } from "@/lib/shortcuts";
 
@@ -513,6 +517,23 @@ function PaletteBody({
         shortcut: "toggleSidebar",
         onSelect: () => run(() => y.panes.toggleSidebar()),
       },
+      {
+        id: "size-up",
+        icon: <ZoomIn />,
+        label: "Bigger text",
+        detail: "interface and code",
+        shortcut: "sizeUp",
+        onSelect: () => run(() => stepFontSize(1)),
+      },
+      {
+        id: "size-down",
+        icon: <ZoomOut />,
+        label: "Smaller text",
+        detail: "interface and code",
+        shortcut: "sizeDown",
+        onSelect: () => run(() => stepFontSize(-1)),
+      },
+      { id: "size-reset", icon: <ALargeSmall />, label: "Default text size", shortcut: "sizeReset", onSelect: () => run(() => stepFontSize(0)) },
       { id: "new-project", icon: <Plus />, label: "New project…", shortcut: "newProject", onSelect: () => close(onNewProject) },
       {
         id: "new-project-from-item",

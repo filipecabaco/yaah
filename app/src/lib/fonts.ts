@@ -6,7 +6,7 @@
 // quoted by fonts.rs); `null` removes the variable and index.css's default (today's
 // look) shows. Terminals read the same variables (components/terminal/theme.ts).
 import { useSyncExternalStore } from "react";
-import { FONT_VARS, type FontSettings, type FontVar } from "@/lib/api";
+import { api, FONT_VARS, type FontSettings, type FontVar } from "@/lib/api";
 
 /** Where the last applied fonts are kept for public/theme-boot.js, which applies them before the app loads. */
 export const FONT_CACHE = "yaah:fonts";
@@ -40,6 +40,30 @@ export function applyFonts(css: FontSettings["css"] | null | undefined) {
   } catch {
     // Storage full or off: the next start shows the default fonts until the settings arrive.
   }
+}
+
+const SAVED = "yaah:fonts-saved";
+
+/** Fonts Rust just saved: apply them, and tell an open Settings → Fonts (it shows the new sizes). */
+export function fontsSaved(saved: FontSettings) {
+  applyFonts(saved.css);
+  window.dispatchEvent(new CustomEvent<FontSettings>(SAVED, { detail: saved }));
+}
+
+export function onFontsSaved(cb: (saved: FontSettings) => void): () => void {
+  const listener = (e: Event) => cb((e as CustomEvent<FontSettings>).detail);
+  window.addEventListener(SAVED, listener);
+  return () => window.removeEventListener(SAVED, listener);
+}
+
+// Held keys repeat fast; each step reads what the one before saved.
+let stepping: Promise<unknown> = Promise.resolve();
+
+/** ⌘= / ⌘- / ⌘0: everything a size bigger, smaller, or the default size (settings.rs `step_font_size`). */
+export function stepFontSize(step: -1 | 0 | 1): Promise<void> {
+  const next = stepping.then(() => api.stepFontSize(step)).then(fontsSaved);
+  stepping = next.catch((e: unknown) => console.error("could not change the size", e));
+  return next;
 }
 
 /** The family's name as CSS, for previewing it in a list (quoted; names are plain, fonts.rs). */

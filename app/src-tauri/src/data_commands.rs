@@ -235,6 +235,12 @@ pub async fn set_fonts(fonts: settings::Fonts) -> Result<serde_json::Value, Stri
     tauri::async_runtime::spawn_blocking(move || settings::set_fonts(&fonts)).await.map_err(|e| e.to_string())?
 }
 
+/// ⌘= / ⌘- / ⌘0: sizes a step bigger (1), smaller (-1) or back to the default (0).
+#[tauri::command]
+pub async fn step_font_size(step: i8) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || settings::step_font_size(step)).await.map_err(|e| e.to_string())?
+}
+
 /// A dropped-in VS Code theme, by file name (never a path).
 #[tauri::command]
 pub fn read_custom_theme(name: String) -> Result<serde_json::Value, String> {

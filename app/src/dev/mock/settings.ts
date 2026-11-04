@@ -186,6 +186,16 @@ export function settingsReplies({ state }: Mock): Replies {
       state.fonts = { ui: fonts.ui, code: fonts.code, uiSize: fonts.uiSize, codeSize: fonts.codeSize };
       return fontsForUi(state.fonts);
     },
+    // settings.rs `step_font_size`: a px at a time within range; a code size of its own moves too.
+    step_font_size: ({ step }: { step: number }): FontSettings => {
+      const f = state.fonts;
+      const clamp = (n: number, l: { min: number; max: number }) => Math.min(l.max, Math.max(l.min, n));
+      const by = Math.sign(step);
+      const ui = step === 0 ? null : clamp((f.uiSize ?? UI_LIMIT.default) + by, UI_LIMIT);
+      const code = f.codeSize == null ? null : step === 0 ? CODE_LIMIT.default : clamp(f.codeSize + by, CODE_LIMIT);
+      state.fonts = { ...f, uiSize: ui === UI_LIMIT.default ? null : ui, codeSize: code };
+      return fontsForUi(state.fonts);
+    },
     set_tool_card: ({ key, mode }: { key: string; mode: CardMode | null }) => {
       const { [key]: _, ...rest } = state.cardRules;
       state.cardRules = mode ? { ...rest, [key]: mode } : rest;

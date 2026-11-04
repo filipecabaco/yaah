@@ -347,6 +347,25 @@ fn set_fonts_in(file: &JsonFile, f: &Fonts, valid: impl Fn(&str) -> bool) -> Res
     Ok(fonts_for_ui(&fonts_in(&file.read(), valid)))
 }
 
+/// ⌘= / ⌘- / ⌘0: everything a size bigger (`1`), smaller (`-1`), or the default size (`0`).
+/// The interface size moves a px at a time within its range; a code size of its own (sizes not
+/// linked) moves with it, and a linked one follows by itself. The families stay.
+pub fn step_font_size(step: i8) -> Result<Value, String> {
+    step_font_size_in(file(), step, crate::fonts::valid_family)
+}
+
+fn step_font_size_in(file: &JsonFile, step: i8, valid: impl Fn(&str) -> bool) -> Result<Value, String> {
+    let f = fonts_in(&file.read(), &valid);
+    let moved = |n: u8, range: &std::ops::RangeInclusive<u8>| n.saturating_add_signed(step.signum()).clamp(*range.start(), *range.end());
+    let (ui_size, code_size) = if step == 0 {
+        (None, f.code_size.map(|_| CODE_SIZE_DEFAULT))
+    } else {
+        let ui = moved(f.ui_size.unwrap_or(UI_SIZE_DEFAULT), &UI_SIZES);
+        (Some(ui).filter(|&n| n != UI_SIZE_DEFAULT), f.code_size.map(|n| moved(n, &CODE_SIZES)))
+    };
+    set_fonts_in(file, &Fonts { ui_size, code_size, ..f }, valid)
+}
+
 // ── tool cards ───────────────────────────────────────────────────────────────
 /// How a tool call's card opens in a chat: "auto" (open while it runs), "collapsed"
 /// or "expanded". Keyed by the card's kind of tool: a name (`ToolSearch`, `Load skill`,
@@ -730,6 +749,40 @@ mod tests {
         assert_eq!(fonts_in(&s, installed), Fonts::default(), "not an object");
         let s: Map<String, Value> = serde_json::from_value(json!({ "fonts": { "ui": "Georgia", "uiSize": 12.5 } })).unwrap();
         assert_eq!(fonts_in(&s, installed), Fonts { ui: Some("Georgia".into()), ..Fonts::default() }, "sizes are whole px");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn font_size_steps_within_range_and_keeps_the_link() {
+        let installed = |n: &str| crate::fonts::plain_name(n) && n == "Georgia";
+        let dir = std::env::temp_dir().join(format!("yaah-fonts-{}", crate::random::token()));
+        let file = JsonFile::new(dir.join("settings.json"), false);
+        let saved = || fonts_in(&file.read(), installed);
+
+        // Linked (no code size of its own): only the interface size moves; code follows it in CSS.
+        step_font_size_in(&file, 1, installed).unwrap();
+        assert_eq!(saved(), Fonts { ui_size: Some(15), ..Fonts::default() });
+        step_font_size_in(&file, -1, installed).unwrap();
+        assert_eq!(saved(), Fonts::default(), "back at 14 is the default, not a stored 14");
+        for _ in 0..10 {
+            step_font_size_in(&file, -1, installed).unwrap();
+        }
+        assert_eq!(saved().ui_size, Some(12), "stops at the smallest");
+        for _ in 0..20 {
+            step_font_size_in(&file, 1, installed).unwrap();
+        }
+        assert_eq!(saved().ui_size, Some(20), "stops at the largest");
+
+        // Not linked: the code size moves with it, each within its own range; the families stay.
+        set_fonts_in(&file, &Fonts { ui: Some("Georgia".into()), ui_size: Some(19), code_size: Some(11), ..Fonts::default() }, installed).unwrap();
+        step_font_size_in(&file, 1, installed).unwrap();
+        step_font_size_in(&file, 1, installed).unwrap();
+        assert_eq!(saved(), Fonts { ui: Some("Georgia".into()), ui_size: Some(20), code_size: Some(13), ..Fonts::default() });
+
+        // ⌘0: default sizes, still not linked, font kept.
+        let back = step_font_size_in(&file, 0, installed).unwrap();
+        assert_eq!(saved(), Fonts { ui: Some("Georgia".into()), code_size: Some(CODE_SIZE_DEFAULT), ..Fonts::default() });
+        assert_eq!(back["css"]["--font-ui-scale"], Value::Null);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

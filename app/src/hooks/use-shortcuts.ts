@@ -4,7 +4,7 @@ import { shortcutFor, type ShortcutHit, type ShortcutId } from "@/lib/shortcuts"
 type Handlers = Partial<Record<ShortcutId, (hit: ShortcutHit) => void>>;
 
 /** Shortcuts that still work while a dialog or menu is open. */
-const OVER_DIALOGS: ShortcutId[] = ["palette", "help", "settings"];
+const OVER_DIALOGS: ShortcutId[] = ["palette", "help", "settings", "sizeUp", "sizeDown", "sizeReset"];
 
 /** The handlers bound last, for keys that reach the app another way (a terminal hands them over). */
 let bound: { current: Handlers } | null = null;

@@ -8,6 +8,7 @@ import { setTerminalEngine } from "@/components/terminal/engine";
 import { readTerminalFont, TERMINAL_FONT } from "@/components/terminal/theme";
 import { api, FONT_VARS } from "@/lib/api";
 import { applyFonts, codeScale, FONT_CACHE } from "@/lib/fonts";
+import { isMac } from "@/lib/shortcuts";
 import { renderApp } from "@/test/app";
 import { engines, textEngine } from "@/test/text-engine";
 
@@ -91,7 +92,7 @@ describe("Settings → Fonts", () => {
     // Code follows the interface until it has a size of its own: 12px × 16/14.
     expect(root().getPropertyValue("--font-code-scale")).toBe("");
     expect(codeScale()).toBeCloseTo(1.1429);
-    expect(within(dialog).getByText(/14 px · follows the interface/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/14 px · linked/)).toBeInTheDocument();
 
     // The ends of the range hold.
     fireEvent.keyDown(ui, { key: "End" });
@@ -99,6 +100,12 @@ describe("Settings → Fonts", () => {
     fireEvent.keyDown(ui, { key: "ArrowRight" });
     await waitFor(async () => expect((await api.generalSettings()).fonts.uiSize).toBe(20));
 
+    // Unlinked, code takes a size of its own.
+    const link = within(dialog).getByRole("button", { name: "Link the code size to the interface size" });
+    expect(link).toHaveAttribute("aria-pressed", "true");
+    await user.click(link);
+    await waitFor(async () => expect((await api.generalSettings()).fonts.codeSize).toBe(17));
+    expect(link).toHaveAttribute("aria-pressed", "false");
     const code = within(dialog).getByRole("slider", { name: "Code size" });
     code.focus();
     fireEvent.keyDown(code, { key: "Home" });
@@ -114,6 +121,51 @@ describe("Settings → Fonts", () => {
     expect((await api.generalSettings()).fonts).toMatchObject({ ui: null, code: null, uiSize: null, codeSize: null });
     expect(localStorage.getItem(FONT_CACHE)).toBeNull();
     expect(within(dialog).getByRole("combobox", { name: "Interface font" })).toHaveTextContent("System default");
+  });
+
+  it("linked, moving the code size moves the interface size too; relinking drops code's own size", async () => {
+    const { user } = renderApp();
+    const dialog = await openFonts(user);
+    const code = within(dialog).getByRole("slider", { name: "Code size" });
+    code.focus();
+    fireEvent.keyDown(code, { key: "ArrowRight" });
+    // 13px code is 15px interface (×14/12, rounded); code still has no size of its own.
+    await waitFor(async () => expect((await api.generalSettings()).fonts).toMatchObject({ uiSize: 15, codeSize: null }));
+    await waitFor(() => expect(code).toHaveAttribute("aria-valuenow", "13"));
+    // Linked, code's range is what the interface's range makes of it.
+    expect(code).toHaveAttribute("aria-valuemax", "17");
+
+    const link = within(dialog).getByRole("button", { name: "Link the code size to the interface size" });
+    await user.click(link);
+    await waitFor(async () => expect((await api.generalSettings()).fonts.codeSize).toBe(13));
+    await user.click(link);
+    await waitFor(async () => expect((await api.generalSettings()).fonts.codeSize).toBeNull());
+  });
+
+  it("⌘= / ⌘- / ⌘0 change the sizes from anywhere, and an open Settings follows", async () => {
+    const { user } = renderApp();
+    const dialog = await openFonts(user);
+    const ui = within(dialog).getByRole("slider", { name: "Interface size" });
+    const press = (code: string, key: string, shiftKey = false) =>
+      fireEvent.keyDown(window, { code, key, shiftKey, metaKey: isMac, ctrlKey: !isMac });
+    press("Equal", "=");
+    press("Equal", "+", true);
+    await waitFor(() => expect(ui).toHaveAttribute("aria-valuenow", "16"));
+    expect(root().getPropertyValue("--font-ui-scale")).toBe("1.1429");
+    press("Minus", "-");
+    await waitFor(async () => expect((await api.generalSettings()).fonts.uiSize).toBe(15));
+
+    // Not linked: code moves with it.
+    await user.click(within(dialog).getByRole("button", { name: "Link the code size to the interface size" }));
+    await waitFor(async () => expect((await api.generalSettings()).fonts.codeSize).toBe(13));
+    press("Equal", "=");
+    await waitFor(async () => expect((await api.generalSettings()).fonts).toMatchObject({ uiSize: 16, codeSize: 14 }));
+
+    // ⌘0: default sizes, still not linked.
+    press("Digit0", "0");
+    await waitFor(async () => expect((await api.generalSettings()).fonts).toMatchObject({ uiSize: null, codeSize: 12 }));
+    await waitFor(() => expect(ui).toHaveAttribute("aria-valuenow", "14"));
+    expect(root().getPropertyValue("--font-ui-scale")).toBe("");
   });
 
   it("refuses what Rust wouldn't build: an unknown family or a size out of range", async () => {

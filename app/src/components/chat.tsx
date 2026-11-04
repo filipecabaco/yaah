@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   ChevronDown,
   FileText,
@@ -305,11 +306,44 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
     );
   };
 
-  // Follow the stream only while the user is already at the bottom.
-  useEffect(() => {
+  // Whether the user has scrolled away from the end (shows "Jump to latest").
+  const [away, setAway] = useState(false);
+  const lastTop = useRef(0);
+  const toBottom = useCallback(() => {
     const el = scroller.current;
-    if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [entries]);
+    if (el) el.scrollTop = el.scrollHeight;
+  }, []);
+  const pin = useCallback(
+    (on: boolean) => {
+      pinned.current = on;
+      setAway(!on);
+      if (on) toBottom();
+    },
+    [toBottom],
+  );
+
+  // Follow the stream only while the user is already at the bottom; a message they send brings them back.
+  const seen = useRef(entries.length);
+  useEffect(() => {
+    const sent = entries.length > seen.current && entries[entries.length - 1]?.type === "user";
+    seen.current = entries.length;
+    if (sent) pin(true);
+    else if (pinned.current) toBottom();
+  }, [entries, pin, toBottom]);
+
+  // The log keeps growing after it draws: entries laid out for the first time (they start as a
+  // 120px estimate, see .transcript-entry), charts and maps that load, code that highlights.
+  // While pinned, every growth keeps the end in view, so a chat opens at its last message.
+  const column = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = column.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (pinned.current) toBottom();
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [toBottom]);
 
   // Earlier entries go in above what's shown without moving it.
   const heightBefore = useRef<number | null>(null);
@@ -339,65 +373,85 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
   }, [hasEarlier, earlier]);
 
   return (
-    <div
-      ref={scroller}
-      onScroll={(e) => {
-        const el = e.currentTarget;
-        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
-      }}
-      className="@container min-h-0 flex-1 overflow-y-auto"
-    >
-      {hasEarlier && (
-        <button
-          ref={sentinel}
-          type="button"
-          onClick={() => void earlier()}
-          className="mx-auto mt-4 block text-xs text-muted-foreground hover:text-foreground"
-        >
-          Show earlier messages
-        </button>
-      )}
-      <div className="chat-column flex flex-col gap-3 py-6" role="log" aria-label="Conversation" aria-busy={running || !transcript}>
-        {transcript?.error ? (
-          <TranscriptEntry
-            entry={{ type: "error", message: transcript.error, loginAccount: null }}
-            index={0}
-            inTurn={false}
-            live={false}
-            onLogin={onLogin}
-          />
-        ) : !transcript ? (
-          <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>
-        ) : (
-          entries.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Send a message to start.</p>
+    <div className="relative flex min-h-0 flex-1 flex-col">
+      <div
+        ref={scroller}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          // Only the user moving up lets go of the end. Content growing, or the browser
+          // keeping the view steady while entries above lay out, never does.
+          const up = el.scrollTop < lastTop.current;
+          lastTop.current = el.scrollTop;
+          if (atEnd !== pinned.current && (atEnd || up)) {
+            pinned.current = atEnd;
+            setAway(!atEnd);
+          }
+        }}
+        className="@container min-h-0 flex-1 overflow-y-auto"
+      >
+        {hasEarlier && (
+          <button
+            ref={sentinel}
+            type="button"
+            onClick={() => void earlier()}
+            className="mx-auto mt-4 block text-xs text-muted-foreground hover:text-foreground"
+          >
+            Show earlier messages
+          </button>
         )}
-        {rows.map((row) => {
-          // Rust addresses entries by index and only ever appends or replaces in place, so the index is a stable key.
-          const i = row.kind === "entry" ? row.index : row.indices[0];
-          const last = row.kind === "entry" ? row.index : row.indices[row.indices.length - 1];
-          // Off-screen entries skip layout and paint (content-visibility), so long chats open fast.
-          const offScreen = last < entries.length - LIVE_TAIL ? "transcript-entry" : undefined;
-          if (row.kind === "entry")
+        <div ref={column} className="chat-column flex flex-col gap-3 py-6" role="log" aria-label="Conversation" aria-busy={running || !transcript}>
+          {transcript?.error ? (
+            <TranscriptEntry
+              entry={{ type: "error", message: transcript.error, loginAccount: null }}
+              index={0}
+              inTurn={false}
+              live={false}
+              onLogin={onLogin}
+            />
+          ) : !transcript ? (
+            <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>
+          ) : (
+            entries.length === 0 && <p className="py-16 text-center text-sm text-muted-foreground">Send a message to start.</p>
+          )}
+          {rows.map((row) => {
+            // Rust addresses entries by index and only ever appends or replaces in place, so the index is a stable key.
+            const i = row.kind === "entry" ? row.index : row.indices[0];
+            const last = row.kind === "entry" ? row.index : row.indices[row.indices.length - 1];
+            // Off-screen entries skip layout and paint (content-visibility), so long chats open fast.
+            const offScreen = last < entries.length - LIVE_TAIL ? "transcript-entry" : undefined;
+            if (row.kind === "entry")
+              return (
+                <div key={i} className={offScreen}>
+                  {entryAt(i)}
+                </div>
+              );
+            const tools = row.indices.map((j) => entries[j]).filter((e): e is ToolEntry => e?.type === "tool");
             return (
-              <div key={i} className={offScreen}>
-                {entryAt(i)}
+              <div key={`g${i}`} className={offScreen}>
+                <ToolGroup
+                  id={`${sessionId}:${i}`}
+                  tools={tools}
+                  running={row.indices.map((j, k) => isRunning(tools[k], inTurnAt(j)))}
+                  autoAllowed={tools.filter((t) => ["readOnly", "trustedServer"].includes(folded.get(t.toolCallId)?.auto?.reason ?? "")).length}
+                  card={(k) => entryAt(row.indices[k])}
+                />
               </div>
             );
-          const tools = row.indices.map((j) => entries[j]).filter((e): e is ToolEntry => e?.type === "tool");
-          return (
-            <div key={`g${i}`} className={offScreen}>
-              <ToolGroup
-                id={`${sessionId}:${i}`}
-                tools={tools}
-                running={row.indices.map((j, k) => isRunning(tools[k], inTurnAt(j)))}
-                autoAllowed={tools.filter((t) => ["readOnly", "trustedServer"].includes(folded.get(t.toolCallId)?.auto?.reason ?? "")).length}
-                card={(k) => entryAt(row.indices[k])}
-              />
-            </div>
-          );
-        })}
-        {running && entries[entries.length - 1]?.type === "user" && <p className="text-xs text-muted-foreground">Working…</p>}
+          })}
+          {running && entries[entries.length - 1]?.type === "user" && <p className="text-xs text-muted-foreground">Working…</p>}
+        </div>
       </div>
+      {away && entries.length > 0 && (
+        <Button
+          size="sm"
+          variant="secondary"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full shadow-md"
+          onClick={() => pin(true)}
+        >
+          <ArrowDown /> Jump to latest
+        </Button>
+      )}
     </div>
   );
 }

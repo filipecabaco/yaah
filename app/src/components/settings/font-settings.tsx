@@ -1,17 +1,20 @@
 // Settings → Appearance → Fonts: the interface font and the code font (code blocks,
 // diffs, tool output, terminals), each "System default" or a family installed on this
-// machine (fonts.rs lists them), and a size for each. A change applies at once and is
-// saved; Rust checks it and builds the CSS (settings.rs `set_fonts`), lib/fonts.ts puts
-// it on the root.
+// machine (fonts.rs lists them), and a size for each. The sizes start linked: code
+// follows the interface (a code size of null), and either slider moves both; unlinked,
+// code has a size of its own. A change applies at once and is saved; Rust checks it and
+// builds the CSS (settings.rs `set_fonts`), lib/fonts.ts puts it on the root. ⌘= / ⌘- / ⌘0
+// change the sizes from anywhere (settings.rs `step_font_size`) and this follows.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronsUpDown, RotateCcw } from "lucide-react";
+import { ChevronsUpDown, Link2, RotateCcw, Unlink2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Slider } from "@/components/ui/slider";
 import { ErrorText } from "@/components/error-text";
 import { api, type FontChoice, type FontSettings, type InstalledFonts } from "@/lib/api";
-import { applyFonts, previewFamily } from "@/lib/fonts";
+import { fontsSaved, onFontsSaved, previewFamily } from "@/lib/fonts";
+import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
 
 const DEFAULT = "System default";
 const choiceOf = ({ ui, code, uiSize, codeSize }: FontChoice): FontChoice => ({ ui, code, uiSize, codeSize });
@@ -106,17 +109,18 @@ function SizeSlider({
   /** What the slider shows when `value` is unset. */
   shown: number;
   limits: { min: number; max: number; default: number };
+  /** Said beside the size when it isn't set of its own ("default", "linked"). */
   note: string;
   onChange: (size: number) => void;
 }) {
   const size = value ?? shown;
   // Spoken as shown ("14 pixels, default"), not a bare number (SR-6).
-  const spoken = value == null ? `${size} pixels, ${note}` : `${size} pixels`;
+  const spoken = note ? `${size} pixels, ${note}` : `${size} pixels`;
   return (
     <div className="flex w-72 max-w-full flex-col gap-2">
       <div className="flex items-baseline justify-between gap-2 text-sm">
         <span>{label} size</span>
-        <span className="text-muted-foreground tabular-nums">{value == null ? `${size} px · ${note}` : `${size} px`}</span>
+        <span className="text-muted-foreground tabular-nums">{note ? `${size} px · ${note}` : `${size} px`}</span>
       </div>
       <Slider
         aria-label={`${label} size`}
@@ -142,6 +146,9 @@ export function FontsSection({ initial }: { initial: FontSettings }) {
   // Changes go to Rust one after another (a slider sends many); only the latest answer is applied.
   const latest = useRef(0);
 
+  // ⌘= / ⌘- / ⌘0 while this is open.
+  useEffect(() => onFontsSaved(setFonts), []);
+
   useEffect(() => {
     let live = true;
     api.installedFonts().then(
@@ -161,8 +168,7 @@ export function FontsSection({ initial }: { initial: FontSettings }) {
     api.setFonts(next).then(
       (saved) => {
         if (run !== latest.current) return;
-        setFonts(saved);
-        applyFonts(saved.css);
+        fontsSaved(saved);
       },
       (e: unknown) => {
         if (run !== latest.current) return;
@@ -175,7 +181,14 @@ export function FontsSection({ initial }: { initial: FontSettings }) {
   const families = installed?.families ?? [];
   const { limits } = fonts;
   const uiSize = fonts.uiSize ?? limits.uiSize.default;
-  const codeFollows = Math.round((limits.codeSize.default * uiSize) / limits.uiSize.default);
+  // Linked, code is the interface size × 12/14 (index.css), and moving code moves the interface.
+  const codeAt = (ui: number) => Math.round((limits.codeSize.default * ui) / limits.uiSize.default);
+  const uiAt = (code: number) =>
+    Math.min(limits.uiSize.max, Math.max(limits.uiSize.min, Math.round((limits.uiSize.default * code) / limits.codeSize.default)));
+  const codeFollows = codeAt(uiSize);
+  const linked = fonts.codeSize == null;
+  const linkedCode = { min: codeAt(limits.uiSize.min), max: codeAt(limits.uiSize.max), default: limits.codeSize.default };
+  const sizeKeys = [SHORTCUTS.sizeUp, SHORTCUTS.sizeDown, SHORTCUTS.sizeReset].map((k) => formatKeys(k.keys));
   const isDefault = fonts.ui == null && fonts.code == null && fonts.uiSize == null && fonts.codeSize == null;
 
   return (
@@ -195,10 +208,21 @@ export function FontsSection({ initial }: { initial: FontSettings }) {
             value={fonts.uiSize}
             shown={limits.uiSize.default}
             limits={limits.uiSize}
-            note="default"
+            note={fonts.uiSize == null ? "default" : ""}
             onChange={(n) => save({ uiSize: n })}
           />
         </div>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="self-end"
+          aria-pressed={linked}
+          aria-label="Link the code size to the interface size"
+          title={linked ? "Linked: either size moves both. Click to set them apart" : "Not linked. Click to have code follow the interface"}
+          onClick={() => save({ codeSize: linked ? codeFollows : null })}
+        >
+          {linked ? <Link2 /> : <Unlink2 />}
+        </Button>
         <div className="flex flex-col gap-3">
           <span className="text-sm font-medium">Code</span>
           <FontPicker label="Code" value={fonts.code} families={families} monoFirst onPick={(code) => save({ code })} />
@@ -206,9 +230,9 @@ export function FontsSection({ initial }: { initial: FontSettings }) {
             label="Code"
             value={fonts.codeSize}
             shown={codeFollows}
-            limits={limits.codeSize}
-            note="follows the interface"
-            onChange={(n) => save({ codeSize: n })}
+            limits={linked ? linkedCode : limits.codeSize}
+            note={linked ? "linked" : ""}
+            onChange={(n) => (linked ? save({ uiSize: uiAt(n) === limits.uiSize.default ? null : uiAt(n) }) : save({ codeSize: n }))}
           />
         </div>
       </div>
@@ -222,11 +246,9 @@ export function FontsSection({ initial }: { initial: FontSettings }) {
         <Button variant="outline" size="sm" disabled={isDefault} onClick={() => save({ ui: null, code: null, uiSize: null, codeSize: null })}>
           <RotateCcw /> Reset to defaults
         </Button>
-        {fonts.codeSize != null && (
-          <Button variant="ghost" size="sm" onClick={() => save({ codeSize: null })}>
-            Code follows the interface size
-          </Button>
-        )}
+        <span className="text-xs text-muted-foreground">
+          {sizeKeys[0]} and {sizeKeys[1]} change the sizes from anywhere, {sizeKeys[2]} goes back to the default.
+        </span>
       </div>
       <ErrorText error={error} className="text-sm" />
     </div>

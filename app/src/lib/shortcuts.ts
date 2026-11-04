@@ -25,6 +25,9 @@ export type ShortcutId =
   | "newTerminal"
   | "focusPane"
   | "toggleSidebar"
+  | "sizeUp"
+  | "sizeDown"
+  | "sizeReset"
   | "help"
   | "settings";
 
@@ -47,6 +50,10 @@ export const SHORTCUTS: Record<ShortcutId, Shortcut> = {
   newTerminal: { label: "New terminal to the right, in this pane's folder", keys: [MOD, "T"], code: "KeyT" },
   focusPane: { label: "Move to the next pane over", keys: [MOD, ALT, "←↑↓→"] },
   toggleSidebar: { label: "Show or hide the sidebar", keys: [MOD, "B"], code: "KeyB" },
+  // ⌘+ (⌘⇧=) and the keypad's + and − count too; matched in shortcutFor.
+  sizeUp: { label: "Bigger: interface and code text", keys: [MOD, "="], code: "Equal" },
+  sizeDown: { label: "Smaller: interface and code text", keys: [MOD, "-"], code: "Minus" },
+  sizeReset: { label: "Default text size", keys: [MOD, "0"], code: "Digit0" },
   help: { label: "Keyboard shortcuts", keys: [MOD, "/"], code: "Slash" },
   settings: { label: "Settings", keys: [MOD, ","], code: "Comma" },
 };
@@ -85,6 +92,10 @@ export function shortcutFor(e: KeyboardEvent): ShortcutHit | null {
   }
   // Match the physical key; fall back to the character when no code is reported.
   const is = (code: string, key: string) => (e.code ? e.code === code : e.key.toLowerCase() === key);
+  // ⌘= and ⌘+ (Shift on most layouts), ⌘-, ⌘0, and the keypad's.
+  if (e.code === "NumpadAdd" || (e.shiftKey && is("Equal", "+"))) return { id: "sizeUp" };
+  if (e.code === "NumpadSubtract") return e.shiftKey ? null : { id: "sizeDown" };
+  if (e.code === "Numpad0") return e.shiftKey ? null : { id: "sizeReset" };
   const digit = /^Digit([1-9])$/.exec(e.code) ?? (!e.code ? /^([1-9])$/.exec(e.key) : null);
   if (digit) return e.shiftKey ? null : { id: "jumpChat", n: Number(digit[1]) };
   for (const [id, s] of Object.entries(SHORTCUTS)) {
@@ -94,13 +105,27 @@ export function shortcutFor(e: KeyboardEvent): ShortcutHit | null {
 }
 
 /** What a terminal leaves to the app; every other key goes to the shell. */
-const IN_TERMINAL = new Set<ShortcutId>(["palette", "splitRight", "splitDown", "closePane", "newTerminal", "focusPane", "balancePanes"]);
+const IN_TERMINAL = new Set<ShortcutId>([
+  "palette",
+  "splitRight",
+  "splitDown",
+  "closePane",
+  "newTerminal",
+  "focusPane",
+  "balancePanes",
+  "sizeUp",
+  "sizeDown",
+  "sizeReset",
+]);
+/** On Linux these keep plain Ctrl in a terminal too, as GNOME Terminal's zoom keys do. */
+const SIZE_KEYS = new Set<ShortcutId>(["sizeUp", "sizeDown", "sizeReset"]);
 
 /**
  * The app shortcut a keydown in a terminal is, if it's one a terminal leaves to the app.
  * On macOS that's ⌘K, ⌘D, ⌘⇧D, ⌘W, ⌘T and ⌘⌥ arrows. On Linux Ctrl+K, Ctrl+D and Ctrl+W
  * are the shell's (kill line, end of input, delete word), so there it takes Shift too
  * (Ctrl+Shift+K, D, W, T), as GNOME Terminal does; Ctrl+Alt arrows stay as they are.
+ * The size keys (Ctrl+=, Ctrl+-, Ctrl+0) are GNOME Terminal's zoom keys, so they stay plain.
  */
 export function terminalShortcut(e: KeyboardEvent): ShortcutHit | null {
   if (isMac) {
@@ -115,6 +140,10 @@ export function terminalShortcut(e: KeyboardEvent): ShortcutHit | null {
   if (e.metaKey && e.ctrlKey) {
     const hit = shortcutFor(e);
     return hit?.id === "balancePanes" ? hit : null;
+  }
+  if (e.ctrlKey && !e.metaKey) {
+    const hit = shortcutFor(e);
+    if (hit && SIZE_KEYS.has(hit.id)) return hit;
   }
   if (!e.ctrlKey || !e.shiftKey || e.metaKey) return null;
   const unshifted = { key: e.key.toLowerCase(), code: e.code, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false } as KeyboardEvent;

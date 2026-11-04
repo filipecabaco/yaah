@@ -131,4 +131,64 @@ describe("stay at bottom", () => {
     // B follows its stream: it's at the bottom.
     await waitFor(() => expect(inB.scrollTop).toBe(3000));
   });
+
+  it("scrolling up offers Jump to latest, which goes back to the end and follows again", async () => {
+    const mock = installBrowserMock({ delay: 0 });
+    setCardRules({});
+    const a = await api.newQuickChat("default");
+    Object.assign(mock.sessions[a.sessionId], { title: "chat A" });
+    mock.transcripts[a.sessionId] = [agent("a long chat")];
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "chat A" }));
+    await screen.findByText("a long chat");
+    const el = screen.getByRole("log", { name: "Conversation" }).parentElement as HTMLElement;
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 5000 });
+    Object.defineProperty(el, "clientHeight", { configurable: true, value: 400 });
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+
+    // At the end, then the user scrolls up to read.
+    el.scrollTop = 4600;
+    fireEvent.scroll(el);
+    el.scrollTop = 1000;
+    fireEvent.scroll(el);
+    const jump = await screen.findByRole("button", { name: "Jump to latest" });
+    // A new reply doesn't pull them down while they read.
+    await act(async () => {
+      await emit("session-entry", { sessionId: a.sessionId, index: 1, entry: agent("a reply") });
+      flushTranscripts();
+    });
+    await screen.findByText("a reply");
+    expect(el.scrollTop).toBe(1000);
+
+    fireEvent.click(jump);
+    expect(el.scrollTop).toBe(5000);
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+  });
+
+  it("content growing below doesn't count as scrolling away", async () => {
+    const mock = installBrowserMock({ delay: 0 });
+    setCardRules({});
+    const a = await api.newQuickChat("default");
+    Object.assign(mock.sessions[a.sessionId], { title: "chat A" });
+    mock.transcripts[a.sessionId] = [agent("a chat")];
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "chat A" }));
+    await screen.findByText("a chat");
+    const el = screen.getByRole("log", { name: "Conversation" }).parentElement as HTMLElement;
+    Object.defineProperty(el, "clientHeight", { configurable: true, value: 400 });
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 1000 });
+    el.scrollTop = 600;
+    fireEvent.scroll(el);
+    // A map below finishes loading: the end moves away, but nobody scrolled up.
+    Object.defineProperty(el, "scrollHeight", { configurable: true, value: 3000 });
+    el.scrollTop = 700;
+    fireEvent.scroll(el);
+    expect(screen.queryByRole("button", { name: "Jump to latest" })).toBeNull();
+    await act(async () => {
+      await emit("session-entry", { sessionId: a.sessionId, index: 1, entry: agent("more") });
+      flushTranscripts();
+    });
+    await screen.findByText("more");
+    await waitFor(() => expect(el.scrollTop).toBe(3000));
+  });
 });

@@ -114,6 +114,7 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
 - **Any VS Code theme:** 65 built in, or drop your own in. Text keeps at least 4.5:1 contrast in every theme, chart colours follow the
   theme, and the home screen scores 100 in Lighthouse accessibility.
 - **Your fonts:** pick an interface font and a code font and their sizes; they apply everywhere, terminals included.
+  The two sizes are linked unless you unlink them, and ⌘= / ⌘- / ⌘0 change them from anywhere.
 - **Your model account:** goose, OpenCode and Claude Code can run on Amazon Bedrock or OpenRouter.
 
 <p align="center">

@@ -754,6 +754,8 @@ export const api = {
   setGroupToolCalls: (enabled: boolean) => invoke<void>("set_group_tool_calls", { enabled }),
   installedFonts: () => invoke<InstalledFonts>("installed_fonts"),
   setFonts: (fonts: FontChoice) => invoke<FontSettings>("set_fonts", { fonts }),
+  /** ⌘= / ⌘- / ⌘0: sizes a step bigger (1), smaller (-1) or back to the default (0). */
+  stepFontSize: (step: -1 | 0 | 1) => invoke<FontSettings>("step_font_size", { step }),
   readCustomTheme: (name: string) =>
     invoke<{ name?: string; displayName?: string; type?: string; colors: Record<string, string> }>("read_custom_theme", { name }),
   revealDataDir: (path: string) => invoke<void>("reveal_data_dir", { path }),

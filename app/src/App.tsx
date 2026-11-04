@@ -26,6 +26,7 @@ import { TranscriptsContext } from "@/hooks/use-transcript";
 import { api, canChat, mayListSessions, type AgentProfile, type SessionInfo } from "@/lib/api";
 import { onOpenAgentSwitch, onOpenComponent, onOpenSettings } from "@/lib/app-events";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
+import { stepFontSize } from "@/lib/fonts";
 import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
 
 // Not needed at startup, so not in the main chunk: fetched once the app is idle.
@@ -202,6 +203,9 @@ export default function App() {
     },
     toggleSidebar: panes.toggleSidebar,
     newTerminal: terminals.openHere,
+    sizeUp: () => void stepFontSize(1),
+    sizeDown: () => void stepFontSize(-1),
+    sizeReset: () => void stepFontSize(0),
   });
 
   const chatActions = useMemo(
