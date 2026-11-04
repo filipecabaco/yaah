@@ -423,8 +423,22 @@ pub fn edit_ui(hub: State<'_, Arc<Hub>>, session_id: String, index: usize, value
 }
 
 #[tauri::command]
-pub async fn send_prompt(hub: State<'_, Arc<Hub>>, session_id: String, text: String, mentions: Option<Vec<String>>) -> Result<(), String> {
-    hub.prompt(&session_id, text, mentions.unwrap_or_default()).await
+pub async fn send_prompt(
+    hub: State<'_, Arc<Hub>>,
+    staging: State<'_, crate::attachments::Staging>,
+    session_id: String,
+    text: String,
+    mentions: Option<Vec<String>>,
+    // Ids of what the composer attached (`attachments::stage_attachments`); empty when absent.
+    attachments: Option<Vec<String>>,
+) -> Result<session::Sent, String> {
+    let ids = attachments.unwrap_or_default();
+    let files = staging.get(&session_id, &ids)?;
+    // Sent now (its references read first), or queued while a turn runs (session/queue.rs).
+    // Either way the attachments leave the composer's staging: the turn or the queue has them.
+    let sent = hub.send_or_queue(&session_id, text, mentions.unwrap_or_default(), files).await?;
+    staging.remove(&ids);
+    Ok(sent)
 }
 
 /// Move a chat to another agent: its next prompt goes there, with the conversation handed off.
@@ -492,10 +506,21 @@ pub fn respond_permission(hub: State<'_, Arc<Hub>>, session_id: String, index: u
     hub.respond_permission(&session_id, index, option_id.as_deref())
 }
 
-/// "Always allow tools from <server>" on a permission card: in the chat's project, or in a quick chat.
+/// "Always allow tools from <server>" on a permission card, in `scope` (`session/trust.rs`):
+/// this chat, its project, quick chats or all chats; without one, where the chat keeps its own.
 #[tauri::command]
-pub fn trust_mcp_server(hub: State<'_, Arc<Hub>>, projects: State<'_, Projects>, session_id: String, index: usize) -> Result<(), String> {
-    hub.trust_server(&session_id, index, |project, server| projects.trust_server(project, server))
+pub fn trust_mcp_server(
+    hub: State<'_, Arc<Hub>>,
+    projects: State<'_, Projects>,
+    session_id: String,
+    index: usize,
+    scope: Option<crate::session::permissions::Scope>,
+) -> Result<(), String> {
+    let scope = match scope {
+        Some(s) => s,
+        None => hub.trust_scope(&session_id)?.here,
+    };
+    hub.trust_server(&session_id, index, scope, |project, server| projects.trust_server(project, server))
 }
 
 #[tauri::command]

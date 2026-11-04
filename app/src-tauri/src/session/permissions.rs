@@ -1,49 +1,101 @@
 //! Which `session/request_permission` requests yaah answers without asking, and
 //! which MCP server a request is for (`docs/research/permissions.md`).
 //!
-//! yaah answers a request itself in two cases only, and then always with the
+//! yaah answers a request itself in these cases only, and then always with the
 //! request's `allow_once` option (never `allow_always`: some adapters write that
 //! into the user's own settings files):
+//! - **trusted server**: the user trusted the MCP server the tool belongs to, in
+//!   this chat, its project, quick chats (all chats without a project in a scratch
+//!   folder share one scope) or all chats. That covers all of the server's tools,
+//!   ones that change things too: an adapter doesn't tell yaah which are read-only.
 //! - **read-only**: the tool call's kind is `read` or `search`, it names at least
 //!   one path, and every path resolves (symlinks and `..` followed) inside the
 //!   chat's folders. On unless Settings → Chat says otherwise.
-//! - **trusted server**: the user trusted the MCP server the tool belongs to, in
-//!   the chat's project or in the chat. That covers all of the server's tools,
-//!   ones that change things too: an adapter doesn't tell yaah which are read-only.
+//! - **saved tool results**: the same, for paths inside the agent's own folder of
+//!   this chat's saved tool results ([`own_dirs`]; Claude Code only so far), under
+//!   the same setting.
+//! - **web search**: Settings → Chat, "Allow web searches without asking" (off by
+//!   default), and the request is a web search ([`is_web_search`]). Fetches ask.
 //!
 //! Everything else asks: edits, commands, fetches, deletes, moves, unknown kinds,
 //! anything outside the folders, and anything whose paths can't all be checked.
-//! [`decide`] is the rule, with no state of its own; `session.rs` asks it.
+//! [`decide`] is the rule, with no state of its own; `session/trust.rs` asks it.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 /// Why yaah answered a request without the user clicking (the tool card's chip).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Auto {
-    /// `"readOnly"`, `"trustedServer"` or `"remembered"`.
+    /// [`READ_ONLY`], [`TRUSTED_SERVER`], [`TRUSTED_EVERYWHERE`], [`REMEMBERED`],
+    /// [`TOOL_RESULTS`] or [`WEB_SEARCH`].
     pub reason: String,
     /// The same in words, for the chip: "read-only in this chat's folders".
     pub why: String,
 }
 
 pub const READ_ONLY: &str = "readOnly";
+/// Trusted in this chat, its project or quick chats ([`Scope`] says which, in `why`).
 pub const TRUSTED_SERVER: &str = "trustedServer";
+/// Trusted in all chats (Settings → Chat lists them).
+pub const TRUSTED_EVERYWHERE: &str = "trustedEverywhere";
 pub const REMEMBERED: &str = "remembered";
+pub const TOOL_RESULTS: &str = "toolResults";
+pub const WEB_SEARCH: &str = "webSearch";
 
 impl Auto {
     pub fn read_only() -> Self {
         Self { reason: READ_ONLY.into(), why: "read-only in this chat's folders".into() }
     }
 
-    pub fn trusted(server: &McpServer) -> Self {
-        Self { reason: TRUSTED_SERVER.into(), why: format!("trusted server: {}", server.label) }
+    pub fn trusted(server: &McpServer, scope: Scope) -> Self {
+        let reason = if scope == Scope::Everywhere { TRUSTED_EVERYWHERE } else { TRUSTED_SERVER };
+        Self { reason: reason.into(), why: format!("trusted {}: {}", scope.words(), server.label) }
+    }
+
+    /// A "don't ask again" replay, kept in this chat or (a quick chat) in quick chats.
+    pub fn remembered_in(scope: Scope) -> Self {
+        Self { reason: REMEMBERED.into(), why: format!("you said don't ask again {}", scope.words()) }
     }
 
     pub fn remembered() -> Self {
-        Self { reason: REMEMBERED.into(), why: "you said don't ask again in this chat".into() }
+        Self::remembered_in(Scope::Chat)
+    }
+
+    pub fn tool_results(agent: &str) -> Self {
+        Self { reason: TOOL_RESULTS.into(), why: format!("{agent}'s saved tool result from this chat") }
+    }
+
+    pub fn web_search() -> Self {
+        Self { reason: WEB_SEARCH.into(), why: "web search allowed in Settings".into() }
+    }
+}
+
+/// Where a trusted server or a "don't ask again" applies.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "camelCase")]
+pub enum Scope {
+    /// This chat only (a chat in a folder of its own, or one chat of a project).
+    Chat,
+    /// Every chat of the chat's project.
+    Project,
+    /// Every quick chat: chats without a project, in a scratch folder of their own.
+    QuickChats,
+    /// Every chat.
+    Everywhere,
+}
+
+impl Scope {
+    /// "in this chat", "in this project", "in quick chats", "in all chats".
+    pub fn words(self) -> &'static str {
+        match self {
+            Self::Chat => "in this chat",
+            Self::Project => "in this project",
+            Self::QuickChats => "in quick chats",
+            Self::Everywhere => "in all chats",
+        }
     }
 }
 
@@ -58,7 +110,7 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    fn new(id: &str) -> Option<Self> {
+    pub fn new(id: &str) -> Option<Self> {
         let ok = !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || "_-.".contains(c));
         // Claude Code's names for claude.ai connectors (`claude.ai Linear` → `claude_ai_Linear`).
         let label = id.strip_prefix("claude_ai_").filter(|l| !l.is_empty()).unwrap_or(id);
@@ -73,35 +125,74 @@ pub struct Request<'a> {
     pub locations: &'a Value,
     pub raw_input: &'a Value,
     pub server: Option<&'a McpServer>,
+    /// The agent's own name for the tool, when it sends one ([`tool_name`]): `WebSearch`, `Bash`.
+    pub tool_name: Option<&'a str>,
 }
 
 /// What the user allowed for this chat.
+#[derive(Default)]
 pub struct Policy<'a> {
     /// Settings → Chat, "Allow reads in the chat's folders".
     pub read_only: bool,
     /// The chat's folders: its cwd, its other folders, its project's repos.
     pub roots: &'a [PathBuf],
-    /// MCP servers trusted in the chat's project or in the chat, by id.
-    pub trusted: &'a [String],
+    /// The agent's own folders for this chat ([`own_dirs`]): read like the chat's folders.
+    pub own: Option<&'a OwnDirs>,
+    /// Trusted MCP server ids by scope, narrowest first: the first that has the
+    /// request's server names it on the chip.
+    pub trusted: &'a [(Scope, Vec<String>)],
+    /// Settings → Chat, "Allow web searches without asking".
+    pub web_search: bool,
 }
 
 /// Whether yaah answers `req` itself, and why. `None`: ask the user.
 pub fn decide(req: &Request, policy: &Policy) -> Option<Auto> {
     if let Some(server) = req.server
-        && policy.trusted.contains(&server.id)
+        && let Some((scope, _)) = policy.trusted.iter().find(|(_, ids)| ids.contains(&server.id))
     {
-        return Some(Auto::trusted(server));
+        return Some(Auto::trusted(server, *scope));
     }
-    (policy.read_only && reads_inside(req, policy.roots)).then(Auto::read_only)
+    if policy.read_only
+        && let Some(paths) = read_paths(req)
+    {
+        if paths.iter().all(|p| inside(policy.roots, p)) {
+            return Some(Auto::read_only());
+        }
+        if let Some(own) = policy.own
+            && paths.iter().all(|p| inside(policy.roots, p) || inside(&own.dirs, p))
+        {
+            return Some(Auto::tool_results(own.agent));
+        }
+    }
+    (policy.web_search && is_web_search(req)).then(Auto::web_search)
 }
 
-/// A `read` or `search` whose every path is inside `roots`, and that has at least one.
-fn reads_inside(req: &Request, roots: &[PathBuf]) -> bool {
+/// A `read` or `search`'s paths, when it has at least one and all can be checked.
+fn read_paths(req: &Request) -> Option<Vec<String>> {
     if !matches!(req.kind, Some("read" | "search")) {
-        return false;
+        return None;
     }
-    let Some(paths) = paths(req.locations, req.raw_input) else { return false };
-    !paths.is_empty() && paths.iter().all(|p| resolved(p).is_some_and(|real| crate::acp_terminals::inside(roots, &real).is_some()))
+    paths(req.locations, req.raw_input).filter(|p| !p.is_empty())
+}
+
+/// Whether `path` is absolute (`~` is the home folder) and resolves inside one of `roots`.
+fn inside(roots: &[PathBuf], path: &str) -> bool {
+    resolved(path).is_some_and(|real| crate::acp_terminals::inside(roots, &real).is_some())
+}
+
+/// Whether `req` is a web search, and nothing else:
+/// - Claude Code (claude-agent-acp 0.99.1, 0.100.0) names the tool `WebSearch`; it
+///   comes as kind `fetch`, titled `Search "<query>"`, `rawInput { query, allowed_domains?, blocked_domains? }`.
+///   When the agent names its tool, only that name counts: `WebFetch`, `mcp__fetch__fetch` aren't searches.
+/// - Another agent: kind `search` with no paths at all, and a `query` in its input but no `url`.
+fn is_web_search(req: &Request) -> bool {
+    if let Some(name) = req.tool_name {
+        return name == "WebSearch";
+    }
+    req.kind == Some("search")
+        && req.raw_input["query"].is_string()
+        && req.raw_input.get("url").is_none()
+        && paths(req.locations, req.raw_input).is_some_and(|p| p.is_empty())
 }
 
 /// `path` as an absolute path (`~` is the home folder), or `None` for a relative one.
@@ -166,6 +257,151 @@ fn mentions_path(v: &Value) -> bool {
     }
 }
 
+// ── the agent's own folders ─────────────────────────────────────────────────
+
+/// Folders an agent keeps for one chat's own output and reads back (its saved
+/// tool results): reads there are the chat's own, like reads in its folders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnDirs {
+    /// The agent, for people: "Claude".
+    pub agent: &'static str,
+    /// Each resolved (symlinks followed), and checked to be where the agent keeps them.
+    pub dirs: Vec<PathBuf>,
+}
+
+/// What [`own_dirs`] needs to know about the chat's agent.
+pub struct AgentDirs<'a> {
+    /// The profile's preset (`agents::CLAUDE`, `codex`, …).
+    pub preset: &'a str,
+    /// The `CLAUDE_CONFIG_DIR` the agent runs with, if any (the profile's, else
+    /// its env's, else yaah's own environment's).
+    pub claude_config_dir: Option<&'a str>,
+    pub home: &'a Path,
+    /// The chat's folder, as the agent was started in it.
+    pub cwd: &'a str,
+    /// The chat's ACP session id at its current agent.
+    pub session: &'a str,
+}
+
+/// The agent's own folders for this chat, per adapter. Only Claude Code's is
+/// known so far; another adapter adds its arm here.
+pub fn own_dirs(a: &AgentDirs) -> Option<OwnDirs> {
+    match a.preset {
+        crate::agents::CLAUDE => {
+            let dir = claude_tool_results(a.claude_config_dir, a.home, a.cwd, a.session)?;
+            Some(OwnDirs { agent: "Claude", dirs: vec![dir] })
+        }
+        _ => None,
+    }
+}
+
+/// Claude Code's folder of one session's saved tool results (an MCP result too
+/// large to return inline is written there, and the model reads it back):
+/// `<config dir>/projects/<slug of the cwd>/<session id>/tool-results`. The config
+/// dir is `CLAUDE_CONFIG_DIR`, `~/.claude` when unset; an empty or relative one
+/// gives none. Only that one folder, never the config dir, another session or
+/// another project; and only when it exists and resolves to that very place (no
+/// symlink anywhere below the config dir).
+pub fn claude_tool_results(config_dir: Option<&str>, home: &Path, cwd: &str, session: &str) -> Option<PathBuf> {
+    let plain = |s: &str| !s.is_empty() && s.len() <= 128 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if !plain(session) {
+        return None;
+    }
+    let config = match config_dir {
+        None => home.join(".claude"),
+        Some("~") => home.to_owned(),
+        Some(d) => match d.strip_prefix("~/") {
+            Some(rest) => home.join(rest),
+            None => PathBuf::from(d),
+        },
+    };
+    if !config.is_absolute() || config.components().any(|c| c == Component::ParentDir) {
+        return None;
+    }
+    // Claude Code names the project after its real cwd (`/tmp` is `/private/tmp` on macOS).
+    let cwd = Path::new(cwd).canonicalize().ok()?;
+    let expected = config.canonicalize().ok()?.join("projects").join(claude_slug(&cwd.to_string_lossy())).join(session).join("tool-results");
+    let real = expected.canonicalize().ok()?;
+    (real == expected && real.is_dir()).then_some(real)
+}
+
+/// Claude Code's folder name for a project (its `sanitizePath`): every UTF-16 unit
+/// outside `[a-zA-Z0-9]` becomes `-`; past 200 units it is cut there and the path's
+/// hash added (`-<base 36>`). `/Users/me/.yaah/scratch/x` → `-Users-me--yaah-scratch-x`.
+pub fn claude_slug(path: &str) -> String {
+    const MAX: usize = 200;
+    let slug: String = path.encode_utf16().map(|u| u8::try_from(u).ok().filter(u8::is_ascii_alphanumeric).map_or('-', char::from)).collect();
+    if slug.len() <= MAX {
+        return slug;
+    }
+    // `(h << 5) - h + unit | 0` over the UTF-16 units: a wrapping 32-bit `h * 31 + unit`.
+    let hash = path.encode_utf16().fold(0i32, |h, u| h.wrapping_mul(31).wrapping_add(i32::from(u)));
+    format!("{}-{}", &slug[..MAX], base36(i64::from(hash).unsigned_abs()))
+}
+
+fn base36(mut n: u64) -> String {
+    let mut digits = vec![];
+    loop {
+        digits.push(char::from_digit(u32::try_from(n % 36).unwrap_or(0), 36).unwrap_or('0'));
+        n /= 36;
+        if n == 0 {
+            break;
+        }
+    }
+    digits.iter().rev().collect()
+}
+
+/// "Claude is reading a saved tool result": said on an `execute` request whose
+/// command names absolute paths only inside the agent's own folders (and at least
+/// one), with no redirect. Words only: the request still asks. A command that
+/// merely contains the folder's name in a longer word, or names any other path, gets none.
+pub fn command_note(kind: Option<&str>, raw_input: &Value, own: &OwnDirs) -> Option<String> {
+    if kind != Some("execute") {
+        return None;
+    }
+    let command = raw_input["command"].as_str()?;
+    if command.contains('>') {
+        return None;
+    }
+    let words = command.split(|c: char| c.is_whitespace() || ";|&()<'\"`=".contains(c)).filter(|w| !w.is_empty());
+    let mut named = 0;
+    for w in words {
+        if !(w.starts_with('/') || w.starts_with('~')) {
+            continue;
+        }
+        if !inside_or_glob(&own.dirs, w) {
+            return None;
+        }
+        named += 1;
+    }
+    (named > 0).then(|| format!("{} is reading a saved tool result", own.agent))
+}
+
+/// `word` (a path, maybe ending in a glob) is inside one of `roots`: the path, or
+/// its longest part that exists, resolves inside, and the rest doesn't climb.
+fn inside_or_glob(roots: &[PathBuf], word: &str) -> bool {
+    let Some(path) = resolved(word) else { return false };
+    if path.components().any(|c| c == Component::ParentDir) {
+        return false;
+    }
+    let mut at = path.as_path();
+    loop {
+        if at.exists() {
+            return crate::acp_terminals::inside(roots, at).is_some();
+        }
+        match at.parent() {
+            Some(p) => at = p,
+            None => return false,
+        }
+    }
+}
+
+/// The agent's own name for the tool, when the request carries one: Claude Code
+/// sends it as `toolCall.name` (and `_meta.claudeCode.toolName` in some requests).
+pub fn tool_name(tool_call: &Value) -> Option<&str> {
+    tool_call["_meta"]["claudeCode"]["toolName"].as_str().or_else(|| tool_call["name"].as_str())
+}
+
 /// The MCP server a request is for, when yaah can tell. `params` is the whole
 /// request; `title`, `kind` and `raw_input` are the tool call as yaah has it (a
 /// request may name only its `toolCallId`, the rest came with the tool call).
@@ -181,8 +417,7 @@ fn mentions_path(v: &Value) -> bool {
 ///
 /// Any other shape: `None`, and the user isn't offered to trust a server.
 pub fn mcp_server(params: &Value, tool_call: &Value, title: &str, kind: Option<&str>, raw_input: &Value) -> Option<McpServer> {
-    let named = tool_call["_meta"]["claudeCode"]["toolName"].as_str().or_else(|| tool_call["name"].as_str());
-    if let Some(name) = named {
+    if let Some(name) = tool_name(tool_call) {
         return claude_server(name);
     }
     if matches!(kind, None | Some("other"))
@@ -267,7 +502,7 @@ mod tests {
     }
 
     fn ask(kind: Option<&str>, locations: &Value, raw_input: &Value, roots: &[PathBuf]) -> Option<Auto> {
-        decide(&Request { kind, locations, raw_input, server: None }, &Policy { read_only: true, roots, trusted: &[] })
+        decide(&Request { kind, locations, raw_input, server: None, tool_name: None }, &Policy { read_only: true, roots, ..Policy::default() })
     }
 
     fn at(path: &str) -> Value {
@@ -294,8 +529,8 @@ mod tests {
         let d = Dirs::new();
         let roots = vec![d.repo.clone()];
         let file = d.p("repo/src/main.rs");
-        let req = Request { kind: Some("read"), locations: &at(&file), raw_input: &Value::Null, server: None };
-        assert!(decide(&req, &Policy { read_only: false, roots: &roots, trusted: &[] }).is_none());
+        let req = Request { kind: Some("read"), locations: &at(&file), raw_input: &Value::Null, server: None, tool_name: None };
+        assert!(decide(&req, &Policy { read_only: false, roots: &roots, ..Policy::default() }).is_none());
     }
 
     #[test]
@@ -390,28 +625,50 @@ mod tests {
     #[test]
     fn a_trusted_server_is_allowed_whatever_its_tool_does() {
         let linear = McpServer::new("claude_ai_Linear").unwrap();
-        let trusted = vec!["claude_ai_Linear".to_owned()];
-        let req = Request { kind: Some("other"), locations: &Value::Null, raw_input: &json!({ "id": "ENG-1" }), server: Some(&linear) };
-        let auto = decide(&req, &Policy { read_only: false, roots: &[], trusted: &trusted }).unwrap();
-        assert_eq!(auto, Auto { reason: TRUSTED_SERVER.into(), why: "trusted server: Linear".into() });
+        let trusted = vec![(Scope::Chat, vec!["claude_ai_Linear".to_owned()])];
+        let req =
+            Request { kind: Some("other"), locations: &Value::Null, raw_input: &json!({ "id": "ENG-1" }), server: Some(&linear), tool_name: None };
+        let auto = decide(&req, &Policy { trusted: &trusted, ..Policy::default() }).unwrap();
+        assert_eq!(auto, Auto { reason: TRUSTED_SERVER.into(), why: "trusted in this chat: Linear".into() });
         // Codex sends its MCP tools as `execute`: trust is by server, not kind.
         let req = Request { kind: Some("execute"), server: Some(&linear), ..req };
-        assert!(decide(&req, &Policy { read_only: false, roots: &[], trusted: &trusted }).is_some());
+        assert!(decide(&req, &Policy { trusted: &trusted, ..Policy::default() }).is_some());
         // Not trusted, or no server known: it asks.
-        assert!(decide(&req, &Policy { read_only: true, roots: &[], trusted: &[] }).is_none());
+        assert!(decide(&req, &Policy { read_only: true, ..Policy::default() }).is_none());
         let req = Request { server: None, ..req };
-        assert!(decide(&req, &Policy { read_only: true, roots: &[], trusted: &trusted }).is_none());
+        assert!(decide(&req, &Policy { read_only: true, trusted: &trusted, ..Policy::default() }).is_none());
+    }
+
+    #[test]
+    fn the_narrowest_scope_that_trusts_a_server_names_it() {
+        let linear = McpServer::new("claude_ai_Linear").unwrap();
+        let req = Request { kind: Some("other"), locations: &Value::Null, raw_input: &Value::Null, server: Some(&linear), tool_name: None };
+        let ids = || vec!["claude_ai_Linear".to_owned()];
+        let why = |trusted: &[(Scope, Vec<String>)]| decide(&req, &Policy { trusted, ..Policy::default() }).map(|a| (a.reason, a.why));
+        let s = |r: &str, w: &str| Some((r.to_owned(), w.to_owned()));
+        assert_eq!(why(&[(Scope::Everywhere, ids())]), s(TRUSTED_EVERYWHERE, "trusted in all chats: Linear"));
+        assert_eq!(why(&[(Scope::QuickChats, ids()), (Scope::Everywhere, ids())]), s(TRUSTED_SERVER, "trusted in quick chats: Linear"));
+        assert_eq!(
+            why(&[(Scope::Chat, vec![]), (Scope::Project, ids()), (Scope::Everywhere, ids())]),
+            s(TRUSTED_SERVER, "trusted in this project: Linear")
+        );
+        assert_eq!(why(&[(Scope::Chat, ids()), (Scope::Project, ids())]), s(TRUSTED_SERVER, "trusted in this chat: Linear"));
+        assert_eq!(why(&[(Scope::Chat, vec!["linear".into()]), (Scope::Everywhere, vec!["github".into()])]), None);
     }
 
     #[test]
     fn a_lookalike_server_name_is_not_trusted() {
-        let trusted = vec!["claude_ai_Linear".to_owned()];
+        let ids = vec!["claude_ai_Linear".to_owned()];
         for name in
             ["mcp__claude_ai_Linear2__get_issue", "mcp__claude_ai__Linear__get_issue", "mcp__claude_ai_linear__get_issue", "mcp__Linear__get_issue"]
         {
             let server = mcp_server(&json!({}), &json!({ "name": name }), name, Some("other"), &Value::Null);
-            let req = Request { kind: Some("other"), locations: &Value::Null, raw_input: &Value::Null, server: server.as_ref() };
-            assert!(decide(&req, &Policy { read_only: true, roots: &[], trusted: &trusted }).is_none(), "{name}");
+            let req =
+                Request { kind: Some("other"), locations: &Value::Null, raw_input: &Value::Null, server: server.as_ref(), tool_name: Some(name) };
+            for scope in [Scope::Chat, Scope::Project, Scope::QuickChats, Scope::Everywhere] {
+                let trusted = [(scope, ids.clone())];
+                assert!(decide(&req, &Policy { read_only: true, trusted: &trusted, ..Policy::default() }).is_none(), "{name} {scope:?}");
+            }
         }
         // A shell command named like the tool is Bash's, no server's.
         let server =
@@ -419,6 +676,220 @@ mod tests {
         assert_eq!(server, None);
         // Without a name, a title is only a tool name for a tool of kind `other`.
         assert_eq!(mcp_server(&json!({}), &json!({}), "mcp__claude_ai_Linear__get_issue", Some("execute"), &Value::Null), None);
+    }
+
+    fn web(kind: Option<&'static str>, raw_input: &Value, tool_name: Option<&'static str>, on: bool) -> Option<Auto> {
+        let req = Request { kind, locations: &Value::Null, raw_input, server: None, tool_name };
+        decide(&req, &Policy { read_only: true, web_search: on, ..Policy::default() })
+    }
+
+    #[test]
+    fn web_searches_are_allowed_only_when_turned_on() {
+        // Claude Code's WebSearch, as claude-agent-acp sends it: kind `fetch`, named `WebSearch`.
+        let search = json!({ "query": "acp permission modes", "allowed_domains": ["agentclientprotocol.com"] });
+        assert_eq!(web(Some("fetch"), &search, Some("WebSearch"), true), Some(Auto::web_search()));
+        assert_eq!(web(Some("fetch"), &search, Some("WebSearch"), false), None, "off by default");
+        // Another agent's: a `search` with a query and no paths.
+        assert_eq!(web(Some("search"), &json!({ "query": "rust 2024 edition" }), None, true), Some(Auto::web_search()));
+        assert_eq!(web(Some("search"), &json!({ "query": "rust 2024 edition" }), None, false), None);
+    }
+
+    #[test]
+    fn fetches_and_other_searches_still_ask_with_web_search_on() {
+        let url = json!({ "url": "https://example.com", "prompt": "summarise" });
+        assert_eq!(web(Some("fetch"), &url, Some("WebFetch"), true), None);
+        assert_eq!(web(Some("other"), &url, Some("mcp__fetch__fetch"), true), None);
+        assert_eq!(web(Some("fetch"), &url, None, true), None);
+        // A search that is named something else, or that has a url, a path or no query.
+        assert_eq!(web(Some("search"), &json!({ "query": "x" }), Some("Grep"), true), None);
+        assert_eq!(web(Some("search"), &json!({ "query": "x", "url": "https://example.com" }), None, true), None);
+        assert_eq!(web(Some("search"), &json!({ "query": "x", "path": "/etc" }), None, true), None);
+        assert_eq!(web(Some("search"), &json!({ "query": "/etc/passwd" }), None, true), None);
+        assert_eq!(web(Some("search"), &json!({ "pattern": "TODO" }), None, true), None, "Grep without a path");
+        assert_eq!(web(Some("fetch"), &json!({ "query": "x" }), None, true), None, "a fetch is no search");
+        let located = Request {
+            kind: Some("search"),
+            locations: &json!([{ "path": "/etc" }]),
+            raw_input: &json!({ "query": "x" }),
+            server: None,
+            tool_name: None,
+        };
+        assert_eq!(decide(&located, &Policy { web_search: true, ..Policy::default() }), None);
+    }
+
+    /// A Claude config dir with this chat's session folder, a sibling session, and a secret beside them.
+    struct Claude {
+        base: PathBuf,
+        home: PathBuf,
+        cwd: PathBuf,
+    }
+
+    const SESSION: &str = "44cfaa80-dd88-41f8-ba23-b6149982d632";
+    const OTHER: &str = "0000aaaa-0000-0000-0000-000000000000";
+
+    impl Claude {
+        fn new() -> Self {
+            let base = std::env::temp_dir().join(format!("yaah-tool-results-{}", crate::session::random_token()));
+            std::fs::create_dir_all(&base).unwrap();
+            // Resolved (`/var` is `/private/var` on macOS), as the paths an agent sends are.
+            let base = base.canonicalize().unwrap();
+            let home = base.join("home");
+            let cwd = home.join(".yaah/scratch/be2cba80a028");
+            std::fs::create_dir_all(&cwd).unwrap();
+            let me = Self { base, home, cwd };
+            for (cfg, session) in [(".claude-personal", SESSION), (".claude-personal", OTHER), (".claude", SESSION)] {
+                let dir = me.project(cfg).join(session).join("tool-results");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("mcp-fetch-fetch-1.txt"), "saved").unwrap();
+            }
+            std::fs::write(me.home.join(".claude-personal/.credentials.json"), "{}").unwrap();
+            std::fs::write(me.project(".claude-personal").join("notes.txt"), "x").unwrap();
+            me
+        }
+        fn project(&self, cfg: &str) -> PathBuf {
+            self.home.join(cfg).join("projects").join(claude_slug(&self.cwd.to_string_lossy()))
+        }
+        fn results(&self, cfg: &str, session: &str) -> PathBuf {
+            self.project(cfg).join(session).join("tool-results")
+        }
+        fn own(&self, config_dir: Option<&str>, session: &str) -> Option<OwnDirs> {
+            let cwd = self.cwd.to_string_lossy();
+            own_dirs(&AgentDirs { preset: crate::agents::CLAUDE, claude_config_dir: config_dir, home: &self.home, cwd: &cwd, session })
+        }
+    }
+
+    impl Drop for Claude {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    fn read_own(own: Option<&OwnDirs>, kind: &'static str, path: &Path, raw_input: &Value) -> Option<Auto> {
+        let at = json!([{ "path": path }]);
+        let req = Request { kind: Some(kind), locations: &at, raw_input, server: None, tool_name: None };
+        decide(&req, &Policy { read_only: true, roots: &[], own, ..Policy::default() })
+    }
+
+    #[test]
+    fn claude_slugs_its_project_folders_as_claude_code_does() {
+        // The real example: `.yaah` became `-yaah`.
+        assert_eq!(claude_slug("/Users/filipecabaco/.yaah/scratch/be2cba80a028"), "-Users-filipecabaco--yaah-scratch-be2cba80a028");
+        assert_eq!(claude_slug("/private/tmp/x_y z"), "-private-tmp-x-y-z");
+        // Per UTF-16 unit, as JavaScript's `replace` sees it: `é` is one, the emoji two.
+        assert_eq!(claude_slug("/tmp/café \u{1F600}"), "-tmp-caf----");
+        // Past 200 units: cut, and the path's hash (checked against Claude Code's own function under Node).
+        let long = format!("/Users/someone/{}repo", "deeply-nested-folder/".repeat(10));
+        assert_eq!(
+            claude_slug(&long),
+            "-Users-someone-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-folder-deeply-nested-fol-i7nbnp"
+        );
+    }
+
+    #[test]
+    fn the_sessions_tool_results_are_a_read_root() {
+        let c = Claude::new();
+        let own = c.own(Some("~/.claude-personal"), SESSION).unwrap();
+        assert_eq!(own.dirs, [c.results(".claude-personal", SESSION).canonicalize().unwrap()]);
+        let file = c.results(".claude-personal", SESSION).join("mcp-fetch-fetch-1.txt");
+        let file_s = file.to_string_lossy().into_owned();
+        assert_eq!(
+            read_own(Some(&own), "read", &file, &json!({ "file_path": file_s, "offset": 1, "limit": 200 })),
+            Some(Auto::tool_results("Claude"))
+        );
+        // Grep and Glob there.
+        let dir = c.results(".claude-personal", SESSION);
+        assert!(read_own(Some(&own), "search", &dir, &json!({ "path": dir, "pattern": "Wisconsin", "output_mode": "content" })).is_some());
+        // With the setting off, or for another agent, it asks.
+        let at = json!([{ "path": file }]);
+        let req = Request { kind: Some("read"), locations: &at, raw_input: &Value::Null, server: None, tool_name: None };
+        assert!(decide(&req, &Policy { read_only: false, own: Some(&own), ..Policy::default() }).is_none());
+        let cwd = c.cwd.to_string_lossy();
+        assert_eq!(own_dirs(&AgentDirs { preset: "codex", claude_config_dir: None, home: &c.home, cwd: &cwd, session: SESSION }), None);
+        // Edits and commands there still ask.
+        assert!(read_own(Some(&own), "edit", &file, &Value::Null).is_none());
+        assert!(read_own(Some(&own), "execute", &file, &json!({ "command": format!("cat {file_s}") })).is_none());
+    }
+
+    #[test]
+    fn only_that_one_folder_is_a_root() {
+        let c = Claude::new();
+        let own = c.own(Some("~/.claude-personal"), SESSION).unwrap();
+        // The config dir, its credentials, the project folder, a sibling session.
+        for path in [
+            c.home.join(".claude-personal/.credentials.json"),
+            c.project(".claude-personal").join("notes.txt"),
+            c.results(".claude-personal", OTHER).join("mcp-fetch-fetch-1.txt"),
+            c.results(".claude", SESSION).join("mcp-fetch-fetch-1.txt"),
+        ] {
+            assert!(read_own(Some(&own), "read", &path, &Value::Null).is_none(), "{}", path.display());
+        }
+        // `..` out, and a sibling with the same prefix.
+        let up = c.results(".claude-personal", SESSION).join("../../").join(OTHER).join("tool-results/mcp-fetch-fetch-1.txt");
+        assert!(read_own(Some(&own), "read", &up, &Value::Null).is_none());
+        let evil = c.project(".claude-personal").join(SESSION).join("tool-results-evil");
+        std::fs::create_dir_all(&evil).unwrap();
+        std::fs::write(evil.join("x.txt"), "x").unwrap();
+        assert!(read_own(Some(&own), "read", &evil.join("x.txt"), &Value::Null).is_none());
+    }
+
+    #[test]
+    fn a_symlink_out_of_the_tool_results_asks() {
+        let c = Claude::new();
+        let own = c.own(Some("~/.claude-personal"), SESSION).unwrap();
+        let dir = c.results(".claude-personal", SESSION);
+        std::os::unix::fs::symlink(c.home.join(".claude-personal/.credentials.json"), dir.join("creds.txt")).unwrap();
+        std::os::unix::fs::symlink(c.results(".claude-personal", OTHER), dir.join("other")).unwrap();
+        assert!(read_own(Some(&own), "read", &dir.join("creds.txt"), &Value::Null).is_none());
+        assert!(read_own(Some(&own), "read", &dir.join("other/mcp-fetch-fetch-1.txt"), &Value::Null).is_none());
+        // The folder itself a link elsewhere: no root at all.
+        let linked = c.project(".claude-personal").join("linked-session");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::os::unix::fs::symlink(c.home.join(".claude-personal"), linked.join("tool-results")).unwrap();
+        assert_eq!(c.own(Some("~/.claude-personal"), "linked-session"), None);
+    }
+
+    #[test]
+    fn the_config_dir_comes_from_the_profile_or_defaults_to_dot_claude() {
+        let c = Claude::new();
+        let home_claude = c.results(".claude", SESSION).canonicalize().unwrap();
+        assert_eq!(c.own(None, SESSION).unwrap().dirs, [home_claude]);
+        let abs = c.home.join(".claude-personal").to_string_lossy().into_owned();
+        assert_eq!(c.own(Some(&abs), SESSION).unwrap().dirs, [c.results(".claude-personal", SESSION).canonicalize().unwrap()]);
+        // Empty or relative: none. A session id that isn't one, or a folder not made yet: none.
+        for bad in ["", ".claude-personal", "~/../x"] {
+            assert_eq!(c.own(Some(bad), SESSION), None, "{bad:?}");
+        }
+        for bad in ["", "../x", "a/b", ".."] {
+            assert_eq!(c.own(Some("~/.claude-personal"), bad), None, "{bad:?}");
+        }
+        assert_eq!(c.own(Some("~/.claude-personal"), "aaaa-not-yet"), None);
+        // A new session id (resume, fork) names another folder.
+        assert_ne!(c.own(Some("~/.claude-personal"), OTHER).unwrap().dirs, c.own(Some("~/.claude-personal"), SESSION).unwrap().dirs);
+    }
+
+    #[test]
+    fn a_command_reading_a_saved_result_is_explained_and_still_asks() {
+        let c = Claude::new();
+        let own = c.own(Some("~/.claude-personal"), SESSION).unwrap();
+        let dir = c.results(".claude-personal", SESSION).to_string_lossy().into_owned();
+        let note = |cmd: String| command_note(Some("execute"), &json!({ "command": cmd, "description": "x" }), &own);
+        let said = Some("Claude is reading a saved tool result".to_owned());
+        assert_eq!(note(format!("F={dir}/mcp-fetch-fetch-1.txt; grep -n Wisconsin $F | cut -c1-200")), said);
+        assert_eq!(note(format!("cd {dir}/; f=mcp-fetch-fetch-1.txt; grep -c x $f")), said);
+        assert_eq!(note(format!("sed -n '1,40p' \"{dir}/mcp-fetch-fetch-1.txt\"")), said);
+        assert_eq!(note(format!("wc -l {dir}/mcp-*.txt")), said, "a glob inside");
+        // Any other path, a redirect, none at all, a lookalike, or not a command: nothing said.
+        assert_eq!(note(format!("cp {dir}/mcp-fetch-fetch-1.txt /tmp/tx/p1.txt")), None);
+        assert_eq!(note(format!("grep x {dir}/mcp-fetch-fetch-1.txt > {dir}/out.txt")), None);
+        assert_eq!(note(format!("cat {dir}/../../{OTHER}/tool-results/mcp-fetch-fetch-1.txt")), None);
+        assert_eq!(note("grep -r x .".into()), None);
+        assert_eq!(note(format!("echo x{dir}")), None, "merely contains it");
+        assert_eq!(note(format!("cat {dir}-evil/x")), None);
+        assert_eq!(command_note(Some("read"), &json!({ "command": format!("cat {dir}/x") }), &own), None);
+        // The request itself still asks: commands are never answered for the user.
+        let input = json!({ "command": format!("cat {dir}/mcp-fetch-fetch-1.txt") });
+        let req = Request { kind: Some("execute"), locations: &json!([]), raw_input: &input, server: None, tool_name: Some("Bash") };
+        assert!(decide(&req, &Policy { read_only: true, own: Some(&own), web_search: true, ..Policy::default() }).is_none());
     }
 
     #[test]

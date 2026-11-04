@@ -44,11 +44,16 @@ import { api, type Entry, type ToolContent } from "@/lib/api";
 import { openSettings } from "@/lib/app-events";
 import { focusAfterPermission } from "@/lib/pane-focus";
 import { permissionAnswer, permissionChip, type PermissionEntry } from "@/lib/permissions";
+import { SCOPE_WORDS, trustApi, useTrustView, type TrustScope } from "@/lib/trust-api";
 import { baseName, compactPath, elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
 import { readToolText, toolTextLayout } from "@/lib/tool-output";
 import { cn } from "@/lib/utils";
 import { toolLabel } from "@/lib/ui-tool-label";
+import { toolImages } from "@/lib/attachments";
+import { ImageStrip } from "@/components/image-preview";
+import { SentAttachments } from "@/components/composer-attachments";
+import { ReferenceNotes, ReferenceText } from "@/components/references";
 
 type Of<T extends Entry["type"]> = Extract<Entry, { type: T }>;
 
@@ -105,15 +110,24 @@ const quoted = (text: string) =>
     .join("\n") + "\n\n";
 
 function UserMessage({ entry }: { entry: Of<"user"> }) {
-  const pane = useChat()?.pane;
+  const chat = useChat();
+  const pane = chat?.pane;
   return (
     <div data-align="end" className="ml-auto flex w-fit max-w-[min(75ch,85%)] flex-col items-end gap-1 text-sm">
-      <CopyMenu
-        act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }, pane) }]}
-        actions={[{ label: "Copy text", text: () => entry.text }]}
-      >
-        <div className="max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">{entry.text}</div>
-      </CopyMenu>
+      {/* What the user attached (dropped, pasted, picked), above what they wrote. */}
+      <SentAttachments sessionId={chat?.sessionId} files={entry.files ?? []} />
+      {(entry.text !== "" || !entry.files?.length) && (
+        <CopyMenu
+          act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }, pane) }]}
+          actions={[{ label: "Copy text", text: () => entry.text }]}
+        >
+          <div className="max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">
+            {/* `github#o/r#9` and the like as links to the item (components/references.tsx). */}
+            <ReferenceText text={entry.text} references={entry.references} />
+          </div>
+        </CopyMenu>
+      )}
+      <ReferenceNotes references={entry.references} />
       {entry.attachments.length > 0 && (
         <div className="flex gap-1">
           {entry.attachments.map((a) => (
@@ -135,24 +149,29 @@ function UserMessage({ entry }: { entry: Of<"user"> }) {
  * inside have a width to fill); `.agent-reply` in index.css loosens the prose spacing inside.
  */
 function AgentMessage({ entry }: { entry: Of<"agent"> }) {
-  const pane = useChat()?.pane;
+  const chat = useChat();
+  const pane = chat?.pane;
+  const images = entry.images ?? [];
   // A run that hasn't streamed any text yet would be an empty bubble.
-  if (!entry.text.trim()) return null;
+  if (!entry.text.trim()) return images.length ? <ImageStrip sessionId={chat?.sessionId} images={images} alt="Image from the agent" /> : null;
   return (
-    <CopyMenu
-      // The selected part of this message, if any; else all of it.
-      act={(t) => [
-        { label: "Quote in reply", icon: <Quote />, onSelect: () => draftIntoComposer({ text: quoted(t.ownSelection || entry.text) }, pane) },
-      ]}
-      actions={[{ label: "Copy text", text: () => entry.text }]}
-    >
-      <div
-        data-align="start"
-        className="agent-reply w-fit max-w-[min(140ch,100%)] rounded-lg bg-muted/50 px-4 py-3 text-sm leading-relaxed [overflow-wrap:anywhere]"
+    <>
+      <CopyMenu
+        // The selected part of this message, if any; else all of it.
+        act={(t) => [
+          { label: "Quote in reply", icon: <Quote />, onSelect: () => draftIntoComposer({ text: quoted(t.ownSelection || entry.text) }, pane) },
+        ]}
+        actions={[{ label: "Copy text", text: () => entry.text }]}
       >
-        <Markdown>{entry.text}</Markdown>
-      </div>
-    </CopyMenu>
+        <div
+          data-align="start"
+          className="agent-reply w-fit max-w-[min(140ch,100%)] rounded-lg bg-muted/50 px-4 py-3 text-sm leading-relaxed [overflow-wrap:anywhere]"
+        >
+          <Markdown>{entry.text}</Markdown>
+        </div>
+      </CopyMenu>
+      <ImageStrip sessionId={chat?.sessionId} images={images} alt="Image from the agent" className="mt-2" />
+    </>
   );
 }
 
@@ -250,6 +269,9 @@ function ToolCall({ entry, turnActive, permission }: { entry: Of<"tool">; turnAc
     setOpen(wanted);
   }
   const Icon = TOOL_ICONS[entry.kind ?? ""] ?? Wrench;
+  const sessionId = useChat()?.sessionId;
+  // Images it returned (a browser screenshot) show under the title, open or not.
+  const images = useMemo(() => toolImages(entry.content), [entry.content]);
   const output = toolOutput(entry.content);
   const label = toolLabel({ title: entry.title, status: entry.status, rawInput: entry.rawInput, output });
   const hasBody = entry.content.length > 0 || entry.rawInput != null;
@@ -291,6 +313,7 @@ function ToolCall({ entry, turnActive, permission }: { entry: Of<"tool">; turnAc
           )}
           {hasBody && <ChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90" />}
         </CollapsibleTrigger>
+        <ImageStrip sessionId={sessionId} images={images} alt={label ? label.text : entry.title} className="border-t px-3 py-2" />
         <CollapsibleContent>
           <div className="flex flex-col gap-2 border-t px-3 py-2">
             {entry.content.length > 0 ? (
@@ -319,6 +342,8 @@ function toolPaths(entry: Of<"tool">): string[] {
 function ToolContentView({ content, failed }: { content: ToolContent; failed: boolean }) {
   switch (content.type) {
     case "content":
+      // Images are drawn under the card's title (ToolCall).
+      if (content.content.type === "image") return null;
       return content.content.text == null ? <Pre>{`[${content.content.type}]`}</Pre> : <ToolText raw={content.content.text} failed={failed} />;
     case "diff":
       return <TextDiff path={content.path} oldText={content.oldText ?? ""} newText={content.newText} />;
@@ -440,22 +465,23 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
       .catch(setError)
       .finally(() => setSending(null));
   };
-  const trust = () => {
+  // Trusting answers with the one-off option, so it is offered only when there is one.
+  const server = pending && entry.options.some((o) => o.kind === "allow_once") ? entry.mcpServer : undefined;
+  // Where this chat can trust it (session/trust.rs): this chat, its project, quick chats, all chats.
+  const view = useTrustView(server ? chat?.sessionId : undefined);
+  const trust = (scope: TrustScope) => {
     if (!chat) return;
-    setSending("trust");
+    setSending(`trust:${scope}`);
     setError(null);
     const moveOn = focusAfterPermission(card.current);
-    api
-      .trustMcpServer(chat.sessionId, index)
+    trustApi
+      .trustMcpServer(chat.sessionId, index, scope)
       .then(moveOn)
       .catch(setError)
       .finally(() => setSending(null));
   };
   const request = () => (toolInput == null ? entry.title : `${entry.title}\n\n${JSON.stringify(toolInput, null, 2)}`);
   if (!pending) return <AnsweredPermission entry={entry} request={request} />;
-  // Trusting answers with the one-off option, so it is offered only when there is one.
-  const server = entry.options.some((o) => o.kind === "allow_once") ? entry.mcpServer : undefined;
-  const scope = chat?.inProject ? "project" : "chat";
   return (
     <CopyMenu actions={[{ label: "Copy request", text: request }]}>
       <div ref={card} role="group" aria-label="Permission requested" className="rounded-lg border border-amber-500/60 bg-amber-500/5 px-3 py-2">
@@ -463,6 +489,8 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
           <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600" />
           <div className="min-w-0 flex-1">
             <div className="font-medium">Permission requested</div>
+            {/* Rust's words for what the request is (permissions.rs `command_note`); it still asks. */}
+            {entry.note && <div className="text-xs text-muted-foreground">{entry.note}</div>}
             {/* Said at once, not only when the polite log gets to it (SR-2); the answers are a Shift+Tab from the message box. */}
             <span role="alert" className="sr-only">
               Permission requested: {entry.title}
@@ -486,12 +514,24 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
             </Button>
           ))}
         </div>
-        {server && (
-          <div className="mt-2 flex flex-col items-start gap-0.5 border-t pt-2">
-            <Button size="sm" variant="ghost" className="-ml-2" disabled={!chat || sending != null} onClick={trust}>
-              {sending === "trust" ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
-              Always allow tools from {server.label} in this {scope}
-            </Button>
+        {server && view && view.offered.length > 0 && (
+          <div className="mt-2 flex flex-col items-start gap-1 border-t pt-2">
+            <div className="text-xs font-medium">Always allow tools from {server.label}</div>
+            <div role="group" aria-label={`Always allow tools from ${server.label}`} className="-ml-2 flex flex-wrap gap-1">
+              {view.offered.map((scope) => (
+                <Button
+                  key={scope}
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Always allow tools from ${server.label} ${SCOPE_WORDS[scope]}`}
+                  disabled={!chat || sending != null}
+                  onClick={() => trust(scope)}
+                >
+                  {sending === `trust:${scope}` ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                  {SCOPE_WORDS[scope].replace(/^in/, "In")}
+                </Button>
+              ))}
+            </div>
             <p className="text-xs text-muted-foreground">
               Covers every {server.label} tool, including ones that change things: yaah can&apos;t tell which only read.
             </p>

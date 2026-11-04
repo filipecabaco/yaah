@@ -71,7 +71,7 @@ describe("an answered permission request", () => {
       permission("t4", "mcp__claude_ai_Linear__get_issue", {
         chosen: "Yes",
         answer: "allow_once",
-        auto: { reason: "trustedServer", why: "trusted server: Linear" },
+        auto: { reason: "trustedServer", why: "trusted in this project: Linear" },
       }),
       tool("t5", "Run ls"),
       permission("t5", "Run ls", {
@@ -88,7 +88,7 @@ describe("an answered permission request", () => {
     expect(read).toHaveTextContent("read-only in this chat's folders");
     const linear = cardOf(log, "mcp__claude_ai_Linear__get_issue");
     expect(within(linear).getByText("Auto-allowed")).toBeInTheDocument();
-    expect(linear).toHaveTextContent("trusted server: Linear");
+    expect(linear).toHaveTextContent("trusted in this project: Linear");
     const ls = cardOf(log, "Run ls");
     expect(within(ls).getByText("Always allowed")).toBeInTheDocument();
     expect(ls).toHaveTextContent("you said don't ask again in this chat");
@@ -148,7 +148,14 @@ describe("trusting an MCP server", () => {
     const log = await sendInQuickChat(user, "triage ENG-142");
     const asked = await within(log).findByRole("group", { name: "Permission requested" });
     expect(asked).toHaveTextContent("mcp__claude_ai_Linear__get_issue");
-    const trust = within(asked).getByRole("button", { name: "Always allow tools from Linear in this chat" });
+    // A quick chat: its scopes are quick chats (one scope for all of them) and all chats.
+    const scopes = await within(asked).findByRole("group", { name: "Always allow tools from Linear" });
+    expect(
+      within(scopes)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["In quick chats", "In all chats"]);
+    const trust = within(scopes).getByRole("button", { name: "Always allow tools from Linear in quick chats" });
     expect(asked).toHaveTextContent("Covers every Linear tool, including ones that change things");
     await user.click(trust);
 
@@ -164,22 +171,82 @@ describe("trusting an MCP server", () => {
     expect(await within(log).findByRole("group", { name: "Permission denied" })).toHaveTextContent("rm -rf build");
 
     const sessionId = Object.keys(mock.sessions)[0];
-    expect(mock.sessions[sessionId].trustedMcpServers).toEqual(["claude_ai_Linear"]);
-    // The chat's header lists it, with a way to stop trusting it.
-    await user.click(screen.getByRole("button", { name: "1 trusted MCP server in this chat" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Stop trusting claude_ai_Linear" }));
-    await waitFor(() => expect(mock.sessions[sessionId].trustedMcpServers).toEqual([]));
+    expect(mock.quickTrusted).toEqual(["claude_ai_Linear"]);
+    expect(mock.sessions[sessionId].trustedMcpServers ?? []).toEqual([]);
+    // The chat's header lists it, in quick chats, with a way to stop trusting it.
+    await user.click(await screen.findByRole("button", { name: "1 trusted MCP server in quick chats" }));
+    expect(await screen.findByText(/run without asking in quick chats/)).toBeInTheDocument();
+    await user.click(await screen.findByRole("menuitem", { name: "Stop trusting claude_ai_Linear in quick chats" }));
+    await waitFor(() => expect(mock.quickTrusted).toEqual([]));
     await waitFor(() => expect(screen.queryByRole("button", { name: /trusted MCP server/ })).toBeNull());
   });
 
-  it("is the project's in a project chat", () => {
+  it("offers this chat, this project and all chats in a project chat, and all chats in a chat of its own", async () => {
+    const mock = installBrowserMock({ delay: 0 });
     const entry = permission("t", "mcp__claude_ai_Linear__get_issue", { mcpServer: { id: "claude_ai_Linear", label: "Linear" } });
-    render(
-      <ChatContext.Provider value={{ sessionId: "s", cwd: "/", busy: true, inProject: true }}>
+    const inProject = await api.newSession(mock.projects[0].id, "default");
+    const { unmount } = render(
+      <ChatContext.Provider value={{ sessionId: inProject.sessionId, cwd: inProject.cwd, busy: true, inProject: true }}>
         <TranscriptEntry entry={entry} index={0} inTurn live={false} onLogin={() => {}} />
       </ChatContext.Provider>,
     );
-    expect(screen.getByRole("button", { name: "Always allow tools from Linear in this project" })).toBeInTheDocument();
+    const scopes = await screen.findByRole("group", { name: "Always allow tools from Linear" });
+    expect(
+      within(scopes)
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual([
+      "Always allow tools from Linear in this chat",
+      "Always allow tools from Linear in this project",
+      "Always allow tools from Linear in all chats",
+    ]);
+    unmount();
+    const own = await api.newQuickChat("default", "/Users/dev/workspace/api");
+    render(
+      <ChatContext.Provider value={{ sessionId: own.sessionId, cwd: own.cwd, busy: true }}>
+        <TranscriptEntry entry={entry} index={0} inTurn live={false} onLogin={() => {}} />
+      </ChatContext.Provider>,
+    );
+    const ownScopes = await screen.findByRole("group", { name: "Always allow tools from Linear" });
+    expect(
+      within(ownScopes)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["In this chat", "In all chats"]);
+  });
+
+  it("in all chats: Settings lists it, and Remove stops it", async () => {
+    const { user, mock } = renderApp();
+    const log = await sendInQuickChat(user, "triage ENG-142");
+    const asked = await within(log).findByRole("group", { name: "Permission requested" });
+    await user.click(await within(asked).findByRole("button", { name: "Always allow tools from Linear in all chats" }));
+    await waitFor(() => expect(mock.trustedEverywhere).toEqual(["claude_ai_Linear"]));
+    await waitFor(() => expect(within(cardOf(log, "mcp__claude_ai_Linear__get_issue")).getByText("Auto-allowed")).toBeInTheDocument());
+    expect(cardOf(log, "mcp__claude_ai_Linear__get_issue")).toHaveTextContent("trusted in all chats: Linear");
+    // The header says where.
+    await user.click(await screen.findByRole("button", { name: "1 trusted MCP server in quick chats" }));
+    expect(await screen.findByRole("menuitem", { name: "Stop trusting claude_ai_Linear in all chats" })).toHaveTextContent("in all chats");
+    await user.keyboard("{Escape}");
+
+    await user.click(await screen.findByRole("button", { name: /^settings/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("tab", { name: "Chat" }));
+    const list = await within(dialog).findByRole("list", { name: "MCP servers trusted in all chats" });
+    expect(await within(list).findByText("claude_ai_Linear")).toBeInTheDocument();
+    await user.click(within(list).getByRole("button", { name: "Remove claude_ai_Linear" }));
+    await waitFor(() => expect(mock.trustedEverywhere).toEqual([]));
+    expect(await within(list).findByText("None.")).toBeInTheDocument();
+  });
+
+  it("says what a command reading the agent's saved tool result is, and still asks", async () => {
+    const { user } = renderApp();
+    const log = await sendInQuickChat(user, "saved results");
+    const asked = await within(log).findByRole("group", { name: "Permission requested" });
+    expect(asked).toHaveTextContent("Claude is reading a saved tool result");
+    expect(within(asked).getByRole("button", { name: "Yes" })).toBeEnabled();
+    // The search and the Read were answered by yaah, each saying why.
+    expect(cardOf(log, 'Search "Wisconsin county population 2020"')).toHaveTextContent("web search allowed in Settings");
+    expect(log).toHaveTextContent("Claude's saved tool result from this chat");
   });
 
   it("isn't offered when yaah can't tell the server, or there is no one-off option to answer with", () => {
@@ -216,5 +283,21 @@ describe("Settings → Chat → Permissions", () => {
     expect(reads).not.toBeChecked();
     await user.click(reads);
     await waitFor(() => expect(mock.trustReadOnly).toBe(true));
+  });
+
+  it("allows web searches without asking only once turned on", async () => {
+    const { user, mock } = renderApp();
+    await user.click(await screen.findByRole("button", { name: /^settings/i }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("tab", { name: "Chat" }));
+    const search = await within(dialog).findByRole("switch", { name: "Allow web searches without asking" });
+    await waitFor(() => expect(search).toBeEnabled());
+    expect(search).not.toBeChecked();
+    expect(within(dialog).getByText(/Fetching a page still asks/)).toBeInTheDocument();
+    await user.click(search);
+    await waitFor(() => expect(mock.allowWebSearch).toBe(true));
+    expect(search).toBeChecked();
+    await user.click(search);
+    await waitFor(() => expect(mock.allowWebSearch).toBe(false));
   });
 });

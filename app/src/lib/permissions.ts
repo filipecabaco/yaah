@@ -35,6 +35,9 @@ export function permissionChip(e: PermissionEntry): PermissionChip | null {
   return { label: answer === "allow_always" ? "Always allowed" : "Allowed" };
 }
 
+/** Whether yaah answered `e` itself for a reason of its own (read-only, a trusted server, a saved tool result, a web search): not a "don't ask again" replay. */
+export const isAutoAllowed = (e: PermissionEntry | undefined) => !!e?.auto && e.auto.reason !== "remembered" && isAllowed(permissionAnswer(e));
+
 /**
  * The allowed requests that fold into a tool card, by tool call id (the last one wins): those
  * whose tool call is in `entries`. Their own entries aren't drawn.

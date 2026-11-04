@@ -32,6 +32,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { fromPairs, toPairs, useAction, type Pair } from "@/components/settings/form-state";
 import { ModelPicker } from "@/components/settings/model-picker";
+import { NewChatDefaults } from "@/components/settings/agent-config-defaults";
 import { ErrorAlert, Field, NavHeading, NavNote, NavRow, Pairs, PanelHeader, RemoveButton, TwoPane } from "@/components/settings/parts";
 import {
   api,
@@ -300,6 +301,7 @@ function Editor({
           onChange={pickBinding}
         />
         {fromNpm && preset && <Versions preset={preset} agents={agents} onPresets={onPresets} />}
+        {profile && <NewChatDefaults key={profile.id} profile={profile} />}
         {draft.preset === "claude" && (
           <Field id="agent-config" label="Claude config folder" hint="Each folder is a separate Claude login. Empty uses Claude Code's default.">
             <Input

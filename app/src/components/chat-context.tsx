@@ -16,7 +16,12 @@ type ChatInfo = {
 export const ChatContext = createContext<ChatInfo | null>(null);
 export const useChat = () => useContext(ChatContext);
 
-export type Draft = { text: string; mention?: { label: string; path: string } };
+export type Draft = {
+  text: string;
+  mention?: { label: string; path: string };
+  /** Several at once (Edit on a queued message hands its @mentions back). */
+  mentions?: { label: string; path: string }[];
+};
 
 /** A composer (or a test) listening for drafts: the chat and pane it belongs to, if any. */
 type Listener = { cb: (d: Draft) => void; sessionId?: string; pane?: string };

@@ -1,7 +1,7 @@
 // Settings → Chat: what agents are told about yaah's UI, and how tool-call cards
 // open, per kind of tool (also set from a card's right-click menu, "Always collapse …").
 import { useEffect, useState } from "react";
-import { ChevronRight, Plus, RotateCcw } from "lucide-react";
+import { ChevronRight, Plus, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { ErrorText } from "@/components/error-text";
 import { Page, Section } from "@/components/settings/parts";
 import { api, type AgentGuide } from "@/lib/api";
+import { onTrustChanged, trustApi, type PermissionSettings } from "@/lib/trust-api";
 import { cn } from "@/lib/utils";
 import { cardKeyLabel, saveCardRule, setCardRules, useCardRules, type CardMode } from "@/lib/tool-cards";
 import { setGroupToolCalls } from "@/lib/tool-groups";
@@ -126,14 +127,30 @@ function AgentGuideSection() {
 /** What yaah answers itself when an agent asks permission (session/permissions.rs), and how tool runs are drawn. */
 function PermissionsSection() {
   const [trustReads, setTrustReads] = useState<boolean | null>(null);
+  const [webSearch, setWebSearch] = useState<boolean | null>(null);
+  const [everywhere, setEverywhere] = useState<PermissionSettings["trustedEverywhere"] | null>(null);
   const [grouping, setGrouping] = useState<boolean | null>(null);
   const [error, setError] = useState<unknown>(null);
   useEffect(() => {
-    api.generalSettings().then((s) => {
-      setTrustReads(s.trustReadOnly ?? true);
-      setGrouping(s.groupToolCalls ?? true);
-    }, setError);
+    const read = () =>
+      trustApi.permissionSettings().then((p) => {
+        setTrustReads(p.trustReadOnly);
+        setWebSearch(p.allowWebSearch);
+        setEverywhere(p.trustedEverywhere);
+      }, setError);
+    void read();
+    api.generalSettings().then((s) => setGrouping(s.groupToolCalls ?? true), setError);
+    // A server trusted in all chats from a permission card while Settings is open.
+    return onTrustChanged(() => void read());
   }, []);
+  const untrust = async (server: string) => {
+    setError(null);
+    try {
+      setEverywhere((await trustApi.untrustEverywhere(server)).trustedEverywhere);
+    } catch (e) {
+      setError(e);
+    }
+  };
   const save = async (set: (on: boolean) => void, write: (on: boolean) => Promise<void>, on: boolean) => {
     setError(null);
     set(on);
@@ -147,7 +164,7 @@ function PermissionsSection() {
   return (
     <Section
       title="Permissions"
-      about="When an agent asks to read or search files, yaah answers Allow once if every path is inside the chat's folders. Edits, commands, web fetches and anything outside the folders still ask. MCP servers you trust are listed in each project, and in a quick chat's header."
+      about="When an agent asks to read or search files, yaah answers Allow once if every path is inside the chat's folders, or in the agent's own saved tool results for that chat (Claude Code). Edits, commands, web fetches and anything outside the folders still ask. MCP servers you trust in a chat, a project or quick chats are listed in that chat's header and in the project; quick chats share one list and one set of “don't ask again” choices."
     >
       <div className="flex items-center gap-3">
         <Switch
@@ -157,6 +174,42 @@ function PermissionsSection() {
           onCheckedChange={(on) => void save(setTrustReads, api.setTrustReadOnly, on)}
         />
         <Label htmlFor="trust-read-only">Allow reads in the chat&apos;s folders without asking</Label>
+      </div>
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center gap-3">
+          <Switch
+            id="allow-web-search"
+            checked={webSearch ?? false}
+            disabled={webSearch == null}
+            onCheckedChange={(on) => void save(setWebSearch, trustApi.setAllowWebSearch, on)}
+          />
+          <Label htmlFor="allow-web-search">Allow web searches without asking</Label>
+        </div>
+        <p className="pl-11 text-xs text-muted-foreground">
+          A search the agent runs itself, such as Claude Code&apos;s WebSearch. Fetching a page still asks.
+        </p>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <h3 className="text-sm font-medium" id="trusted-everywhere">
+          MCP servers trusted in all chats
+        </h3>
+        <p className="text-xs text-muted-foreground">
+          Every tool of these servers runs without asking in every chat, including ones that change things. Add one from a permission request&apos;s
+          &quot;In all chats&quot;.
+        </p>
+        <ul className="flex flex-col divide-y rounded-lg border" aria-labelledby="trusted-everywhere">
+          {everywhere?.length === 0 && <li className="p-3 text-sm text-muted-foreground">None.</li>}
+          {everywhere?.map((s) => (
+            <li key={s.id} className="flex items-center gap-3 p-2 pl-3">
+              <span className="min-w-0 flex-1 truncate font-mono text-xs" title={s.id}>
+                {s.id}
+              </span>
+              <Button variant="ghost" size="sm" aria-label={`Remove ${s.id}`} onClick={() => void untrust(s.id)}>
+                <X /> Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
       </div>
       <div className="flex items-center gap-3">
         <Switch

@@ -40,6 +40,16 @@ use terminal_chats::TerminalChats;
 /// Which permission requests yaah answers itself (read-only, trusted MCP servers), and the server a request is for.
 pub mod permissions;
 use permissions::{Auto, McpServer};
+/// Where trust applies (this chat, its project, quick chats, all chats), kept in `settings.json`.
+mod trust;
+use trust::Trust;
+pub use trust::{PermissionSettings, TrustView};
+/// Model, effort and the agent's other settings (ACP session config options).
+mod config;
+pub use config::{AgentDefaults, ChatConfig, ConfigOption, summary as config_summary};
+/// Messages sent while a turn runs: kept in order, sent one at a time as turns end.
+mod queue;
+pub use queue::{Edited, MAX_QUEUED, Pause, PauseReason, Queue, Queued, Sent};
 
 /// Sends an event to the UI. The app wires this to `AppHandle::emit`; tests to a channel.
 pub type Emit = Arc<dyn Fn(&str, Value) + Send + Sync>;
@@ -60,6 +70,8 @@ pub const COALESCE: Duration = Duration::from_millis(33);
 pub const SAVE_DELAY: Duration = Duration::from_millis(750);
 /// Entries `get_entries` returns when not told how many: the end of the chat.
 pub const PAGE: usize = 200;
+/// A prompt refused because the chat's turn is running (a send queues instead, `session/queue.rs`).
+pub(crate) const BUSY: &str = "a turn is already running in this session";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase")]
@@ -68,10 +80,19 @@ pub enum Entry {
         text: String,
         /// Names of context sent alongside the text (e.g. the project brief).
         attachments: Vec<String>,
+        /// What the user attached (dropped, pasted or picked), as sent (`attachments.rs`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<crate::attachments::Attachment>,
+        /// Tracker items the text references (`github#o/r#9`, `linear#ENG-1`), as read when sent (`references.rs`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        references: Vec<crate::references::Reference>,
     },
     Agent {
         text: String,
         message_id: Option<String>,
+        /// Image blocks in the message, their bytes in the chat's image store (`attachments::externalize_block`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<Value>,
     },
     Thought {
         text: String,
@@ -108,6 +129,10 @@ pub enum Entry {
         /// the card offers to trust it.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         mcp_server: Option<McpServer>,
+        /// Said above the request on its card, in words: "Claude is reading a saved
+        /// tool result" (`permissions::command_note`). It still asks.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        note: Option<String>,
     },
     /// UI the agent rendered via the UI MCP server. `tree` is a snapshot with
     /// library components expanded, so later library edits don't change it.
@@ -258,6 +283,12 @@ pub struct SessionInfo {
     /// are its project's), by id: their tools are allowed without asking.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trusted_mcp_servers: Vec<String>,
+    /// The agent's settings (model, effort, …) and the user's picks, kept across restarts (`session/config.rs`).
+    #[serde(default, skip_serializing_if = "ChatConfig::is_empty")]
+    pub config: ChatConfig,
+    /// Messages sent while a turn ran, waiting to go (`session/queue.rs`), kept across restarts.
+    #[serde(default, skip_serializing_if = "Queue::is_empty")]
+    pub queue: Queue,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref, reason = "serde's skip_serializing_if passes a reference")]
@@ -522,6 +553,8 @@ fn load_sessions(dir: &Path) -> HashMap<String, Session> {
         .filter_map(|path| {
             let mut info = read_info(&path).inspect_err(|e| eprintln!("[sessions] skipping {}: {e}", path.display())).ok()?;
             info.running = false;
+            // Messages still queued wait for "Resume queue" (session/queue.rs).
+            info.queue.restored();
             Some((info.session_id.clone(), Session::unloaded(info, path)))
         })
         .collect()
@@ -714,22 +747,6 @@ struct Shared {
     trust: Mutex<Trust>,
 }
 
-/// The user's permission choices that aren't a chat's own: the app sets them
-/// from `settings.json` and `projects.json` (`Hub::set_trust_read_only`,
-/// `Hub::set_project_trust`); a Hub in a test reads no file.
-struct Trust {
-    /// Allow reads and searches inside a chat's folders (Settings → Chat). On unless turned off.
-    read_only: bool,
-    /// Trusted MCP servers by project id.
-    projects: HashMap<String, Vec<String>>,
-}
-
-impl Default for Trust {
-    fn default() -> Self {
-        Self { read_only: true, projects: HashMap::new() }
-    }
-}
-
 fn micros(d: Duration) -> u64 {
     u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
 }
@@ -765,20 +782,6 @@ impl Shared {
             save_delay_us: AtomicU64::new(micros(SAVE_DELAY)),
             trust: Mutex::default(),
         }
-    }
-
-    /// Whether yaah answers a request in chat `s` itself, and how: the option
-    /// to pick, its name, and why. Only ever an `allow_once` option.
-    fn auto_answer(&self, s: &Session, req: &permissions::Request, options: &Value) -> Option<(String, String, Auto)> {
-        let (read_only, mut trusted) = {
-            let t = self.trust.lock().unwrap();
-            (t.read_only, s.info.project_id.as_ref().and_then(|p| t.projects.get(p)).cloned().unwrap_or_default())
-        };
-        trusted.extend(s.info.trusted_mcp_servers.iter().cloned());
-        let roots: Vec<PathBuf> = std::iter::once(&s.info.cwd).chain(&s.info.additional_dirs).map(PathBuf::from).collect();
-        let auto = permissions::decide(req, &permissions::Policy { read_only, roots: &roots, trusted: &trusted })?;
-        let (id, name) = permissions::allow_once(options)?;
-        Some((id, name, auto))
     }
 
     /// A chat by its id, or by the ACP session id its current agent knows it by.
@@ -1006,6 +1009,10 @@ pub struct Hub {
     store: Option<PathBuf>,
     /// What agents are told about yaah's UI (`agent_guide.rs`); unset, they're told nothing.
     guide: OnceLock<Arc<Guide>>,
+    /// Where profiles' "New chats start with" defaults are kept (`session/config.rs`); unset, there are none.
+    config_defaults: OnceLock<&'static crate::json_file::JsonFile>,
+    /// What lets chats' queues send on their own (`session/queue.rs`).
+    queue: queue::Dispatch,
 }
 
 impl Hub {
@@ -1038,6 +1045,8 @@ impl Hub {
             asks: Mutex::default(),
             store,
             guide: OnceLock::new(),
+            config_defaults: OnceLock::new(),
+            queue: queue::Dispatch::default(),
         }
     }
 
@@ -1291,6 +1300,7 @@ impl Hub {
         stage(if servers.is_empty() { StartStage::Session } else { StartStage::McpServers }, &servers);
 
         let res = agent.conn.request("session/new", params).await;
+        let offered = res.as_ref().map(config::offered).unwrap_or_default();
         let session_id = res
             .map_err(|e| self.shared.rpc_error(&account.id, &e, "session/new failed"))
             .and_then(|r| {
@@ -1325,6 +1335,8 @@ impl Hub {
             dirs_changed: false,
             remembered: BTreeMap::new(),
             trusted_mcp_servers: vec![],
+            config: ChatConfig { options: offered, ..ChatConfig::default() },
+            queue: Queue::default(),
         };
         let mut session = Session::new(info.clone(), vec![], self.store.as_ref().map(|d| d.join(file_name(&session_id))));
         session.brief = brief;
@@ -1342,19 +1354,24 @@ impl Hub {
             }
             taken
         };
-        let mut tokens = self.ui_tokens.lock().unwrap();
-        if taken {
-            tokens.remove(&ui_token);
-            return Err(format!("the agent started a chat with the id of one yaah already has ({session_id}); refused"));
+        // In a block of its own: the guard mustn't live across the `await` below.
+        {
+            let mut tokens = self.ui_tokens.lock().unwrap();
+            if taken {
+                tokens.remove(&ui_token);
+                return Err(format!("the agent started a chat with the id of one yaah already has ({session_id}); refused"));
+            }
+            if let Some(slot) = tokens.get_mut(&ui_token) {
+                *slot = Some(session_id);
+            }
         }
-        if let Some(slot) = tokens.get_mut(&ui_token) {
-            *slot = Some(session_id);
+        {
+            let mut s = chat.lock().unwrap();
+            self.shared.save(&mut s);
+            self.shared.emit_info(&mut s);
         }
-        drop(tokens);
-        let mut s = chat.lock().unwrap();
-        self.shared.save(&mut s);
-        self.shared.emit_info(&mut s);
-        Ok(info)
+        // The profile's "New chats start with" model and effort, when the agent offers them.
+        Ok(self.settle_config(&info.session_id, &agent, None, true).await.unwrap_or(info))
     }
 
     /// Give a chat its own URL on the UI MCP server (in `session/new` or
@@ -1409,7 +1426,9 @@ impl Hub {
             s.attached = res.is_ok().then_some(agent.generation);
             self.shared.save(s);
         });
-        res.map(|_| ()).map_err(|e| self.shared.rpc_error(&account.id, &e, "Couldn't reopen this chat"))
+        let loaded = res.map_err(|e| self.shared.rpc_error(&account.id, &e, "Couldn't reopen this chat"))?;
+        // The agent may not have kept the chat's model and effort: they're sent again.
+        self.settle_config(session_id, agent, Some(config::offered(&loaded)), false).await.map(|_| ())
     }
 
     /// Move a chat to another agent profile. The chat keeps its id and its
@@ -1435,6 +1454,8 @@ impl Hub {
             }
             s.info.account_id.clone_from(&to.id);
             s.info.commands.clear();
+            // Another agent's settings: its new session says what it offers.
+            s.info.config = ChatConfig::default();
             s.attached = None;
             s.brief = None;
             s.guide = None;
@@ -1471,6 +1492,7 @@ impl Hub {
         crate::mcp_servers::inject(&mut params, agent.caps.mcp_http, agent.caps.mcp_sse, account);
 
         let res = agent.conn.request("session/new", params).await;
+        let offered = res.as_ref().ok().map(config::offered);
         let acp_id = res.map_err(|e| self.shared.rpc_error(&account.id, &e, "session/new failed")).and_then(|r| {
             r.get("sessionId")
                 .and_then(Value::as_str)
@@ -1496,7 +1518,9 @@ impl Hub {
             s.guide = guide;
             s.brief = brief;
             self.shared.save(s);
-        })
+        })?;
+        // A switched chat starts with the new profile's defaults; a reopened one keeps its picks.
+        self.settle_config(session_id, agent, offered, true).await.map(|_| ())
     }
 
     /// The agent profile with this id.
@@ -1698,16 +1722,30 @@ impl Hub {
         if let Some(host) = self.ui_host.get().and_then(Weak::upgrade) {
             host.revoke(session_id);
         }
-        if let Some(path) = path {
+        if let Some(path) = &path {
             // After any write of it already under way, so a save can't bring the file back.
             let _io = self.shared.io.lock().unwrap();
-            if let Err(e) = std::fs::remove_file(&path)
+            if let Err(e) = std::fs::remove_file(path)
                 && e.kind() != std::io::ErrorKind::NotFound
             {
                 eprintln!("[sessions] could not delete {}: {e}", path.display());
             }
         }
+        // Its images (attachments and agents' screenshots) go with it.
+        let images = crate::attachments::image_dir(path.as_deref(), session_id);
+        if let Err(e) = std::fs::remove_dir_all(&images)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!("[sessions] could not delete {}: {e}", images.display());
+        }
         Ok(())
+    }
+
+    /// Where a chat keeps its images (`attachments.rs`).
+    pub fn image_dir(&self, session_id: &str) -> Result<PathBuf, String> {
+        let chat = self.shared.chat(session_id).ok_or("unknown session")?;
+        let s = chat.lock().unwrap();
+        Ok(image_dir(&s))
     }
 
     /// Every chat's info. Reads no transcript.
@@ -1742,7 +1780,46 @@ impl Hub {
     /// to the agent as ACP `resource_link` blocks (baseline in every agent).
     /// Starts the chat's agent if it isn't running, and reattaches the chat to it.
     pub async fn prompt(&self, session_id: &str, text: String, mentions: Vec<String>) -> Result<(), String> {
-        const BUSY: &str = "a turn is already running in this session";
+        self.prompt_with(session_id, text, mentions, vec![]).await
+    }
+
+    /// [`Hub::prompt`] with what the user attached in the composer (`attachments.rs`): sent as
+    /// ACP image, embedded resource or resource link blocks, as the agent's capabilities allow.
+    pub async fn prompt_with(
+        &self,
+        session_id: &str,
+        text: String,
+        mentions: Vec<String>,
+        files: Vec<crate::attachments::Attachment>,
+    ) -> Result<(), String> {
+        self.prompt_with_references(session_id, text, mentions, files, vec![]).await
+    }
+
+    /// [`Hub::prompt_with`] with the message's tracker references, already read
+    /// (`references::resolve_text`): embedded resources before the text when the agent
+    /// takes them, else text after it; the transcript keeps them as chips.
+    pub async fn prompt_with_references(
+        &self,
+        session_id: &str,
+        text: String,
+        mentions: Vec<String>,
+        files: Vec<crate::attachments::Attachment>,
+        references: Vec<crate::references::Resolved>,
+    ) -> Result<(), String> {
+        self.start_turn(session_id, text, mentions, files, references, None).await
+    }
+
+    /// [`Hub::prompt_with_references`], for the queue's item `queued` when it is one:
+    /// it leaves the queue as its turn starts (`session/queue.rs`).
+    async fn start_turn(
+        &self,
+        session_id: &str,
+        text: String,
+        mentions: Vec<String>,
+        files: Vec<crate::attachments::Attachment>,
+        references: Vec<crate::references::Resolved>,
+        queued: Option<&str>,
+    ) -> Result<(), String> {
         let (account_id, attached, handoff, dirs_changed) = self
             .shared
             .with(session_id, |s| {
@@ -1763,6 +1840,9 @@ impl Hub {
         } else if dirs_changed || attached != Some(agent.generation) {
             self.attach(session_id, &agent, &account).await?;
         }
+        // Read before the chat is locked: images are up to megabytes each.
+        let (file_blocks, files) =
+            if files.is_empty() { (vec![], vec![]) } else { crate::attachments::blocks(&files, &agent.caps, &self.image_dir(session_id)?)? };
 
         let blocks = self.shared.with(session_id, |s| {
             if s.info.running {
@@ -1772,7 +1852,8 @@ impl Hub {
             s.info.stop_reason = None;
             s.plan_index = None;
             if s.entries.is_empty() {
-                s.info.title = truncate(text.lines().next().unwrap_or_default(), TITLE_MAX_CHARS);
+                let first = text.lines().find(|l| !l.trim().is_empty()).or_else(|| files.first().map(|f| f.name.as_str()));
+                s.info.title = truncate(first.unwrap_or_default(), TITLE_MAX_CHARS);
             }
             let mut blocks = vec![];
             let mut attachments = vec![];
@@ -1801,8 +1882,17 @@ impl Hub {
                 blocks.push(json!({ "type": "resource_link", "uri": format!("file://{path}"), "name": name }));
                 attachments.push(name);
             }
-            blocks.push(json!({ "type": "text", "text": text }));
-            self.shared.push(s, Entry::User { text, attachments });
+            blocks.extend(file_blocks);
+            let refs = crate::references::content(&references, agent.caps.embedded_context);
+            blocks.extend(refs.before);
+            if !text.is_empty() || files.is_empty() {
+                blocks.push(json!({ "type": "text", "text": text }));
+            }
+            blocks.extend(refs.after);
+            self.shared.push(s, Entry::User { text, attachments, files, references: refs.chips });
+            if let Some(id) = queued {
+                s.info.queue.sent(id);
+            }
             self.shared.emit_info(s);
             self.shared.save(s);
             Ok((blocks, s.info.agent_session().to_owned()))
@@ -1811,6 +1901,8 @@ impl Hub {
         let (blocks, agent_session) = blocks;
         let shared = self.shared.clone();
         let sid = session_id.to_owned();
+        // The queue's next message goes when this turn ends normally (session/queue.rs).
+        let hub = self.me();
         tauri::async_runtime::spawn(async move {
             let res = agent.conn.request("session/prompt", json!({ "sessionId": agent_session, "prompt": blocks })).await;
             let (stop, error) = match res {
@@ -1822,7 +1914,11 @@ impl Hub {
                 }
                 Err(e) => (None, Some(Entry::error(e.to_string()))),
             };
-            finish_turn(&shared, &sid, stop, error);
+            if finish_turn(&shared, &sid, stop, error)
+                && let Some(hub) = hub.and_then(|h| h.upgrade())
+            {
+                hub.send_next_in_background(&sid);
+            }
         });
         Ok(())
     }
@@ -1833,6 +1929,10 @@ impl Hub {
         let (account_id, agent_session) = self.shared.with(session_id, |s| {
             for i in s.cancel_waiting("cancelled", |_| true) {
                 self.shared.emit_entry(s, i);
+            }
+            // A stopped turn pauses the queue (unless "Send now" stopped it).
+            if s.info.running {
+                s.info.queue.stopped_by_user();
             }
             (s.info.account_id.clone(), s.info.agent_session().to_owned())
         })?;
@@ -1846,8 +1946,10 @@ impl Hub {
     /// The user answered the permission request at `index` (`None` = cancelled).
     /// "Don't ask again" also answers the same request already waiting in this
     /// chat (the agent often asks several at once), and later ones, the same way.
+    /// In a quick chat it is kept for every quick chat, and answers theirs too (`trust.rs`).
     pub fn respond_permission(&self, session_id: &str, index: usize, option_id: Option<&str>) -> Result<(), String> {
-        self.shared.with(session_id, |s| {
+        let mut in_quick_chats = None;
+        let res = self.shared.with(session_id, |s| {
             let Some(Entry::Permission { request_id, options, chosen, title, answer, .. }) = s.entry_mut(index) else {
                 return Err("no permission request at that index".to_owned());
             };
@@ -1868,7 +1970,10 @@ impl Hub {
                 && title != UNNAMED_REQUEST
                 && title != UNNAMED_TOOL
             {
-                s.info.remembered.insert(title.clone(), kind.to_owned());
+                let scope = self.shared.remember(s, &title, kind);
+                if scope == permissions::Scope::QuickChats {
+                    in_quick_chats = Some((title.clone(), kind.to_owned()));
+                }
                 let same: Vec<(usize, Value, String, String, &str)> = (0..s.entries.len())
                     .filter_map(|i| match &*s.entries[i] {
                         Entry::Permission { request_id, options, chosen: None, title: t, .. } if *t == title => {
@@ -1881,7 +1986,7 @@ impl Hub {
                     if let Some(Entry::Permission { chosen, answer, auto, .. }) = s.entry_mut(i) {
                         *chosen = Some(format!("{name} {REMEMBERED}"));
                         *answer = Some(once.to_owned());
-                        *auto = Some(Auto::remembered());
+                        *auto = Some(Auto::remembered_in(scope));
                     }
                     if let Some((_, r)) = s.waiting.remove(&i) {
                         r.ok(request_id, outcome(Some(&id)));
@@ -1891,107 +1996,12 @@ impl Hub {
             }
             self.shared.save(s);
             if sent { Ok(()) } else { Err("agent process is not running".into()) }
-        })?
-    }
-
-    /// "Always allow tools from <server>": trust the MCP server the request at
-    /// `index` is for, in the chat's project (`add_to_project` stores it there and
-    /// returns the project) or, in a quick chat, in the chat itself. That covers
-    /// every tool of the server. Its requests waiting now are answered with
-    /// `allow_once` (in every chat of the project, or in this chat), and later
-    /// ones the same way without asking.
-    pub fn trust_server(
-        &self,
-        session_id: &str,
-        index: usize,
-        add_to_project: impl FnOnce(&str, &str) -> Result<Project, String>,
-    ) -> Result<(), String> {
-        let (server, project_id) = self.shared.with(session_id, |s| match s.entries.get(index).map(|e| &**e) {
-            Some(Entry::Permission { mcp_server: Some(m), .. }) => Ok((m.clone(), s.info.project_id.clone())),
-            Some(Entry::Permission { .. }) => Err("yaah can't tell which MCP server this request is for".to_owned()),
-            _ => Err("no permission request at that index".to_owned()),
-        })??;
-        let chats = match &project_id {
-            Some(p) => {
-                let project = add_to_project(p, &server.id)?;
-                self.set_project_trust(&project);
-                self.shared.chats()
-            }
-            None => vec![self.shared.chat(session_id).ok_or("unknown session")?],
-        };
-        for chat in chats {
-            let mut s = chat.lock().unwrap();
-            if s.info.project_id != project_id {
-                continue;
-            }
-            if project_id.is_none() && !s.info.trusted_mcp_servers.contains(&server.id) {
-                s.ensure_loaded();
-                s.info.trusted_mcp_servers.push(server.id.clone());
-                self.shared.emit_info(&mut s);
-                self.shared.save(&mut s);
-            }
-            self.answer_trusted(&mut s, &server);
+        })?;
+        // Other chats are taken only once this one's lock is let go.
+        if let Some((title, kind)) = in_quick_chats {
+            self.replay_in_quick_chats(session_id, &title, &kind);
         }
-        Ok(())
-    }
-
-    /// Answer the requests waiting in `s` for `server`'s tools, now that it is trusted.
-    fn answer_trusted(&self, s: &mut Session, server: &McpServer) {
-        let mut same: Vec<usize> = s
-            .waiting
-            .keys()
-            .copied()
-            .filter(
-                |&i| matches!(s.entries.get(i).map(|e| &**e), Some(Entry::Permission { mcp_server: Some(m), chosen: None, .. }) if m.id == server.id),
-            )
-            .collect();
-        if same.is_empty() {
-            // Nothing to write (and a chat whose entries weren't read must not be written).
-            return;
-        }
-        same.sort_unstable();
-        for i in same {
-            let Some(Entry::Permission { request_id, options, chosen, answer, auto, .. }) = s.entry_mut(i) else { continue };
-            let Some((option_id, name)) = permissions::allow_once(options) else { continue };
-            *chosen = Some(name);
-            *answer = Some("allow_once".into());
-            *auto = Some(Auto::trusted(server));
-            let request_id = request_id.clone();
-            if let Some((_, r)) = s.waiting.remove(&i) {
-                r.ok(request_id, outcome(Some(&option_id)));
-            }
-            self.shared.emit_entry(s, i);
-        }
-        self.shared.save(s);
-    }
-
-    /// Stop trusting `server` in a quick chat (`trust_server`).
-    pub fn untrust_chat_server(&self, session_id: &str, server: &str) -> Result<SessionInfo, String> {
-        self.shared.with(session_id, |s| {
-            s.info.trusted_mcp_servers.retain(|t| t != server);
-            self.shared.emit_info(s);
-            self.shared.save(s);
-            s.info.clone()
-        })
-    }
-
-    /// The MCP servers trusted in `project` changed (or the app started): its chats follow at once.
-    pub fn set_project_trust(&self, project: &Project) {
-        self.load_project_trust(std::slice::from_ref(project));
-        (self.shared.app)("projects-changed", json!({ "projectId": project.id }));
-    }
-
-    /// Each project's trusted MCP servers, as `projects.json` has them (at startup).
-    pub fn load_project_trust(&self, projects: &[Project]) {
-        let mut t = self.shared.trust.lock().unwrap();
-        for p in projects {
-            t.projects.insert(p.id.clone(), p.trusted_mcp_servers.clone());
-        }
-    }
-
-    /// Settings → Chat, "Allow reads in the chat's folders" (`settings::trust_read_only`).
-    pub fn set_trust_read_only(&self, on: bool) {
-        self.shared.trust.lock().unwrap().read_only = on;
+        res
     }
 
     fn start_gate(&self, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -2101,15 +2111,24 @@ fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &
                     _ => (tool_call.get("kind").and_then(Value::as_str), &tool_call["locations"], &tool_call["rawInput"]),
                 };
                 let mcp_server = permissions::mcp_server(&params, tool_call, &title, kind, raw_input);
-                // The user already said "don't ask again" to exactly this in this chat: answer it the same way.
-                // Else read-only inside the chat's folders, or a trusted server's tool. Either way it is still
-                // shown, marked, so nothing happens unseen.
-                let remembered = s.info.remembered.get(&title).and_then(|kind| remembered_option(&options, kind));
-                let picked =
-                    remembered.map(|(option_id, name, kind)| (option_id, format!("{name} {REMEMBERED}"), kind, Auto::remembered())).or_else(|| {
-                        let req = permissions::Request { kind, locations, raw_input, server: mcp_server.as_ref() };
+                // The user already said "don't ask again" to exactly this in this chat (or, a quick chat, in
+                // quick chats): answer it the same way. Else a trusted server's tool, read-only inside the chat's
+                // folders or the agent's saved tool results, or a web search (`session/trust.rs`, `permissions.rs`).
+                // Either way it is still shown, marked, so nothing happens unseen.
+                let remembered = shared
+                    .remembered(s, &title)
+                    .and_then(|(kind, scope)| remembered_option(&options, &kind).map(|(id, name, once)| (id, name, once, scope)));
+                let picked = remembered
+                    .map(|(option_id, name, kind, scope)| (option_id, format!("{name} {REMEMBERED}"), kind, Auto::remembered_in(scope)))
+                    .or_else(|| {
+                        let tool_name = permissions::tool_name(tool_call);
+                        let req = permissions::Request { kind, locations, raw_input, server: mcp_server.as_ref(), tool_name };
                         shared.auto_answer(s, &req, &options).map(|(option_id, name, auto)| (option_id, name, "allow_once", auto))
                     });
+                // A command that only reads the agent's own saved tool results still asks, but says so.
+                let note = (picked.is_none() && kind == Some("execute"))
+                    .then(|| shared.own_dirs(s).and_then(|own| permissions::command_note(kind, raw_input, &own)))
+                    .flatten();
                 let (chosen, answer, auto) = match picked {
                     Some((option_id, name, kind, auto)) => {
                         responder.ok(id.clone(), outcome(Some(&option_id)));
@@ -2118,7 +2137,8 @@ fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &
                     None => (None, None, None),
                 };
                 let waiting = chosen.is_none();
-                let i = shared.push(s, Entry::Permission { request_id: id.clone(), tool_call_id, title, options, chosen, answer, auto, mcp_server });
+                let i = shared
+                    .push(s, Entry::Permission { request_id: id.clone(), tool_call_id, title, options, chosen, answer, auto, mcp_server, note });
                 if waiting {
                     s.waiting.insert(i, (generation, responder.clone()));
                 }
@@ -2196,6 +2216,10 @@ fn mcp_startup_notice(update: &Value) -> Option<Notice> {
 }
 
 fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
+    // The agent's settings changed (the full set), also while a reload replays.
+    if update["sessionUpdate"] == "config_option_update" {
+        return config::on_update(shared, s, update);
+    }
     if s.replaying {
         return;
     }
@@ -2230,6 +2254,7 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
             };
             push_notice(shared, s, notice);
         }
+        "agent_message_chunk" if update["content"]["type"] == "image" => agent_image(shared, s, update),
         "agent_message_chunk" | "agent_thought_chunk" => {
             let thought = kind == "agent_thought_chunk";
             let text = content_text(&update["content"]);
@@ -2245,7 +2270,7 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
             } else {
                 let message_id = message_id.map(str::to_owned);
                 let len = text.encode_utf16().count();
-                let i = shared.push(s, if thought { Entry::Thought { text, message_id } } else { Entry::Agent { text, message_id } });
+                let i = shared.push(s, if thought { Entry::Thought { text, message_id } } else { Entry::Agent { text, message_id, images: vec![] } });
                 s.stream.text_len = Some((i, len));
             }
         }
@@ -2274,10 +2299,45 @@ fn apply_update(shared: &Shared, s: &mut Session, update: &Value) {
     }
 }
 
+/// Where the chat keeps images (`attachments.rs`): beside its transcript.
+fn image_dir(s: &Session) -> PathBuf {
+    crate::attachments::image_dir(s.save_to.as_deref(), &s.info.session_id)
+}
+
+/// An image in the agent's message: its bytes go to the chat's image store, and it shows with
+/// the message it belongs to (a message of its own when it starts one).
+fn agent_image(shared: &Shared, s: &mut Session, update: &Value) {
+    let mut block = update["content"].clone();
+    crate::attachments::externalize_block(&mut block, &image_dir(s));
+    let message_id = update.get("messageId").and_then(Value::as_str);
+    let continued = s
+        .entries
+        .len()
+        .checked_sub(1)
+        .filter(|&i| matches!(&*s.entries[i], Entry::Agent { message_id: m, .. } if same_message(m.as_deref(), message_id)));
+    if let Some(i) = continued {
+        if let Some(Entry::Agent { images, .. }) = s.entry_mut(i) {
+            images.push(block);
+        }
+        shared.emit_entry(s, i);
+    } else {
+        let i = shared.push(s, Entry::Agent { text: String::new(), message_id: message_id.map(str::to_owned), images: vec![block] });
+        s.stream.text_len = Some((i, 0));
+    }
+}
+
 /// Insert a tool call, or merge the non-null fields of an update into it.
 fn upsert_tool(shared: &Shared, s: &mut Session, update: &Value) {
     let Some(id) = update.get("toolCallId").and_then(Value::as_str) else { return };
-    let field = |k: &str| update.get(k).filter(|v| !v.is_null()).cloned();
+    // Images in the content (a browser screenshot) go to the chat's image store; the entry keeps an id.
+    let images = image_dir(s);
+    let field = |k: &str| {
+        let mut v = update.get(k).filter(|v| !v.is_null()).cloned();
+        if let Some(content) = v.as_mut().filter(|_| k == "content") {
+            crate::attachments::externalize_content(content, &images);
+        }
+        v
+    };
     let str_field = |k: &str| update.get(k).and_then(Value::as_str).map(str::to_owned);
 
     let Some(&i) = s.tool_index.get(id) else {
@@ -2317,19 +2377,28 @@ fn upsert_tool(shared: &Shared, s: &mut Session, update: &Value) {
 
 /// A turn ended: what's left of its text goes to the UI before the chat stops
 /// running, and the transcript is written now rather than in a moment.
-fn finish_turn(shared: &Shared, sid: &str, stop: Option<String>, error: Option<Entry>) {
-    let _ = shared.with(sid, |s| {
-        s.info.running = false;
-        s.info.stop_reason = stop;
-        if let Some(entry) = error {
-            shared.push(s, entry);
-        }
-        for entry in std::mem::take(&mut s.after_turn) {
-            shared.push(s, entry);
-        }
-        shared.emit_info(s);
-        shared.save_now(s);
-    });
+/// Returns whether the chat's queue sends its next message now (`session/queue.rs`).
+fn finish_turn(shared: &Shared, sid: &str, stop: Option<String>, error: Option<Entry>) -> bool {
+    shared
+        .with(sid, |s| {
+            s.info.running = false;
+            let failed = match &error {
+                Some(Entry::Error { message, .. }) => Some(message.clone()),
+                _ => None,
+            };
+            let next = s.info.queue.turn_ended(stop.as_deref(), failed.as_deref(), !s.waiting.is_empty());
+            s.info.stop_reason = stop;
+            if let Some(entry) = error {
+                shared.push(s, entry);
+            }
+            for entry in std::mem::take(&mut s.after_turn) {
+                shared.push(s, entry);
+            }
+            shared.emit_info(s);
+            shared.save_now(s);
+            next
+        })
+        .unwrap_or(false)
 }
 
 /// An agent process ended. Its running turns end on their own (their
@@ -2607,6 +2676,8 @@ fn test_info(id: &str) -> SessionInfo {
         dirs_changed: false,
         remembered: BTreeMap::new(),
         trusted_mcp_servers: vec![],
+        config: ChatConfig::default(),
+        queue: Queue::default(),
     }
 }
 
@@ -3199,7 +3270,7 @@ mod persistence_tests {
     fn restores_saved_chats_as_stopped() {
         let dir = std::env::temp_dir().join(format!("yaah-sessions-{}", random_token()));
         let entries = vec![
-            Entry::User { text: "hi".into(), attachments: vec![] },
+            Entry::User { text: "hi".into(), attachments: vec![], files: vec![], references: vec![] },
             Entry::Tool {
                 tool_call_id: "t1".into(),
                 title: "Write x".into(),
@@ -3218,6 +3289,7 @@ mod persistence_tests {
                 answer: None,
                 auto: None,
                 mcp_server: None,
+                note: None,
             },
         ];
         let hub = Hub::open(Arc::new(|_: &str, _: Value| {}), Some(dir.clone()), Store::user());
@@ -3427,6 +3499,46 @@ mod stream_tests {
 
     fn update(hub: &Hub, update: &Value) {
         hub.shared.with("s", |s| apply_update(&hub.shared, s, update)).unwrap();
+    }
+
+    /// A browser screenshot in a tool result, or an image in the agent's message: the bytes go to
+    /// the chat's image store once, the entry (saved, sent to the UI on every update) keeps an id.
+    #[test]
+    fn agents_images_are_kept_out_of_the_transcript() {
+        use base64::Engine;
+        let (hub, events) = hub(COALESCE);
+        let mut png = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(3, 2).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(png.get_ref());
+        let shot = json!([{ "type": "content", "content": { "type": "image", "mimeType": "image/png", "data": data } }]);
+        update(&hub, &json!({ "sessionUpdate": "tool_call", "toolCallId": "t1", "title": "mcp__vitro__screenshot", "status": "pending" }));
+        update(&hub, &json!({ "sessionUpdate": "tool_call_update", "toolCallId": "t1", "status": "completed", "content": shot }));
+        let entries = hub.transcript("s").unwrap().entries;
+        let Entry::Tool { content, .. } = &entries[0] else { panic!("{:?}", entries[0]) };
+        let img = &content[0]["content"];
+        assert!(img.get("data").is_none());
+        assert_eq!((img["width"].as_u64(), img["height"].as_u64()), (Some(3), Some(2)));
+        let (bytes, _) = crate::attachments::load_image(&hub.image_dir("s").unwrap(), img["image"].as_str().unwrap()).unwrap();
+        assert_eq!(&bytes, png.get_ref());
+        assert!(!events.lock().unwrap().iter().any(|(_, _, p)| p.to_string().contains(&data)), "the UI never gets the base64");
+
+        // An image in the agent's message joins it, and the text after it continues it.
+        update(
+            &hub,
+            &json!({ "sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": { "type": "image", "mimeType": "image/png", "data": data } }),
+        );
+        update(&hub, &json!({ "sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": { "type": "text", "text": "Here it is" } }));
+        let entries = hub.transcript("s").unwrap().entries;
+        assert_eq!(entries.len(), 2);
+        let Entry::Agent { text, images, .. } = &entries[1] else { panic!("{:?}", entries[1]) };
+        assert_eq!((text.as_str(), images.len()), ("Here it is", 1));
+        assert_eq!(images[0]["image"], img["image"], "the same image is kept once");
+
+        // Chats saved before attachments read as they were.
+        let old: Entry = serde_json::from_value(json!({ "type": "user", "text": "hi", "attachments": [] })).unwrap();
+        assert!(matches!(old, Entry::User { files, .. } if files.is_empty()));
+        let old: Entry = serde_json::from_value(json!({ "type": "agent", "text": "hi", "messageId": null })).unwrap();
+        assert!(matches!(old, Entry::Agent { images, .. } if images.is_empty()));
     }
 
     /// `_auth/status_update` from claude-agent-acp: external, gateway and API-key auth count as signed in.
@@ -3888,7 +4000,8 @@ mod lazy_tests {
     }
 
     fn write_chat(dir: &Path, id: &str, entries: usize) {
-        let entries: Vec<Entry> = (0..entries).map(|i| Entry::User { text: format!("message {i}"), attachments: vec![] }).collect();
+        let entries: Vec<Entry> =
+            (0..entries).map(|i| Entry::User { text: format!("message {i}"), attachments: vec![], files: vec![], references: vec![] }).collect();
         std::fs::write(dir.join(format!("{id}.json")), serde_json::to_vec(&Transcript { info: test_info(id), entries }).unwrap()).unwrap();
     }
 
@@ -3970,9 +4083,9 @@ mod switch_tests {
     #[test]
     fn the_handoff_keeps_messages_and_one_liners_in_order() {
         let entries = shared(vec![
-            Entry::User { text: "  Fix the build  ".into(), attachments: vec!["project.md".into()] },
+            Entry::User { text: "  Fix the build  ".into(), attachments: vec!["project.md".into()], files: vec![], references: vec![] },
             Entry::Thought { text: "secret musing".into(), message_id: None },
-            Entry::Agent { text: "Looking.".into(), message_id: None },
+            Entry::Agent { text: "Looking.".into(), message_id: None, images: vec![] },
             tool("cargo build", "failed"),
             Entry::Plan { entries: json!([{ "content": "a plan step" }]) },
             Entry::Permission {
@@ -3984,6 +4097,7 @@ mod switch_tests {
                 answer: None,
                 auto: None,
                 mcp_server: None,
+                note: None,
             },
             Entry::Ui {
                 ui_id: None,
@@ -4029,7 +4143,11 @@ mod switch_tests {
 
     #[test]
     fn a_long_handoff_keeps_the_newest_and_says_what_was_left_out() {
-        let entries = shared((0..100).map(|i| Entry::User { text: format!("{i:03} {}", "x".repeat(996)), attachments: vec![] }).collect());
+        let entries = shared(
+            (0..100)
+                .map(|i| Entry::User { text: format!("{i:03} {}", "x".repeat(996)), attachments: vec![], files: vec![], references: vec![] })
+                .collect(),
+        );
         let text = handoff_text("Claude", &entries);
         assert!(text.chars().count() <= HANDOFF_MAX_CHARS + 200, "{}", text.len());
         assert!(text.contains("User: 099 ") && !text.contains("User: 000 "), "the newest stay");
@@ -4041,8 +4159,8 @@ mod switch_tests {
 
         // One message longer than the whole budget keeps its end.
         let huge = shared(vec![
-            Entry::User { text: "old".into(), attachments: vec![] },
-            Entry::Agent { text: format!("start{}end", "y".repeat(50_000)), message_id: None },
+            Entry::User { text: "old".into(), attachments: vec![], files: vec![], references: vec![] },
+            Entry::Agent { text: format!("start{}end", "y".repeat(50_000)), message_id: None, images: vec![] },
         ]);
         let text = handoff_text("Claude", &huge);
         assert!(text.ends_with("end") && !text.contains("start") && text.contains("(1 earlier entry left out)"));
@@ -4084,7 +4202,7 @@ mod switch_tests {
         let mut info = test_info("sw");
         info.account_id.clone_from(&alpha);
         info.commands = vec![json!({ "name": "review" })];
-        let mut s = Session::new(info, vec![Entry::User { text: "hi".into(), attachments: vec![] }], None);
+        let mut s = Session::new(info, vec![Entry::User { text: "hi".into(), attachments: vec![], files: vec![], references: vec![] }], None);
         s.attached = Some(7);
         hub.shared.insert(s);
 

@@ -263,12 +263,14 @@ async fn has_head(cwd: &Path) -> Result<bool, String> {
 async fn diff(source: &Value, cwd: &Path) -> Result<Value, String> {
     let range = range(source)?;
     let staged = source["staged"].as_bool().unwrap_or(false);
+    // The index against the working tree: what `git add` would stage.
+    let unstaged = source["unstaged"].as_bool().unwrap_or(false);
     let paths = paths(source)?;
     let context = source["context"].as_u64().unwrap_or(3).min(MAX_CONTEXT).to_string();
     // Default: the working tree (staged and not) against HEAD.
     let base = match range {
         Some(r) => Some(r),
-        None if staged => None,
+        None if staged || unstaged => None,
         None => Some(if has_head(cwd).await? { "HEAD" } else { EMPTY_TREE }),
     };
     let args = |extra: &[&'static str], unified: Option<&str>| -> Vec<String> {
@@ -299,7 +301,7 @@ async fn diff(source: &Value, cwd: &Path) -> Result<Value, String> {
     let additions: u64 = files.iter().filter_map(|f| f["additions"].as_u64()).sum();
     let deletions: u64 = files.iter().filter_map(|f| f["deletions"].as_u64()).sum();
     Ok(json!({
-        "range": range.unwrap_or(if staged { "staged" } else { "HEAD" }),
+        "range": range.unwrap_or(if staged { "staged" } else if unstaged { "unstaged" } else { "HEAD" }),
         "staged": staged,
         "text": diff_text,
         "files": files,
@@ -510,6 +512,111 @@ async fn show(source: &Value, cwd: &Path) -> Result<Value, String> {
         v["path"] = json!(p);
     }
     Ok(v)
+}
+
+// ── the diff pane ───────────────────────────────────────────────────────────
+
+/// Branches offered as a base, at most.
+const MAX_BRANCHES: usize = 200;
+/// Untracked files listed beside the diff, at most.
+const MAX_UNTRACKED: usize = 200;
+
+/// What a diff pane shows for `cwd` (any folder inside a work tree): the repo, its working-tree
+/// diff in `mode` (`all`: against HEAD, `staged`, `unstaged`, or `branch`: against the merge base
+/// with `base`), untracked files, and a fingerprint. With `since` equal to the fingerprint nothing
+/// else is read: the pane polls with it, and only a change costs a diff. `{ "repo": null }` for a
+/// folder outside any repository. Read-only like every git source here.
+pub(crate) async fn working_view(cwd: &Path, mode: &str, base: Option<&str>, since: Option<&str>) -> Result<Value, String> {
+    if !matches!(mode, "all" | "staged" | "unstaged" | "branch") {
+        return Err(format!("unknown diff mode `{mode}`"));
+    }
+    let base = base.map(str::trim).filter(|b| !b.is_empty()).map(valid_rev).transpose()?;
+    let root = match git(cwd, &["rev-parse", "--show-toplevel"], 4096).await {
+        Ok(out) => PathBuf::from(text(out.stdout).trim()),
+        Err(e) if e.starts_with("not a git repository") => return Ok(json!({ "repo": Value::Null })),
+        Err(e) => return Err(e),
+    };
+    let status = git(&root, &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=normal"], MAX_TEXT).await?;
+    let status = text(status.stdout);
+    let parsed = parse_status(&status);
+    let repo = json!({
+        "root": root.to_string_lossy(),
+        "name": root.file_name().map_or_else(|| root.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned()),
+        "branch": parsed["branch"],
+        "detached": parsed["detached"],
+    });
+    let branches = branch_names(&root).await;
+    let base = match (mode, base) {
+        ("branch", Some(b)) => Some(b.to_owned()),
+        ("branch", None) => {
+            ["main", "master", "origin/main", "origin/master"].iter().find(|c| branches.iter().any(|b| b == *c)).map(|c| (*c).to_owned())
+        }
+        _ => None,
+    };
+    let base_oid = match &base {
+        Some(b) => text(git(&root, &["rev-parse", "--verify", "-q", "--end-of-options", b], 4096).await.map(|o| o.stdout).unwrap_or_default()),
+        None => String::new(),
+    };
+    let fingerprint = fingerprint(&root, &status, &[mode, base.as_deref().unwrap_or(""), base_oid.trim()]);
+    let mut view = json!({ "repo": repo, "mode": mode, "base": base, "fingerprint": fingerprint, "branches": branches });
+    if since == Some(fingerprint.as_str()) {
+        view["unchanged"] = json!(true);
+        return Ok(view);
+    }
+    let source = match mode {
+        "staged" => json!({ "staged": true }),
+        "unstaged" => json!({ "unstaged": true }),
+        "branch" => {
+            let Some(b) = &base else { return Err("no base branch to compare with: pick one".into()) };
+            let mb = git(&root, &["merge-base", "--end-of-options", b, "HEAD"], 4096).await.map_err(|_| format!("no common ancestor with `{b}`"))?;
+            json!({ "range": text(mb.stdout).trim() })
+        }
+        _ => json!({}),
+    };
+    view["diff"] = diff(&source, &root).await?;
+    let untracked: Vec<&str> = parsed["files"]
+        .as_array()
+        .map(|f| f.iter().filter(|f| f["worktree"] == "untracked").filter_map(|f| f["path"].as_str()).take(MAX_UNTRACKED).collect())
+        .unwrap_or_default();
+    view["untracked"] = json!(untracked);
+    Ok(view)
+}
+
+/// Local and remote branch names (not `origin/HEAD`), local first.
+async fn branch_names(root: &Path) -> Vec<String> {
+    let Ok(out) = git(root, &["for-each-ref", "--format=%(refname:short)", "--sort=-committerdate", "refs/heads", "refs/remotes"], MAX_TEXT).await
+    else {
+        return vec![];
+    };
+    let all: Vec<String> = text(out.stdout).lines().filter(|l| !l.ends_with("/HEAD") && valid_rev(l).is_ok()).map(str::to_owned).collect();
+    let (remote, local): (Vec<_>, Vec<_>) =
+        all.into_iter().partition(|b| b.contains('/') && b.split('/').next().is_some_and(|r| r == "origin" || r == "upstream"));
+    local.into_iter().chain(remote).take(MAX_BRANCHES).collect()
+}
+
+/// A short token that changes when the working tree's changes might have: git's status text,
+/// each listed file's size and modified time (an edit to an already-modified file keeps its status),
+/// and `extra` (mode, base). Cheap: one `git status` and some `stat`s.
+fn fingerprint(root: &Path, status: &str, extra: &[&str]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    status.hash(&mut h);
+    extra.hash(&mut h);
+    for entry in status.split('\0') {
+        // "1 XY … path", "2 XY … path", "u …", "? path": the path is the last field.
+        let path = match entry.as_bytes().first() {
+            Some(b'?') => entry.strip_prefix("? "),
+            Some(b'1') => entry.splitn(9, ' ').nth(8),
+            Some(b'2') => entry.splitn(10, ' ').nth(9),
+            Some(b'u') => entry.splitn(11, ' ').nth(10),
+            _ => None,
+        };
+        if let Some(Ok(m)) = path.map(|p| std::fs::metadata(root.join(p))) {
+            m.len().hash(&mut h);
+            m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).hash(&mut h);
+        }
+    }
+    format!("{:x}", h.finish())
 }
 
 #[cfg(test)]
@@ -877,5 +984,59 @@ mod tests {
         );
         assert_eq!(file(&v, "conflict.rs")["index"], "unmerged");
         assert_eq!(file(&v, "new file.txt")["worktree"], "untracked");
+    }
+
+    fn view(dir: &Path, mode: &str, base: Option<&str>, since: Option<&str>) -> Result<Value, String> {
+        tauri::async_runtime::block_on(working_view(dir, mode, base, since))
+    }
+
+    #[test]
+    fn the_diff_pane_reads_modes_untracked_and_a_fingerprint() {
+        let dir = repo();
+        sh_git(&dir, &["checkout", "-q", "main"]);
+        write(&dir, "README.md", b"# demo\n\nmore\n");
+        write(&dir, "src/main.go", b"package main\n");
+        sh_git(&dir, &["add", "src/main.go"]);
+        write(&dir, "notes.txt", b"new\n");
+        let sub = dir.join("src");
+        let all = view(&sub, "all", None, None).unwrap();
+        assert_eq!(all["repo"]["name"], dir.file_name().unwrap().to_string_lossy().as_ref());
+        assert_eq!(all["repo"]["branch"], "main");
+        assert_eq!(all["diff"]["files"].as_array().unwrap().len(), 2, "a subfolder reads its whole repo");
+        assert_eq!(all["untracked"], json!(["notes.txt"]));
+        assert_eq!(view(&dir, "staged", None, None).unwrap()["diff"]["files"].as_array().unwrap().len(), 1);
+        let unstaged = view(&dir, "unstaged", None, None).unwrap();
+        assert_eq!(unstaged["diff"]["range"], "unstaged");
+        assert_eq!(unstaged["diff"]["files"][0]["path"], "README.md");
+        // Against a branch: its merge base, so feature's own commits count.
+        let b = view(&dir, "branch", Some("feature"), None).unwrap();
+        assert!(b["diff"]["files"].as_array().unwrap().iter().all(|f| f["path"] != "gone.txt") || b["base"] == "feature");
+        assert!(b["branches"].as_array().unwrap().iter().any(|n| n == "feature"));
+        // Nothing changed: only the fingerprint comes back; an edit changes it even to an already-modified file.
+        let fp = all["fingerprint"].as_str().unwrap().to_owned();
+        let same = view(&dir, "all", None, Some(&fp)).unwrap();
+        assert_eq!(same["unchanged"], true);
+        assert!(same.get("diff").is_none());
+        write(&dir, "README.md", b"# demo\n\nmore and more\n");
+        let moved = view(&dir, "all", None, Some(&fp)).unwrap();
+        assert!(moved.get("unchanged").is_none() && moved["diff"].is_object());
+        // The mode is part of it.
+        assert_ne!(view(&dir, "staged", None, None).unwrap()["fingerprint"], moved["fingerprint"]);
+    }
+
+    #[test]
+    fn the_diff_pane_says_when_a_folder_is_no_repository_and_refuses_bad_input() {
+        let dir = temp("plain");
+        assert_eq!(view(&dir, "all", None, None).unwrap()["repo"], Value::Null);
+        let repo = repo();
+        assert!(view(&repo, "nope", None, None).is_err());
+        assert!(view(&repo, "branch", Some("--output=x"), None).is_err());
+        assert!(view(&repo, "branch", Some("does-not-exist"), None).is_err());
+        // A fresh repository with no commit yet still has a diff to show.
+        let empty = temp("empty");
+        sh_git(&empty, &["init", "-q"]);
+        write(&empty, "a.txt", b"x\n");
+        sh_git(&empty, &["add", "a.txt"]);
+        assert_eq!(view(&empty, "all", None, None).unwrap()["diff"]["files"].as_array().unwrap().len(), 1);
     }
 }

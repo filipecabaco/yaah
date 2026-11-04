@@ -117,6 +117,11 @@ export function seedSettings() {
     teachAgents: true,
     /** Settings → Chat: allow reads in the chat's folders without asking (session/permissions.rs). */
     trustReadOnly: true,
+    /** Settings → Chat: answer web searches without asking (session/trust.rs `allowWebSearch`). */
+    allowWebSearch: false,
+    /** MCP servers trusted in all chats, and in quick chats (settings.json `trustedMcpServers`, `quickChats`). */
+    trustedEverywhere: [] as string[],
+    quickTrusted: [] as string[],
     /** Settings → Chat: draw runs of tool calls as one row. */
     groupToolCalls: true,
     /** The split panes and sidebar as last left (settings.json `layout`, `sidebar`). */
@@ -233,6 +238,16 @@ export function settingsReplies({ state }: Mock): Replies {
     },
     set_trust_read_only: ({ enabled }: { enabled: boolean }) => {
       state.trustReadOnly = enabled;
+      return null;
+    },
+    // session/trust.rs: Settings → Chat's permission block.
+    permission_settings: () => ({
+      trustReadOnly: state.trustReadOnly,
+      allowWebSearch: state.allowWebSearch,
+      trustedEverywhere: state.trustedEverywhere.map((id) => ({ id, label: id.replace(/^claude_ai_(?=.)/, "") })),
+    }),
+    set_allow_web_search: ({ enabled }: { enabled: boolean }) => {
+      state.allowWebSearch = enabled;
       return null;
     },
     set_group_tool_calls: ({ enabled }: { enabled: boolean }) => {

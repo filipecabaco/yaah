@@ -8,6 +8,8 @@ import {
   FileText,
   FolderGit2,
   FolderPlus,
+  ListPlus,
+  Plug,
   Repeat,
   RotateCw,
   ShieldCheck,
@@ -17,6 +19,9 @@ import {
   X,
 } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
+import { ComposerConfig } from "@/components/composer-config";
+import { COMPOSER_INPUT, ComposerShell, TRIGGER_HELP, TriggerHint } from "@/components/composer-shell";
+import { ComposerQueue } from "@/components/composer-queue";
 import { Mark } from "@/components/brand/mark";
 import { Hint } from "@/components/shortcuts";
 import { ErrorText } from "@/components/error-text";
@@ -35,18 +40,29 @@ import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type AgentProfile, type Entry, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
 import { openInTerminalApp } from "@/lib/terminal-api";
+import { SCOPE_WORDS, trustApi, useTrustView, type TrustScope, type TrustView } from "@/lib/trust-api";
 import { onOpenAddRepos, openAddRepos, openAgentSwitch } from "@/lib/app-events";
 import { baseName, compactPath, elapsedText, plural, startingText } from "@/lib/format";
 import { errorMessage } from "@/lib/narrow";
 import type { Starting } from "@/hooks/use-yaah";
 import { fuzzyRank } from "@/lib/fuzzy";
+import { applyEdit, markdownKey, pasteLink } from "@/lib/markdown-input";
+import { isMac } from "@/lib/shortcuts";
 import { ChatContext, isFocusedPane, onDraft } from "@/components/chat-context";
 import { TranscriptEntry } from "@/components/entries";
 import { ToolGroup } from "@/components/tool-group";
-import { foldedPermissions } from "@/lib/permissions";
+import { foldedPermissions, isAutoAllowed } from "@/lib/permissions";
 import { isRunning, transcriptRows, useGroupToolCalls } from "@/lib/tool-groups";
 import { FolderMenu } from "@/components/menus";
 import { useTranscript, useTranscripts } from "@/hooks/use-transcript";
+import { AttachButton, AttachmentChips, DropOverlay } from "@/components/composer-attachments";
+import { ReferenceChips, ReferenceRow } from "@/components/references";
+import { ActiveDescendant } from "@/components/active-descendant";
+import { useReferenceSuggestions } from "@/hooks/use-reference-suggestions";
+import { connectLabel, findReferenceTrigger, referenceHeading, standing } from "@/lib/references";
+import { openSettings } from "@/lib/app-events";
+import type { Reference, ReferenceService } from "@/lib/api";
+import { useChatDrop, useComposerAttachments } from "@/hooks/use-attachments";
 
 const RepoPicker = lazy(() => import("@/components/repo-picker").then((m) => ({ default: m.RepoPicker })));
 
@@ -69,8 +85,8 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
     () => ({ sessionId: session.sessionId, cwd: session.cwd, busy: session.running, pane, inProject }),
     [session.sessionId, session.cwd, session.running, pane, inProject],
   );
-  // MCP servers whose tools run without asking here: the project's, or a quick chat's own.
-  const trusted = project ? (project.trustedMcpServers ?? []) : (session.trustedMcpServers ?? []);
+  // MCP servers whose tools run without asking here: every server trusted here, with the scope that trusts it (session/trust.rs); re-read on a move to a project.
+  const trustView = useTrustView(session.sessionId, `${session.projectId ?? ""}|${session.cwd}`);
   // "Add repositories…" (⌘K, `/repos`, the folder menu) opens the picker in the pane it came from.
   const [addingRepos, setAddingRepos] = useState(false);
   useEffect(
@@ -80,10 +96,13 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
       }),
     [session.sessionId, pane],
   );
+  // Files dropped anywhere on the pane attach to its composer (components/composer-attachments.tsx).
+  const dropRoot = useRef<HTMLDivElement>(null);
+  const { drag, handlers: dropHandlers } = useChatDrop(dropRoot, session.sessionId, pane);
 
   return (
     // `@container/chat`: the header drops what matters least as its pane narrows (in rem, so it follows the interface size).
-    <div className="@container/chat flex h-full min-w-0 flex-1 flex-col">
+    <div ref={dropRoot} {...dropHandlers} className="@container/chat relative flex h-full min-w-0 flex-1 flex-col">
       {/* Drags the window (its buttons stay buttons): there's no title bar on macOS. */}
       <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
         {project && (
@@ -135,11 +154,18 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
           </span>
         </FolderMenu>
         <ChatFolders roots={roots} pending={!!session.dirsChanged} inProject={!!project} onAdd={() => openAddRepos(session.sessionId, pane)} />
-        {trusted.length > 0 && (
+        {trustView && trustView.servers.length > 0 && (
           <TrustedServers
-            servers={trusted}
-            inProject={!!project}
-            onRemove={(server) => (project ? api.untrustProjectMcpServer(project.id, server) : api.untrustChatMcpServer(session.sessionId, server))}
+            view={trustView}
+            onRemove={(server, scope) =>
+              scope === "everywhere"
+                ? trustApi.untrustEverywhere(server)
+                : scope === "quickChats"
+                  ? trustApi.untrustQuickChats(server)
+                  : scope === "project" && project
+                    ? api.untrustProjectMcpServer(project.id, server)
+                    : api.untrustChatMcpServer(session.sessionId, server)
+            }
             onManage={project ? () => onOpenProject(project.id) : undefined}
           />
         )}
@@ -160,30 +186,34 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
         {/* One per chat: whether it follows the stream, and how far back it shows, are the chat's own. */}
         <Transcript key={session.sessionId} sessionId={session.sessionId} running={session.running} onLogin={onLogin} />
       </ChatContext.Provider>
+      <ComposerQueue session={session} pane={pane} />
       <Composer key={session.sessionId} session={session} agentLabel={agent?.label} pane={pane} />
+      <DropOverlay drag={drag} agent={agent?.label ?? "This agent"} report={agent?.report} />
     </div>
   );
 }
 
-/** The MCP servers trusted here (the project's, or a quick chat's), each with a way to stop trusting it. */
+/**
+ * The MCP servers trusted here (this chat's, its project's or quick chats', and all chats'), each with
+ * the scope that trusts it and a way to stop trusting it there.
+ */
 function TrustedServers({
-  servers,
-  inProject,
+  view,
   onRemove,
   onManage,
 }: {
-  servers: string[];
-  inProject: boolean;
-  onRemove: (server: string) => Promise<unknown>;
+  view: TrustView;
+  onRemove: (server: string, scope: TrustScope) => Promise<unknown>;
   onManage?: () => void;
 }) {
+  const { servers, here } = view;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="flex min-h-[24px] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-          aria-label={`${plural(servers.length, "trusted MCP server")} in this ${inProject ? "project" : "chat"}`}
+          aria-label={`${plural(servers.length, "trusted MCP server")} ${SCOPE_WORDS[here]}`}
         >
           <ShieldCheck className="size-3.5" aria-hidden />
           <span className="tabular-nums">{servers.length}</span>
@@ -191,15 +221,16 @@ function TrustedServers({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-w-96 min-w-64">
         <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-          All tools of these MCP servers run without asking in this {inProject ? "project" : "chat"}, including ones that change things
+          All tools of these MCP servers run without asking {SCOPE_WORDS[here]}, including ones that change things
         </DropdownMenuLabel>
         {servers.map((s) => (
           <DropdownMenuItem
-            key={s}
-            onSelect={() => void onRemove(s).catch((e: unknown) => console.error("could not stop trusting", s, e))}
-            aria-label={`Stop trusting ${s}`}
+            key={`${s.scope}:${s.id}`}
+            onSelect={() => void onRemove(s.id, s.scope).catch((e: unknown) => console.error("could not stop trusting", s.id, e))}
+            aria-label={`Stop trusting ${s.id} ${SCOPE_WORDS[s.scope]}`}
           >
-            <span className="min-w-0 flex-1 truncate font-mono text-xs">{s}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs">{s.id}</span>
+            {s.scope !== here && <span className="shrink-0 text-2xs text-muted-foreground">{SCOPE_WORDS[s.scope]}</span>}
             <X className="text-muted-foreground" aria-hidden />
           </DropdownMenuItem>
         ))}
@@ -433,7 +464,7 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
                   id={`${sessionId}:${i}`}
                   tools={tools}
                   running={row.indices.map((j, k) => isRunning(tools[k], inTurnAt(j)))}
-                  autoAllowed={tools.filter((t) => ["readOnly", "trustedServer"].includes(folded.get(t.toolCallId)?.auto?.reason ?? "")).length}
+                  autoAllowed={tools.filter((t) => isAutoAllowed(folded.get(t.toolCallId))).length}
                   card={(k) => entryAt(row.indices[k])}
                 />
               </div>
@@ -456,8 +487,8 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
   );
 }
 
-/** What the text before the caret is asking to complete: `/cmd` at the start, or `@file` anywhere. */
-type Trigger = { kind: "command" | "file"; start: number; query: string };
+/** What the text before the caret is asking to complete: `/cmd` at the start, `@file` anywhere, or a `#` reference (lib/references.ts). */
+type Trigger = { kind: "command" | "file" | "reference"; start: number; query: string; service?: ReferenceService | null; link?: boolean };
 
 function findTrigger(text: string, caret: number): Trigger | null {
   const before = text.slice(0, caret);
@@ -465,6 +496,8 @@ function findTrigger(text: string, caret: number): Trigger | null {
   if (slash) return { kind: "command", start: 0, query: slash[1] };
   const at = /(^|\s)@([^\s@]*)$/.exec(before);
   if (at) return { kind: "file", start: caret - at[2].length - 1, query: at[2] };
+  const ref = findReferenceTrigger(text, caret);
+  if (ref) return { kind: "reference", ...ref };
   return null;
 }
 
@@ -479,6 +512,10 @@ type Suggestion = {
   local?: () => void;
   /** Its icon in the list, when not the default. */
   icon?: ReactNode;
+  /** A tracker item from the `#` list: drawn as one, remembered once picked. */
+  reference?: Reference;
+  /** Runs instead of inserting, leaving the text as it is (e.g. open Settings → Integrations). */
+  action?: () => void;
 };
 
 /** yaah's own slash commands, listed before the agent's. */
@@ -510,8 +547,13 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
   const [error, setError] = useState<unknown>(null);
+  /** A model or effort pick the agent refused (shown under the frame, with the send error). */
+  const [configError, setConfigError] = useState<unknown>(null);
   /** Files picked from the @ list: label → absolute path. */
   const [mentions, setMentions] = useState<Record<string, string>>({});
+  /** Tracker items picked from the # list, by token (Rust reads every token in the text on send). */
+  const [picked, setPicked] = useState<Record<string, Reference>>({});
+  const [sending, setSending] = useState(false);
   /** The last file search, for the @ trigger that started at `start`. */
   const [found, setFound] = useState<{ start: number; files: FileMatch[] } | null>(null);
   const [active, setActive] = useState(0);
@@ -522,17 +564,26 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   const list = useRef<HTMLDivElement>(null);
   const moveCaret = useRef<number | null>(null);
   const listId = useId();
+  // Dropped text goes in at the caret; dropped, pasted and picked files become attachments.
+  const attached = useComposerAttachments(session.sessionId, pane, (add) => {
+    const at = Math.min(caret, text.length);
+    moveCaret.current = at + add.length;
+    setText(text.slice(0, at) + add + text.slice(at));
+    setCaret(at + add.length);
+    input.current?.focus();
+  });
 
   // Other components (e.g. "Ask about this" on a diff) can draft into this composer.
   useEffect(
     () =>
       onDraft(
-        ({ text: add, mention }) => {
+        ({ text: add, mention, mentions: more = [] }) => {
           const next = text.trim() ? `${text.replace(/\s*$/, "")}\n${add}` : add;
           moveCaret.current = next.length;
           setText(next);
           setCaret(next.length);
-          if (mention) setMentions((m) => ({ ...m, [mention.label]: mention.path }));
+          const all = mention ? [mention, ...more] : more;
+          if (all.length) setMentions((m) => ({ ...m, ...Object.fromEntries(all.map((x) => [x.label, x.path])) }));
           setTimeout(() => input.current?.focus());
         },
         session.sessionId,
@@ -570,6 +621,13 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   }, [fileQuery, openStart, session.sessionId]);
   const files = fileQuery != null && found?.start === openStart ? found.files : null;
 
+  // `#` references: Rust searches the connected trackers and ranks (debounced, cached there).
+  const refService = open?.kind === "reference" ? (open.service ?? null) : null;
+  const refs = useReferenceSuggestions(
+    session.sessionId,
+    open?.kind === "reference" ? { service: refService, query: openQuery, link: !!open.link } : null,
+  );
+
   const items: Suggestion[] = useMemo(() => {
     if (openKind === "command") {
       const own = fuzzyRank(localCommands(session, pane), openQuery, (c) => [c.name, c.detail ?? ""]);
@@ -583,8 +641,21 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
       return [...own, ...agents];
     }
     if (openKind === "file") return (files ?? []).map((f) => ({ id: f.path, label: f.label, insert: `@${f.label} `, path: f.path }));
+    if (openKind === "reference") {
+      if (refs.connected?.length === 0)
+        return [
+          {
+            id: "yaah:connect",
+            label: connectLabel(refService),
+            detail: "Settings → Integrations",
+            insert: "",
+            action: () => openSettings("integrations"),
+          },
+        ];
+      return (refs.items ?? []).map((r) => ({ id: r.token, label: r.token, insert: `${r.token} `, reference: r }));
+    }
     return [];
-  }, [openKind, openQuery, session, pane, files]);
+  }, [openKind, openQuery, session, pane, files, refs.connected, refs.items, refService]);
 
   // A new list starts at its first item.
   const listKey = `${openKind}:${openQuery}`;
@@ -612,6 +683,10 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   function accept(s: Suggestion) {
     if (!open) return;
     if (s.local) return runLocal(s.local);
+    if (s.action) {
+      setDismissed(open.start);
+      return s.action();
+    }
     // Replace the whole token under the caret, plus one following space.
     const rest = text.slice(caret).replace(/^\S*/, "").replace(/^ /, "");
     const pos = open.start + s.insert.length;
@@ -620,28 +695,37 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
     moveCaret.current = pos;
     const path = s.path;
     if (path) setMentions((m) => ({ ...m, [s.label]: path }));
+    const reference = s.reference;
+    if (reference) setPicked((p) => ({ ...p, [reference.token]: reference }));
   }
 
   async function send() {
     const prompt = text.trim();
-    if (!prompt) return;
+    if ((!prompt && !attached.items.length) || attached.pending) return;
     const own = localCommands(session, pane).find((c) => prompt === c.label);
     if (own) {
       setText("");
       own.local?.();
       return;
     }
-    if (session.running) return;
+    // While a turn runs Rust queues the message instead (session/queue.rs); the composer clears either way.
     setError(null);
     const paths = Object.entries(mentions)
       .filter(([label]) => mentioned(prompt, label))
       .map(([, path]) => path);
+    // References in the text are read in Rust before the turn starts; the chips say so meanwhile.
+    setSending(true);
     try {
-      await api.sendPrompt(session.sessionId, prompt, paths);
+      const files = attached.items.map((a) => a.id);
+      await api.sendPrompt(session.sessionId, prompt, paths, files);
       setText("");
       setMentions({});
+      setPicked({});
+      attached.clear();
     } catch (e) {
       setError(e);
+    } finally {
+      setSending(false);
     }
   }
 
@@ -671,128 +755,230 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
         return;
       }
     }
+    // Markdown help: lists continue on Shift+Enter, Tab indents an item, marks wrap a selection.
+    const el = e.currentTarget;
+    const mod = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey;
+    const md = markdownKey(
+      e.nativeEvent,
+      { text: el.value, start: el.selectionStart, end: el.selectionEnd },
+      { listOpen: !!(open && items.length), mod },
+    );
+    if (md) {
+      e.preventDefault();
+      // ⌘B over a selection is bold here, not the sidebar.
+      e.stopPropagation();
+      applyEdit(el, md);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void send();
     }
   }
 
-  const showList = open != null && focused;
-  // yaah's own commands, then the agent's; files in one group.
+  // A pasted link only opens the list when Rust says it is a PR, MR or issue.
+  const showList = open != null && focused && !(open.link && items.length === 0);
+  // yaah's own commands, then the agent's; files in one group; references in one.
   const groups = (
     openKind === "command"
       ? [
           { heading: "yaah", list: items.filter((s) => s.local) },
           { heading: `Commands from ${agentLabel ?? "the agent"}`, list: items.filter((s) => !s.local) },
         ]
-      : [{ heading: "Files in this chat's folders", list: items }]
+      : openKind === "reference"
+        ? [{ heading: referenceHeading(refService), list: items }]
+        : [{ heading: "Files in this chat's folders", list: items }]
   ).filter((g) => g.list.length > 0);
+  const attaches = Object.values(picked).filter((r) => standing(text, r.token));
+  const carrying = attached.items.length > 0 || attached.refused.length > 0 || attached.pending || attaches.length > 0;
+  const hintId = `${listId}-hint`;
   return (
     // The composer lines up with the transcript's column: the same edges as the cards and UI above it.
-    <div className="@container border-t py-3">
-      <div className="chat-column relative flex items-end gap-2">
-        {showList && (
-          <Command
-            ref={list}
-            shouldFilter={false}
-            vimBindings={false}
-            value={items[active]?.id ?? ""}
-            onValueChange={(v) =>
-              setActive(
-                Math.max(
-                  0,
-                  items.findIndex((s) => s.id === v),
-                ),
-              )
-            }
-            // Keep focus in the textarea when an item is clicked.
-            onMouseDown={(e) => e.preventDefault()}
-            className="absolute bottom-full left-(--chat-gutter) z-10 mb-2 h-auto w-[min(42rem,calc(100%-2*var(--chat-gutter)))] shadow-md ring-1 ring-foreground/10"
-          >
-            <CommandList id={listId}>
-              {items.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">
-                  {open.kind === "command"
-                    ? session.commands.length
-                      ? "No command matches."
-                      : "This chat has no slash commands yet."
-                    : files == null
-                      ? "Searching…"
-                      : "No file matches."}
-                </p>
-              ) : (
-                <>
-                  {groups.map((g) => (
-                    <CommandGroup key={g.heading} heading={g.heading}>
-                      {g.list.map((s) => (
-                        <CommandItem key={s.id} value={s.id} onSelect={() => accept(s)}>
-                          {s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : <FileText />)}
-                          {s.path ? <FileLabel label={s.label} /> : <span className="shrink-0 font-mono">{s.label}</span>}
-                          {s.local && (
-                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs" title="yaah's own command, not sent to the agent">
-                              yaah
-                            </Badge>
-                          )}
-                          {s.detail && <span className="truncate text-muted-foreground">{s.detail}</span>}
-                          {s.hint && <CommandShortcut className="shrink-0 tracking-normal italic">‹{s.hint}›</CommandShortcut>}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
+    // One frame (components/composer-shell.tsx) holds the chips, the message box and the toolbar.
+    <div className="@container pt-2 pb-3">
+      <div className="chat-column">
+        {/* The suggestion list anchors just above the frame. */}
+        <div className="relative">
+          {showList && (
+            <Command
+              ref={list}
+              shouldFilter={false}
+              vimBindings={false}
+              value={items[active]?.id ?? ""}
+              onValueChange={(v) =>
+                setActive(
+                  Math.max(
+                    0,
+                    items.findIndex((s) => s.id === v),
+                  ),
+                )
+              }
+              // Keep focus in the textarea when an item is clicked.
+              onMouseDown={(e) => e.preventDefault()}
+              className="absolute bottom-full left-0 z-10 mb-2 h-auto w-[min(42rem,100%)] shadow-md ring-1 ring-foreground/10"
+            >
+              {/* The textarea is the combobox: it names the highlighted option. */}
+              <ActiveDescendant target={input} list={list} />
+              <CommandList id={listId}>
+                {items.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-muted-foreground">
+                    {open.kind === "command"
+                      ? session.commands.length
+                        ? "No command matches."
+                        : "This chat has no slash commands yet."
+                      : open.kind === "reference"
+                        ? refs.items == null
+                          ? "Searching…"
+                          : open.query
+                            ? "Nothing matches. Keep typing to search, or paste a link."
+                            : "Nothing recent here."
+                        : files == null
+                          ? "Searching…"
+                          : "No file matches."}
+                  </p>
+                ) : (
+                  <>
+                    {groups.map((g) => (
+                      <CommandGroup key={g.heading} heading={g.heading}>
+                        {g.list.map((s) => (
+                          <CommandItem key={s.id} value={s.id} onSelect={() => accept(s)}>
+                            {s.reference ? (
+                              <ReferenceRow reference={s.reference} />
+                            ) : (
+                              (s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : s.action ? <Plug /> : <FileText />))
+                            )}
+                            {s.reference ? null : s.path ? (
+                              <FileLabel label={s.label} />
+                            ) : (
+                              <span className={s.action ? "shrink-0" : "shrink-0 font-mono"}>{s.label}</span>
+                            )}
+                            {s.local && (
+                              <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs" title="yaah's own command, not sent to the agent">
+                                yaah
+                              </Badge>
+                            )}
+                            {s.detail && <span className="truncate text-muted-foreground">{s.detail}</span>}
+                            {s.hint && <CommandShortcut className="shrink-0 tracking-normal italic">‹{s.hint}›</CommandShortcut>}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    ))}
+                  </>
+                )}
+                {open.kind === "reference" &&
+                  refs.errors.map((e) => (
+                    <p key={e.service} className="px-3 py-1.5 text-xs [overflow-wrap:anywhere] text-destructive" role="status">
+                      {e.message}
+                    </p>
                   ))}
-                </>
-              )}
-            </CommandList>
-            <footer className="flex items-center gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
-              <span>
-                <Kbd>↑</Kbd> <Kbd>↓</Kbd> move
-              </span>
-              <span>
-                <Kbd>↵</Kbd> or <Kbd>Tab</Kbd> accept
-              </span>
-              <span className="ml-auto">
-                <Kbd>Esc</Kbd> close
-              </span>
-            </footer>
-          </Command>
-        )}
-        <Textarea
-          data-composer
-          ref={input}
-          // Only the pane the user is in takes the focus (a restored layout opens several chats at once).
-          autoFocus={isFocusedPane(pane)}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setCaret(e.target.selectionStart);
-          }}
-          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-          onKeyDown={onKeyDown}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          placeholder={`Message ${agentLabel ?? "the agent"}…  / for commands, @ to mention a file`}
-          aria-label="Message"
-          className="max-h-48 min-h-10 resize-none"
-          rows={1}
-          role="combobox"
-          aria-expanded={showList}
-          aria-controls={showList ? listId : undefined}
-          aria-autocomplete="list"
-        />
-        {session.running ? (
-          <Hint label="Stop" shortcut="stop">
-            <Button size="icon" variant="secondary" onClick={stop} aria-label="Stop">
-              <Square />
-            </Button>
-          </Hint>
-        ) : (
-          <Hint label="Send ↵">
-            <Button size="icon" onClick={() => void send()} disabled={!text.trim()} aria-label="Send">
-              <ArrowUp />
-            </Button>
-          </Hint>
-        )}
+              </CommandList>
+              <footer className="flex items-center gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
+                <span>
+                  <Kbd>↑</Kbd> <Kbd>↓</Kbd> move
+                </span>
+                <span>
+                  <Kbd>↵</Kbd> or <Kbd>Tab</Kbd> accept
+                </span>
+                <span className="ml-auto">
+                  <Kbd>Esc</Kbd> close
+                </span>
+              </footer>
+            </Command>
+          )}
+          <ComposerShell
+            input={input}
+            carrying={carrying}
+            carries={
+              // The tokens stay plain text (robust to edit, undo, copy); what they'll attach shows beside the files.
+              <AttachmentChips sessionId={session.sessionId} state={attached}>
+                {attaches.length > 0 && <ReferenceChips references={attaches} sending={sending} />}
+              </AttachmentChips>
+            }
+            toolbar={
+              <>
+                <AttachButton onPick={attached.pick} />
+                {/* Model and effort, when the agent offers them (components/composer-config.tsx). */}
+                <ComposerConfig session={session} pane={pane} onError={setConfigError} />
+                <div className="ml-auto flex shrink-0 items-center gap-2 pl-1">
+                  <TriggerHint />
+                  {session.running ? (
+                    <>
+                      {/* While a turn runs, a message waits in the chat's queue (Enter does the same). */}
+                      {(text.trim() || attached.items.length > 0) && (
+                        <Hint label="Queue ↵">
+                          <Button size="icon-sm" variant="outline" onClick={() => void send()} disabled={attached.pending} aria-label="Queue message">
+                            <ListPlus />
+                          </Button>
+                        </Hint>
+                      )}
+                      <Hint label="Stop" shortcut="stop">
+                        <Button size="icon-sm" variant="secondary" onClick={stop} aria-label="Stop">
+                          <Square />
+                        </Button>
+                      </Hint>
+                    </>
+                  ) : (
+                    <Hint label="Send ↵">
+                      <Button
+                        size="icon-sm"
+                        onClick={() => void send()}
+                        disabled={(!text.trim() && !attached.items.length) || attached.pending}
+                        aria-label="Send"
+                      >
+                        <ArrowUp />
+                      </Button>
+                    </Hint>
+                  )}
+                </div>
+              </>
+            }
+          >
+            <Textarea
+              data-composer
+              ref={input}
+              // Only the pane the user is in takes the focus (a restored layout opens several chats at once).
+              autoFocus={isFocusedPane(pane)}
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                setCaret(e.target.selectionStart);
+              }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+              onKeyDown={onKeyDown}
+              onPaste={(e) => {
+                // A URL pasted over selected text becomes a link; files and images go to the attachments.
+                const el = e.currentTarget;
+                const link = e.clipboardData.files.length
+                  ? null
+                  : pasteLink({ text: el.value, start: el.selectionStart, end: el.selectionEnd }, e.clipboardData.getData("text/plain"));
+                if (link) {
+                  e.preventDefault();
+                  applyEdit(el, link);
+                  return;
+                }
+                attached.onPaste(e);
+              }}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              // Short, so it fits a narrow pane; the triggers are in the toolbar and the description.
+              placeholder={`Message ${agentLabel ?? "the agent"}…`}
+              aria-label="Message"
+              aria-describedby={hintId}
+              className={COMPOSER_INPUT}
+              rows={1}
+              role="combobox"
+              aria-expanded={showList}
+              aria-controls={showList ? listId : undefined}
+              aria-autocomplete="list"
+            />
+          </ComposerShell>
+        </div>
+        <p id={hintId} className="sr-only">
+          {TRIGGER_HELP}
+        </p>
+        <ErrorText error={error} className="mt-1.5" />
+        <ErrorText error={configError} className="mt-1.5" />
       </div>
-      <ErrorText error={error} className="chat-column mt-1" />
     </div>
   );
 }
@@ -879,18 +1065,24 @@ export function StartingChat({ start, agents, onDismiss }: { start: Starting; ag
           </div>
         )}
       </div>
-      <div className="@container border-t py-3">
-        <div className="chat-column flex items-end gap-2">
-          <Textarea
-            disabled
-            placeholder={failed ? `${label} didn't start` : `${label} is starting…`}
-            aria-label="Message"
-            className="max-h-48 min-h-10 resize-none"
-            rows={1}
-          />
-          <Button size="icon" disabled aria-label="Send">
-            <ArrowUp />
-          </Button>
+      {/* The same frame as the chat's composer, so nothing jumps when the chat opens. */}
+      <div className="@container pt-2 pb-3">
+        <div className="chat-column">
+          <ComposerShell
+            toolbar={
+              <Button size="icon-sm" disabled aria-label="Send" className="ml-auto">
+                <ArrowUp />
+              </Button>
+            }
+          >
+            <Textarea
+              disabled
+              placeholder={failed ? `${label} didn't start` : `${label} is starting…`}
+              aria-label="Message"
+              className={COMPOSER_INPUT}
+              rows={1}
+            />
+          </ComposerShell>
         </div>
       </div>
     </div>

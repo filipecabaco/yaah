@@ -7,7 +7,8 @@ import { ExternalLink, Maximize2, Minimize2, RotateCcw, SquareTerminal, X } from
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
-import { compactPath } from "@/lib/format";
+import { baseName, compactPath } from "@/lib/format";
+import { clearPaneInfo, setPaneInfo } from "@/lib/pane-info";
 import type { Selection } from "@/lib/layout";
 import { formatKeys, isMac, MOD, SHIFT, SHORTCUTS } from "@/lib/shortcuts";
 import { openInTerminalApp, terminalApi, type TerminalExit } from "@/lib/terminal-api";
@@ -133,6 +134,11 @@ export function TerminalPane({
   );
 
   const cwd = content.cwd ?? "";
+  // What the sidebar lists this pane as: its folder, and the shell's own title.
+  useEffect(() => {
+    setPaneInfo(pane, { title: cwd ? baseName(cwd) : title, detail: cwd ? title : undefined });
+  }, [pane, cwd, title]);
+  useEffect(() => () => clearPaneInfo(pane), [pane]);
   return (
     <div
       ref={box}

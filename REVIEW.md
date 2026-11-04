@@ -1,6 +1,6 @@
 # Review: open work items from the research
 
-Updated 3 November 2026 (performance review added). One place to review what the recent research found and what is still to decide or build.
+Updated 4 November 2026 (state of the code, charts and maps, composer, quick-chat permissions and other research added). One place to review what the recent research found and what is still to decide or build.
 Each item links to its source. Tick an item or write a decision next to it, and it becomes the next task.
 
 **Sources:**
@@ -8,22 +8,14 @@ Each item links to its source. Tick an item or write a decision next to it, and 
 - Screenshots and experiment notes: [`docs/experiments/`](docs/experiments/)
 - Plan: [`PLAN.md`](PLAN.md)
 
-**State of the code:** the features are committed on `main` as `4a14b72`, after the security fixes in `2695665`. That commit covers:
-- component libraries
-- brand
-- the "Assembling UI" card
-- context menus
-- projects from tracker items
-- GitLab
-- teaching agents yaah's UI
+**State of the code:** the latest release is [v0.4.0](https://github.com/filipecabaco/yaah/releases/tag/v0.4.0) (4 November). `main` is at the PR #9 merge, `27554d6`, which is after that release, so the PR #9 work is not in a release yet. Since `4a14b72` (the state this file used to describe) three pull requests merged:
+- **#7, terminals and resume:** terminal panes (xterm.js, a PTY in Rust, ACP `terminal/*` commands shown in tool cards, OSC 52 asks first); "Resume a session…" imports Claude Code and Codex CLI sessions; full-width chat; Expand opens any rendered UI in a large dialog; git sources and `diff-review` take a `repo` that must be one of the chat's folders.
+- **#8, permissions and MDX:** answered permission prompts fold into the tool card; "Trust read-only"; trusted MCP servers and "don't ask again"; consecutive tool calls group into one row; MDX renders as data (never evaluated); reply bubbles.
+- **#9, d3 charts and maps:** charts, maps and flow graphs on a shared d3 core without Recharts (section 15); pane close buttons and ⌃⌘= to balance panes; terminals close when the shell exits; Settings → Fonts and ⌘= / ⌘- / ⌘0 for text size; a chat opens at its latest message; accessibility fixes from persona testing; website and README refreshed.
 
-All checks pass:
-- `cargo fmt`
-- `clippy -D warnings`
-- Rust: 149 lib tests, plus the acp_e2e, docker and postgres suites
-- `cargo deny`
-- `pnpm check`: 116 tests
-- `pnpm build`
+Checks as of PR #9 (from its description, run locally): `cargo fmt --check`, `clippy -D warnings`, 362 Rust lib tests (`cargo test --lib`), 673 frontend tests with `pnpm check`, `pnpm build`. `cargo deny` and the acp_e2e, Docker and Postgres suites were last reported on PR #8. Not re-run for this update.
+
+The branch `feat/composer-drop-model-refs` holds uncommitted composer work (section 16). It is not on `main`.
 
 The performance review (section 9) is research only: it changed no app code.
 
@@ -61,7 +53,7 @@ Source: [component-model-review.md → "What to do"](docs/research/component-mod
 - [ ] **2.5 Progressive-disclosure catalog.** `ui_catalog` is about 9k tokens and grows with every installed library. (M)
 - [ ] **2.6 Library `requires` / `fallback`**, and a clear "unknown primitive" error. (S)
 - [ ] **2.7 Catalog honesty tests:** every primitive has a renderer, and every `uses` resolves to a dependency. (S)
-- [ ] **2.8 Standard formats for new visual primitives:** Vega-Lite, GeoJSON, Excalidraw, glTF. (M each)
+- [ ] **2.8 Standard formats for new visual primitives:** Vega-Lite, GeoJSON, Excalidraw, glTF. (M each) Partly overtaken: maps and charts now have their own d3-based kinds (section 15) over bundled TopoJSON, not Vega-Lite. Still open: whether to accept GeoJSON and Vega-Lite as input, plus Excalidraw and glTF.
 - [ ] **2.9 Data-only updates by `id`** (`ui_update`), and streaming if ACP exposes partial tool input. (M)
 
 ## 3. Standards: MCP Apps and A2UI
@@ -103,7 +95,7 @@ Source: [component-libraries-contract.md](docs/research/component-libraries-cont
 
 ## 7. Security
 
-Source: [security-review.md](docs/research/security-review.md). All 9 findings are fixed in `2695665`.
+Sources: [security-review.md](docs/research/security-review.md) (all 9 findings are fixed in `2695665`) and [permissions.md](docs/research/permissions.md).
 
 - [ ] **OAuth client ids** for GitHub and Linear are codrift's registered apps. Register yaah's own before shipping.
 - [x] **Release CSP tested.** `app/scripts/csp-serve.exs` serves a build with the policy rebuilt the way Tauri does it (script hashes). No violations across recorded chats, agent UI (Mermaid, charts, maps, CodeMirror, diffs), Settings, the Component library and diff review.
@@ -114,6 +106,11 @@ Source: [security-review.md](docs/research/security-review.md). All 9 findings a
 - [x] **MCP secrets reach Settings masked** (`••••1234`); an unchanged masked value keeps the secret.
 - [ ] **Still informational:** the broad GitHub `repo` scope, unpinned transitive adapter dependencies (now `npm audit`ed), image-URL leaks from previews.
 - [ ] **Your `shop` Postgres connection** signs in as a superuser and is now refused. Create the `yaah_ro` role (README → Live sources).
+
+**Permission prompts (PR #8).** Built: answered prompts fold into the tool card as a chip; "Trust read-only" (on by default; read and search requests whose paths all resolve inside the chat's folders are allowed, decided in Rust, `allow_once` only); trusted MCP servers; "don't ask again", which replays the one-off option (yaah never sends `allow_always` for you). Not built: mode switching and a shell allowlist (options B and C in permissions.md).
+
+- [x] **Permissions in quick chats: decided and built (2026-11-04).** All four: trust an MCP server in this chat, this project, all quick chats or everywhere (listed in Settings → Chat with Remove); quick chats share trust and "don't ask again" (migrated once, `reject_always` wins on conflict); reads in the chat's own Claude `tool-results` folder are allowed (only that folder), and shell reads there say "Claude is reading a saved tool result" but still ask; "Allow web searches without asking", off by default (WebSearch arrives as kind `fetch`, so it's matched by tool name; fetches keep asking). Sources: [permissions-tool-results.md](docs/research/permissions-tool-results.md), [permission-scopes](docs/experiments/2026-11-04-permission-scopes/).
+  - [ ] Shell read-backs of saved results still ask (no shell allowlist, by decision).
 
 ## 8. Brand and interface: needs a look in the real app
 
@@ -191,7 +188,7 @@ Sources: [CI in Docker](docs/experiments/2026-11-03-ci-docker/), `ci/`, `app/mis
   - `install.sh` with checksum verification, macOS arm64 (ad-hoc signed, quarantine removed after verification), Linux AppImage or `--deb`, and `--uninstall`/`--purge`/`--dry-run`;
   - the release workflow draft `.github/workflows/release.yml` (node24 verified);
   - mise tasks `release:build`/`release:checksums`/`release:linux:docker`.
-- [x] **First release cut:** [v0.1.0](https://github.com/filipecabaco/yaah/releases/tag/v0.1.0), public repo [filipecabaco/yaah](https://github.com/filipecabaco/yaah); CI and release workflows live, and the one-liner was tested against the real release on macOS and Ubuntu.
+- [x] **Releases:** v0.2.0, v0.3.0, v0.3.1 and [v0.4.0](https://github.com/filipecabaco/yaah/releases/tag/v0.4.0) followed on 3 and 4 November. **First release cut:** [v0.1.0](https://github.com/filipecabaco/yaah/releases/tag/v0.1.0), public repo [filipecabaco/yaah](https://github.com/filipecabaco/yaah); CI and release workflows live, and the one-liner was tested against the real release on macOS and Ubuntu.
 - [ ] **The AppImage on a bare server** needs the usual desktop libraries (X11, GL, fontconfig). The installer explains this; it's fine on a desktop.
 - [ ] **Later:** Apple Developer ID signing and notarisation; in-app updates; Homebrew.
 
@@ -199,12 +196,95 @@ Sources: [CI in Docker](docs/experiments/2026-11-03-ci-docker/), `ci/`, `app/mis
 
 Source: `site/` (Astro; `pnpm dev`); screenshots in [2026-11-03-website](docs/experiments/2026-11-03-website/).
 
-- [ ] **Review the site:** one page with the opening, 12 features with real screenshots, 4 "you ask, the agent renders" examples with real JSON, how it works, build from source, and not there yet. It matches the app's look.
+- [ ] **Review the site:** one page with the opening, 12 features with real screenshots, 4 "you ask, the agent renders" examples with real JSON, how it works, build from source, and not there yet. It matches the app's look. The site and README were refreshed with current features and new screenshots in `df63864` (PR #9); the counts above are from the first version and not re-checked.
 - [x] **Updated for the release:** install one-liner, GitHub and Releases links, adapter version management, canonical URL and social image.
 - [x] **Hosted** on GitHub Pages at https://filipecabaco.github.io/yaah/ (`.github/workflows/site.yml`, node24 actions).
 
 ## 13. Housekeeping
 
-- [x] **Committed** as `4a14b72`; the performance review and these doc updates are not committed yet.
+- [x] **Committed** as `4a14b72`, long since merged. `main` is at `27554d6` (PR #9). The composer work on `feat/composer-drop-model-refs` is not committed (section 16).
 - [ ] **`src-tauri/src/live_ui_review.rs`** (the live UI test, `#[ignore]`) is now in the repo. Keep it?
 - [ ] **`PRODUCT.md`** (the design-context file) is in `app/`. Keep it?
+
+## 14. Browser pane
+
+Sources: [browser-pane.md](docs/research/browser-pane.md) (embedding options, 1Password, security) and
+[browser-pane-vitro.md](docs/research/browser-pane-vitro.md) (what vitro teaches; the plan below).
+
+**Plan.** A pane like the terminal pane that shows a real Chrome, launched by yaah in the background
+(`--headless=new`, CDP over `--remote-debugging-pipe`, a profile owned by yaah). The pane draws Chrome's
+`Page.startScreencast` frames inside yaah's own UI and sends mouse, keyboard and IME input back. This avoids
+the Tauri child webview's problems (it draws over yaah's menus and can't be placed in a pane on Linux) and
+needs no Tauri 3 or CEF. Extensions, 1Password included, come from the Chrome Web Store into yaah's profile.
+Agents drive it through yaah's own `browser_*` MCP server, modelled on vitro's tools; yaah does not depend
+on a running vitro. About 8–11 weeks in all.
+
+**Not decided yet: run the de-risking spike first** (2–3 days, a scratch Tauri app outside the repo):
+- [ ] Chrome behind a React `<canvas>` with input sent back: click-to-pixel latency at 1x and 2x, fps, bytes and CPU on three real pages.
+- [ ] Input checklist: IME, copy and paste, trackpad scroll, drag, `<select>`, dialogs, file input, downloads, `window.open`.
+- [ ] A yaah dialog over the canvas (the z-order problem should be gone).
+- [ ] **1Password, the make-or-break test:** Web Store install into a yaah profile, the inline menu, the popup, the desktop-app unlock (its native messaging host with a custom `--user-data-dir`), passkeys.
+- [ ] The same on Linux (x86_64 and arm64, Wayland and X11).
+- [ ] Re-check the Chrome flag and policy claims the research took from memory (`--load-extension` in branded Chrome 137, the Chrome 136 debugging-port change, CDP method names).
+
+**Then, if the spike holds:**
+- [ ] **Phase 1, the pane (3–4 weeks):** Chrome discovery or download, one profile per project, address bar and tabs, Rust-owned downloads, popups, file pickers and permission prompts, no access to yaah's IPC.
+- [ ] **Phase 2, extensions (2–3 weeks):** install from the Web Store, extension popups as their own targets, 1Password end to end.
+- [ ] **Phase 3, agent driving (3–4 weeks):** a `browser_*` MCP server, off by default and per pane; agents never get cookies or storage state and have no raw `evaluate`; no screencast frames kept on disk; vitro's URL-scheme refusals and upload root.
+- [ ] **Fallback for 1Password meanwhile:** "Open in my browser" on the pane, and optionally a "Fill from 1Password" action through `op`.
+
+## 15. Charts and maps (d3)
+
+Sources: [maps-and-charts.md](docs/research/maps-and-charts.md), [map-types.md](docs/research/map-types.md), [d3-everywhere.md](docs/research/d3-everywhere.md);
+experiments [d3-maps-flow](docs/experiments/2026-11-04-d3-maps-flow/), [maps-phase2](docs/experiments/2026-11-04-maps-phase2/), [charts-on-d3](docs/experiments/2026-11-04-charts-on-d3/). Shipped in PR #9.
+
+**Built:**
+- [x] **A shared viz core.** React renders the SVG; d3-scale and d3-shape only compute.
+- [x] **Maps:** outline, choropleth, bubble, connection and hexbin kinds, plus markers on street maps. Bundled world, Europe and US-states TopoJSON, and a 1:50m world loaded lazily for zoomed views.
+- [x] **Flow graphs:** sankey and network. Networks of 150+ nodes lay out in a worker.
+- [x] **bar, line and area ported off Recharts.** The chart chunk went from 95.7 to 8.5 KB gzipped.
+
+**Open:**
+- [ ] **Units have no plural forms** ("1 flights").
+- [ ] **The Europe frame shows much of Russia** in wide cards.
+- [ ] **Route stops aren't numbered** on street maps.
+- [ ] **The network-layout worker isn't verified inside the real Tauri webview.** It ran in the browser mock under the release CSP.
+- [ ] **Maps phase 3:** tile cartograms, Dorling, NUTS-2. The NUTS-2 licence still needs reading ([map-types.md](docs/research/map-types.md) marks it unverified).
+
+## 16. Composer (on `feat/composer-drop-model-refs`, not merged)
+
+Experiments: [chat-attachments](docs/experiments/2026-11-04-chat-attachments/), [model-effort](docs/experiments/2026-11-04-model-effort/), [hash-references](docs/experiments/2026-11-04-hash-references/). Research: [model-effort.md](docs/research/model-effort.md).
+
+**Built: attachments.**
+- Drag and drop, paste and Attach for images and files, with chips. Limits are enforced in Rust: images up to 5 MB and 8000 px, downscaled to 2048 px; 20 MB and 20 attachments per message; text up to 64 KB inline when the agent supports embedded context.
+- Images the agent produces show inline in the chat, including a strip on folded tool groups.
+
+Gaps:
+- [ ] Dropped plain text does nothing in the app (Tauri takes native drops). Paste works.
+- [ ] A pasted file with no path is refused.
+- [ ] Image paths in tool output aren't followed. This keeps to the existing `ui_files.rs` policy.
+- [ ] codex-acp's MCP screenshots aren't shown; they are only in `rawOutput`.
+- [ ] Cline advertises images but drops them.
+- [ ] Not yet tried with live agents in the real app.
+
+**Built: model and effort pickers.** A Model and an Effort picker under the message box, only for what the chat's agent offers (ACP `configOptions`, else the older `models`). The agent's answer is the chat's state; picks are re-sent after `session/load` when the agent doesn't keep them. Changes are disabled while a turn runs. Settings → Agents has "New chats start with" per profile; a profile bound to Bedrock or OpenRouter keeps its model from the binding.
+- [x] **Decided (2026-11-04): no mode picker for now.** Mode, fast mode, ultracode and goose's `provider` are parsed and kept but have no UI. If one comes later, leave out modes that skip permission prompts.
+- [ ] Codex's and Gemini's signed-in model lists, and whether Codex keeps its picks across a reload, need a signed-in (tier B) run.
+
+**Built: `#` references.** `#` lists every connected tracker; `github#`, `gitlab#` and `linear#` list one. Ranked in Rust: exact ids, then the chat's repos, then items involving you, then recent. No API call per keystroke (a 250 ms pause, 60 s cache). On send Rust reads each item (read-only, up to 10 per message) and attaches it as an embedded resource or as text.
+- [ ] The GitHub, GitLab and Linear queries were checked only against a local stand-in, not a real tracker.
+- [ ] Hand-typed tokens show no "Attaches" row until sent; sending waits for every item (up to 15 s each, in parallel).
+- [ ] A GitHub reference that fails to read shows as a PR (the token can't say which); GitLab "yours" leaves out MRs you only review.
+
+**Built: markdown in the message box** (`app/src/lib/markdown-input.ts`): lists continue on Shift+Enter, Tab indents list items, a selection is wrapped by the mark typed over it or by ⌘B / ⌘I / ⌘E, a closing fence appears after ```, and a URL pasted over a selection becomes a link. ⌘Z undoes each.
+
+**Built since:**
+- [x] **Queued messages:** Enter or the Queue button while a turn runs queues the message; one queue per chat in Rust, saved with the chat. Edit, Remove, Move, "Send now" (stops the turn). It pauses after an error, Stop, a waiting permission request, any stop reason other than `end_turn`, and after a restart; "Resume queue" continues. The chat's model and effort at send time apply.
+- [x] **Input box redesign:** one frame with chips on top, the text, and a toolbar (Attach, Model, Effort, the `/ @ #` hint, Send or Queue and Stop).
+- [x] **Diff pane** (all, staged, unstaged, against a branch; read-only) and an **Open panes** sidebar group for terminals and diffs.
+- [x] **⌘K palette:** chats, then projects, then commands; `@` and `#` scopes.
+
+## 17. Other research: open decisions
+
+- [ ] **Running ACP agents remotely** ([remote-acp.md](docs/research/remote-acp.md), research only, no remote agent was run). Recommended first step: SSH stdio, with agent and repo both on the remote host; WebSocket transport second. **Decision pending on SSH.**
+- [ ] **Accessibility personas** ([accessibility-personas.md](docs/research/accessibility-personas.md); fixes in [a11y-fixes](docs/experiments/2026-11-04-a11y-fixes/)). Most findings are fixed. Decided not to fix **SR-1**, the terminal's screen-reader blocker: the terminal is optional and can be left with ⌘⌥ arrows or by closing it. Still open from its status table: LV-1 (hiding the sidebar on its own when panes would get too small; needs a product decision), LV-2 (the sidebar width doesn't scale with the font), KB-2 (focus to the Expand dialog's close button when the shell isn't focused), and SR-2, which is fixed but unverified with a real screen reader.

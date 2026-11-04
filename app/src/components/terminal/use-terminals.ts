@@ -24,15 +24,15 @@ export function folderOf(c: Selection, y: Pick<Yaah, "sessions" | "projects">): 
     const p = y.projects.find((x) => x.id === c.id);
     return p?.dirs[0] ?? p?.contextDir;
   }
-  if (c?.kind === "terminal") return c.cwd;
+  if (c?.kind === "terminal" || c?.kind === "diff") return c.cwd;
   return undefined;
 }
 
 export function useTerminals(y: Yaah) {
   const { panes } = y;
-  const open = useCallback(
-    (target: TerminalTarget, where: Where) => {
-      const content: Selection = { kind: "terminal", ...target };
+  /** A terminal or diff pane: in the focused pane, or in a new split to its right. */
+  const show = useCallback(
+    (content: Selection, where: Where) => {
       const here = panes.focused.content;
       if (where === "here" || here == null || here.kind === "picker") {
         const id = panes.focusedId();
@@ -44,6 +44,9 @@ export function useTerminals(y: Yaah) {
     },
     [panes],
   );
+  const open = useCallback((target: TerminalTarget, where: Where) => show({ kind: "terminal", ...target }, where), [show]);
+  /** A diff pane of the repository `cwd` is in (none: the pane asks which folder). */
+  const openDiff = useCallback((cwd: string | undefined, where: Where = "split") => show({ kind: "diff", cwd }, where), [show]);
 
   useEffect(() => {
     const listener = (e: Event) => {
@@ -57,6 +60,7 @@ export function useTerminals(y: Yaah) {
   return {
     /** A terminal in `cwd` (else the default folder: the last one used, or home). */
     open,
+    openDiff,
     /** ⌘T and "New terminal here": a new split to the right, in the focused pane's folder. */
     openHere: () => open({ cwd: folderOf(panes.focused.content, y) }, "split"),
     /** The focused pane's folder, if it has one. */

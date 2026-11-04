@@ -199,31 +199,31 @@ pub fn project_status(state: &str) -> Status {
 // ── ids and pasted input ────────────────────────────────────────────────────
 
 /// One path segment of a GitHub repo or a GitLab group/project.
-fn path_part(p: &str) -> bool {
+pub(crate) fn path_part(p: &str) -> bool {
     !p.is_empty() && !p.starts_with('.') && p.len() <= 100 && p.chars().all(|c| c.is_ascii_alphanumeric() || "_.-".contains(c))
 }
 
 /// `owner/repo` (exactly two parts).
-fn github_repo(s: &str) -> Option<(&str, &str)> {
+pub(crate) fn github_repo(s: &str) -> Option<(&str, &str)> {
     let (o, r) = s.split_once('/')?;
     (path_part(o) && path_part(r)).then_some((o, r))
 }
 
 /// `group/sub/project` (two or more parts).
-fn gitlab_project(s: &str) -> bool {
+pub(crate) fn gitlab_project(s: &str) -> bool {
     let parts: Vec<&str> = s.split('/').collect();
     (2..=20).contains(&parts.len()) && parts.iter().all(|p| path_part(p))
 }
 
 /// `<path>#<n>`.
-fn split_ref(id: &str) -> Option<(&str, u64)> {
+pub(crate) fn split_ref(id: &str) -> Option<(&str, u64)> {
     let (path, n) = id.trim().rsplit_once('#')?;
     let n = n.parse().ok().filter(|n| *n > 0)?;
     Some((path, n))
 }
 
 /// `ENG-142`.
-fn linear_identifier(s: &str) -> bool {
+pub(crate) fn linear_identifier(s: &str) -> bool {
     let Some((team, n)) = s.split_once('-') else { return false };
     team.starts_with(|c: char| c.is_ascii_alphabetic())
         && team.len() <= 16
@@ -330,7 +330,7 @@ pub fn parse_input(input: &str) -> Result<Parsed, String> {
 }
 
 /// A GitLab URL's project path, relative to the connected instance at `base`.
-fn gitlab_relative(base: &str, origin: &str, id: &str) -> Result<String, String> {
+pub(crate) fn gitlab_relative(base: &str, origin: &str, id: &str) -> Result<String, String> {
     let base_url = reqwest::Url::parse(base).map_err(|e| e.to_string())?;
     if !base_url.origin().ascii_serialization().eq_ignore_ascii_case(origin) {
         return Err(format!("that issue is on {origin}, but GitLab is connected to {base}: change it in Settings → Integrations"));
@@ -343,16 +343,16 @@ fn gitlab_relative(base: &str, origin: &str, id: &str) -> Result<String, String>
 
 // ── shared bits of shaping ──────────────────────────────────────────────────
 
-fn s(v: &Value) -> Option<String> {
+pub(crate) fn s(v: &Value) -> Option<String> {
     v.as_str().filter(|s| !s.is_empty()).map(str::to_owned)
 }
 
-fn strings(v: &Value) -> Vec<String> {
+pub(crate) fn strings(v: &Value) -> Vec<String> {
     v.as_array().into_iter().flatten().filter_map(|x| x.as_str().or(x["name"].as_str()).map(str::to_owned)).collect()
 }
 
 /// `text` cut to `max` characters, marked when cut.
-fn clip(text: &str, max: usize) -> String {
+pub(crate) fn clip(text: &str, max: usize) -> String {
     let text = text.trim();
     match text.char_indices().nth(max) {
         Some((at, _)) => format!("{}…", text[..at].trim_end()),
@@ -376,7 +376,7 @@ async fn github_json(i: &Integrations, path: &str, require_auth: bool) -> Result
     serde_json::from_str(&text).map_err(|_| "GitHub: the answer wasn't JSON".to_owned())
 }
 
-fn gitlab_path(project: &str) -> String {
+pub(crate) fn gitlab_path(project: &str) -> String {
     project.replace('/', "%2F")
 }
 
@@ -533,7 +533,7 @@ async fn gitlab_queue(i: &Integrations) -> Result<Vec<WorkItem>, String> {
 }
 
 /// A GitLab issue shaped for display and the brief, with its newest notes by people.
-async fn gitlab_issue(i: &Integrations, project: &str, iid: u64) -> Result<Value, String> {
+pub(crate) async fn gitlab_issue(i: &Integrations, project: &str, iid: u64) -> Result<Value, String> {
     if !gitlab_project(project) {
         return Err(format!("`{project}` isn't a GitLab project; use \"group/project\""));
     }
@@ -641,7 +641,7 @@ async fn linear_queue(i: &Integrations) -> Result<Vec<WorkItem>, String> {
     Ok(merge(vec![group("assigned", Relation::Assigned), group("created", Relation::Created)]))
 }
 
-async fn linear_issue(i: &Integrations, id: &str) -> Result<Value, String> {
+pub(crate) async fn linear_issue(i: &Integrations, id: &str) -> Result<Value, String> {
     let id = integrations::linear_key(&json!(id), "issue id")?;
     let data = i.linear(integrations::ISSUE_QUERY, json!({ "id": id })).await?;
     if data["issue"].is_null() {
@@ -770,8 +770,24 @@ fn item_of(service: WorkService, v: &Value) -> WorkItem {
 
 // ── the brief block ─────────────────────────────────────────────────────────
 
+/// How much of an item [`brief_block_with`] writes.
+pub(crate) struct BriefCaps {
+    pub description: usize,
+    pub comments: usize,
+    pub comment_chars: usize,
+    /// Add who opened it (`author`, or Linear's `creator`).
+    pub author: bool,
+}
+
+const BRIEF: BriefCaps = BriefCaps { description: DESCRIPTION_CHARS, comments: BRIEF_COMMENTS, comment_chars: COMMENT_CHARS, author: false };
+
 /// The item as Markdown for the project's brief (without the markers).
 pub fn brief_block(service: WorkService, v: &Value) -> String {
+    brief_block_with(service, v, &BRIEF)
+}
+
+/// [`brief_block`] with other caps (a chat message's references are smaller).
+pub(crate) fn brief_block_with(service: WorkService, v: &Value, caps: &BriefCaps) -> String {
     let item = item_of(service, v);
     let heading = match service {
         WorkService::LinearProject => item.title.clone(),
@@ -794,6 +810,11 @@ pub fn brief_block(service: WorkService, v: &Value) -> String {
     } else if let Some(a) = &item.assignee {
         facts.push(format!("**Assignee:** {a}"));
     }
+    if caps.author
+        && let Some(by) = s(&v["author"]).or_else(|| s(&v["creator"]))
+    {
+        facts.push(format!("**Author:** {by}"));
+    }
     if !item.labels.is_empty() {
         facts.push(format!("**Labels:** {}", item.labels.join(", ")));
     }
@@ -801,7 +822,7 @@ pub fn brief_block(service: WorkService, v: &Value) -> String {
         out.push_str(&facts.join(" · "));
         out.push('\n');
     }
-    let description = s(&v["description"]).or_else(|| s(&v["body"])).map(|d| clip(&d, DESCRIPTION_CHARS));
+    let description = s(&v["description"]).or_else(|| s(&v["body"])).map(|d| clip(&d, caps.description));
     let _ = write!(out, "\n## Description\n\n{}\n", description.unwrap_or_else(|| "_No description._".into()));
     if service == WorkService::LinearProject {
         let issues: Vec<String> = v["issues"]
@@ -822,13 +843,17 @@ pub fn brief_block(service: WorkService, v: &Value) -> String {
             let _ = write!(out, "\n## Issues\n\n{}\n", issues.join("\n"));
         }
     } else {
-        let comments = newest(v["comments"].as_array().cloned().unwrap_or_default(), BRIEF_COMMENTS);
+        let comments = newest(v["comments"].as_array().cloned().unwrap_or_default(), caps.comments);
         if !comments.is_empty() {
             let lines: Vec<String> = comments
                 .iter()
                 .map(|c| {
                     let date = c["at"].as_str().and_then(|a| a.get(..10)).unwrap_or("?");
-                    format!("**{}**, {date}: {}", c["author"].as_str().unwrap_or("someone"), clip(c["body"].as_str().unwrap_or(""), COMMENT_CHARS))
+                    format!(
+                        "**{}**, {date}: {}",
+                        c["author"].as_str().unwrap_or("someone"),
+                        clip(c["body"].as_str().unwrap_or(""), caps.comment_chars)
+                    )
                 })
                 .collect();
             let _ = write!(out, "\n## Recent comments\n\n{}\n", lines.join("\n\n"));
@@ -882,7 +907,7 @@ fn tag(items: &mut [WorkItem], projects: &[Project]) {
     }
 }
 
-async fn within<T>(service: WorkService, limit: Duration, f: impl Future<Output = Result<T, String>>) -> Result<T, QueueError> {
+pub(crate) async fn within<T>(service: WorkService, limit: Duration, f: impl Future<Output = Result<T, String>>) -> Result<T, QueueError> {
     let fail = |message: String| QueueError { service, kind: error_kind(&message), message };
     match tokio::time::timeout(limit, f).await {
         Ok(r) => r.map_err(fail),

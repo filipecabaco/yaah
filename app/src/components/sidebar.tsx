@@ -8,6 +8,7 @@ import {
   FolderGit2,
   FolderOpen,
   FolderPlus,
+  GitCompare,
   LayoutPanelTop,
   Loader2,
   LogIn,
@@ -21,6 +22,7 @@ import {
   Search,
   Settings2,
   Trash2,
+  X,
   Settings,
 } from "lucide-react";
 import { openInTerminalApp } from "@/lib/terminal-api";
@@ -61,6 +63,8 @@ import {
   type SessionInfo,
 } from "@/lib/api";
 import { baseName } from "@/lib/format";
+import type { Pane } from "@/lib/layout";
+import { usePaneInfo } from "@/lib/pane-info";
 import type { Selection } from "@/hooks/use-yaah";
 import { useTrafficLights } from "@/hooks/use-titlebar";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
@@ -104,6 +108,12 @@ type Props = {
   onToggle: () => void;
   /** A new width, once a drag of its edge ends (or per key). */
   onWidth: (width: number) => void;
+  /** Open terminal and diff panes, in reading order: listed beside the chats, nothing when there are none. */
+  openPanes: Pane[];
+  /** The pane the keyboard is in. */
+  focusedPaneId: string;
+  onFocusPane: (id: string) => void;
+  onClosePane: (id: string) => void;
 };
 
 /** Memoised: the app passes stable callbacks, so it re-renders only when chats, projects, agents or the selection change. */
@@ -226,6 +236,8 @@ export const Sidebar = memo(function Sidebar(props: Props) {
                 </div>
               </div>
               <QuickChats chats={props.quickChats} selection={selection} onSelect={onSelect} onNew={props.onNewQuickChat} />
+
+              <OpenPanes panes={props.openPanes} focused={props.focusedPaneId} onFocus={props.onFocusPane} onClose={props.onClosePane} />
 
               <NewMenu onNewProject={onNewProject}>
                 <div className="flex items-center justify-between px-3 pt-3 pb-1">
@@ -699,5 +711,106 @@ function QuickChats({
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * Terminals and diffs that are open in panes, as chats are listed: an icon, a name (the folder or
+ * repository), a detail (the shell, the change count), the focused one marked, a click to go to it
+ * and a close button. Nothing at all while none is open; a row goes when its pane closes.
+ */
+function OpenPanes({
+  panes,
+  focused,
+  onFocus,
+  onClose,
+}: {
+  panes: Pane[];
+  focused: string;
+  onFocus: (id: string) => void;
+  onClose: (id: string) => void;
+}) {
+  if (panes.length === 0) return null;
+  return (
+    <section aria-label="Open panes" className="flex flex-col">
+      <div className="flex items-center px-3 pt-3 pb-1">
+        <span className="px-1 text-xs font-medium text-muted-foreground">Open panes</span>
+      </div>
+      <ul className="flex max-h-48 flex-col gap-0.5 overflow-y-auto px-2">
+        {panes.map((p) => (
+          <PaneRow key={p.id} pane={p} focused={p.id === focused} onFocus={onFocus} onClose={onClose} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function PaneRow({
+  pane,
+  focused,
+  onFocus,
+  onClose,
+}: {
+  pane: Pane;
+  focused: boolean;
+  onFocus: (id: string) => void;
+  onClose: (id: string) => void;
+}) {
+  const info = usePaneInfo(pane.id);
+  const content = pane.content;
+  const diff = content?.kind === "diff";
+  const kind = diff ? "Diff" : "Terminal";
+  const cwd = content?.kind === "terminal" || content?.kind === "diff" ? content.cwd : undefined;
+  const name = info?.title ?? (cwd ? baseName(cwd) : diff ? "Diff" : "Terminal");
+  const Icon = diff ? GitCompare : SquareTerminal;
+  return (
+    <li>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div
+            className={cn(
+              "group flex items-center rounded-md hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
+              focused && "bg-sidebar-accent",
+            )}
+          >
+            <button
+              type="button"
+              aria-current={focused || undefined}
+              title={cwd ? `${kind}: ${cwd}` : kind}
+              onClick={() => onFocus(pane.id)}
+              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm"
+            >
+              <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="sr-only">{kind}: </span>
+              <span className="min-w-0 flex-1 truncate">{name}</span>
+              {info?.detail && <span className="max-w-24 shrink-0 truncate text-2xs text-muted-foreground">{info.detail}</span>}
+            </button>
+            <button
+              type="button"
+              aria-label={`Close ${kind.toLowerCase()} ${name}`}
+              title="Close the pane"
+              onClick={() => onClose(pane.id)}
+              className="mr-0.5 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={() => onFocus(pane.id)}>
+            <Icon /> Go to pane
+          </ContextMenuItem>
+          {cwd && (
+            <ContextMenuItem onSelect={() => openInTerminalApp(cwd)}>
+              <SquareTerminal /> Open in terminal app
+            </ContextMenuItem>
+          )}
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={() => onClose(pane.id)}>
+            <X /> Close pane
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    </li>
   );
 }

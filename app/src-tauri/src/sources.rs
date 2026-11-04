@@ -570,7 +570,7 @@ fn flatten_pr(pr: &Value) -> Value {
     p
 }
 
-async fn github_pr(i: &Integrations, (owner, name): (&str, &str), number: u64) -> Result<Value, String> {
+pub(crate) async fn github_pr(i: &Integrations, (owner, name): (&str, &str), number: u64) -> Result<Value, String> {
     let q = PR_QUERY.replace("CHECKS", CHECKS_FIELDS);
     let data = i.github_graphql(&q, json!({ "owner": owner, "name": name, "number": number })).await?;
     let pr = &data["repository"]["pullRequest"];

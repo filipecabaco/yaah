@@ -76,8 +76,8 @@ export function PaneGrid({
             onFocusCapture={() => onFocus(p.id)}
           >
             {contents[p.id]}
-            {/* Top-right of the pane, over its header row (chats leave room for it). Terminals carry their own. */}
-            {many && p.content?.kind !== "terminal" && (
+            {/* Top-right of the pane, over its header row (chats leave room for it). Terminals and diffs carry their own. */}
+            {many && p.content?.kind !== "terminal" && p.content?.kind !== "diff" && (
               <Hint label="Close this pane" shortcut="closePane">
                 <Button
                   data-pane-close

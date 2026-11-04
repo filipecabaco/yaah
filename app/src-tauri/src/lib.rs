@@ -7,8 +7,11 @@ pub mod agent_install;
 pub mod agent_routes;
 pub mod agent_versions;
 pub mod agents;
+pub mod attachments;
 mod commands;
+mod config_commands;
 mod data_commands;
+mod diff_commands;
 mod files;
 pub mod fonts;
 pub mod integrations;
@@ -18,10 +21,13 @@ pub mod layout;
 pub mod login;
 pub mod mcp_servers;
 pub mod path_env;
+mod permission_commands;
 pub mod projects;
 pub mod provider_stub;
 pub mod providers;
+mod queue_commands;
 mod random;
+mod references;
 pub mod repos;
 pub mod session;
 pub mod settings;
@@ -56,10 +62,15 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(Projects::default())
         .manage(Logins::default())
+        .manage(attachments::Staging::default())
         .setup(|app| {
             let hub = Arc::new(Hub::with_store(commands::emitter(app.handle().clone()), accounts::home().join(".yaah/sessions")));
+            // Queued messages go on their own as turns end (session/queue.rs).
+            hub.start_queues();
             // What permission requests yaah may answer itself (session/permissions.rs): the setting, and each project's trusted MCP servers.
             hub.set_trust_read_only(settings::trust_read_only());
+            // Trust in quick chats and all chats, and "Allow web searches", from settings.json (session/trust.rs).
+            hub.set_permission_file(settings::file());
             match app.state::<Projects>().list() {
                 Ok(projects) => hub.load_project_trust(&projects),
                 Err(e) => eprintln!("[projects] trusted MCP servers not read: {e}"),
@@ -75,6 +86,8 @@ pub fn run() {
             let guide = Arc::new(agent_guide::Guide::for_app(library.clone()));
             guide.sync_in_background();
             hub.set_guide(guide.clone());
+            // Settings → Agents "New chats start with": model and effort defaults (session/config.rs).
+            hub.set_config_defaults(settings::file());
             // npm-based agents: drop version folders nothing runs any more, and check for newer versions daily.
             agent_install::cleanup_in_background(agent_versions::Versions::user().keep(&settings::agent_versions()));
             // The conformance suite checks each newer version before it runs (agent_conformance.rs), and audits what runs daily.
@@ -185,6 +198,17 @@ pub fn run() {
             commands::get_transcript,
             commands::get_entries,
             commands::send_prompt,
+            queue_commands::queue_remove,
+            queue_commands::queue_edit,
+            queue_commands::queue_move,
+            queue_commands::queue_clear,
+            queue_commands::queue_resume,
+            queue_commands::queue_send_now,
+            attachments::describe_drop,
+            attachments::stage_attachments,
+            attachments::stage_pasted_image,
+            attachments::discard_attachments,
+            attachments::read_image,
             commands::switch_agent,
             commands::list_agent_sessions,
             commands::import_agent_session,
@@ -193,12 +217,22 @@ pub fn run() {
             commands::rename_session,
             commands::delete_session,
             commands::search_files,
+            references::reference_suggestions,
             commands::cancel_turn,
             commands::respond_permission,
             commands::trust_mcp_server,
             commands::untrust_project_mcp_server,
             commands::untrust_chat_mcp_server,
             commands::set_trust_read_only,
+            permission_commands::trust_scope,
+            permission_commands::permission_settings,
+            permission_commands::set_allow_web_search,
+            permission_commands::untrust_mcp_server_everywhere,
+            permission_commands::untrust_quick_chat_mcp_server,
+            config_commands::set_chat_config,
+            config_commands::agent_config_defaults,
+            config_commands::set_agent_config_default,
+            diff_commands::diff_pane_read,
             terminal_commands::terminal_open,
             terminal_commands::terminal_attach,
             terminal_commands::terminal_detach,

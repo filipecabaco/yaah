@@ -1,8 +1,10 @@
-// ⌘K palette: jump to any chat or project, and run the actions that apply to
-// the current selection. Rename and delete happen inline as palette pages.
+// ⌘K palette: jump to any chat or project, and run the commands that apply to
+// the current selection. `@` scopes it to chats and projects, `#` to commands. Rename and delete happen inline as palette pages.
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRightLeft,
+  Cpu,
+  Gauge,
   Equal,
   ZoomIn,
   ZoomOut,
@@ -37,7 +39,8 @@ import {
 import { focusComposer } from "@/components/chat-context";
 import { focusPaneDom } from "@/lib/pane-focus";
 import { terminalActions, type Terminals } from "@/components/terminal/palette-actions";
-import { openAddRepos } from "@/lib/app-events";
+import { openAddRepos, openComposerConfig } from "@/lib/app-events";
+import { choiceName, configOption } from "@/lib/composer-config";
 import { ErrorText } from "@/components/error-text";
 import { connectionReady } from "@/components/settings/form-state";
 import { Badge } from "@/components/ui/badge";
@@ -132,7 +135,9 @@ export function CommandPalette(props: Props) {
         }}
       >
         <DialogTitle className="sr-only">Command palette</DialogTitle>
-        <DialogDescription className="sr-only">Search chats, projects and actions.</DialogDescription>
+        <DialogDescription className="sr-only">
+          Search chats, projects and commands. Start with @ for chats and projects, or # for commands.
+        </DialogDescription>
         {shown && <PaletteBody {...props} page={shown} close={close} />}
       </DialogContent>
     </Dialog>
@@ -148,6 +153,21 @@ type Entry = {
   keys?: string[];
   onSelect: () => void;
 };
+
+/** `@` finds chats and projects, `#` commands. (The composer's `@` is files and `#` tracker items.) */
+type Scope = "go" | "commands";
+const SCOPES: Record<Scope, { prefix: string; label: string }> = {
+  go: { prefix: "@", label: "Chats and projects" },
+  commands: { prefix: "#", label: "Commands" },
+};
+const scopeOf = (c: string | undefined): Scope | null => (c === "@" ? "go" : c === "#" ? "commands" : null);
+/**
+ * Searching, the groups go chats, projects, commands, but each group's best score is weighed (chats
+ * ×1.5, projects ×1.25, commands ×1) so a weak chat match can't bury a strong command: the commands
+ * lead only when their best match beats the chats' by half again (a prefix or exact name against a
+ * mid-word hit), and tie or near-tie matches favour chats. Within a group, the fuzzy score decides.
+ */
+const GROUP_WEIGHT = { chats: 1.5, projects: 1.25, commands: 1 };
 
 /** Chats and projects listed at most, best first; typing finds the rest. */
 const LIMIT = 50;
@@ -170,6 +190,8 @@ function PaletteBody({
   terminals,
 }: Props & { page: PalettePage; close: (then?: () => void) => void }) {
   const [search, setSearch] = useState("");
+  // `@` limits the root page to chats and projects, `#` to commands; the prefix becomes a chip.
+  const [scope, setScope] = useState<Scope | null>(null);
   // The list follows the typing a beat behind, so keystrokes never wait on it.
   const query = useDeferredValue(search);
   // The selected item on the root page, for the search it was picked in.
@@ -184,6 +206,7 @@ function PaletteBody({
   if (page.kind !== searchFor) {
     setSearchFor(page.kind);
     setSearch("");
+    setScope(null);
   }
 
   /** Run an action, close, and land in the message box if there is one. */
@@ -230,7 +253,7 @@ function PaletteBody({
   const rankedProjects = useMemo(() => rankEntries(projectEntries, query, LIMIT), [projectEntries, query]);
 
   let body: ReactNode;
-  let placeholder = "Search chats, projects and actions…";
+  let placeholder = "Search · @ chats and projects · # commands";
   /** The root page's best match, which a new search starts on. */
   let firstId = "";
   if (page.kind === "rename") {
@@ -447,6 +470,20 @@ function PaletteBody({
         detail: chat.projectId ? `to ${projectName(chat.projectId)}` : "to this chat",
         onSelect: () => close(() => openAddRepos(chat.sessionId, y.panes.focusedId())),
       },
+      // The composer's pickers, when the chat's agent offers them (components/composer-config.tsx); not mid-turn.
+      ...(["model", "effort"] as const).map((role) => {
+        const o = chat && !chat.running ? configOption(chat, role) : undefined;
+        return (
+          chat &&
+          o && {
+            id: `change-${role}`,
+            icon: role === "model" ? <Cpu /> : <Gauge />,
+            label: role === "model" ? "Change model…" : "Change effort…",
+            detail: choiceName(o),
+            onSelect: () => close(() => openComposerConfig(chat.sessionId, role, y.panes.focusedId())),
+          }
+        );
+      }),
       chat && { id: "rename", icon: <Pencil />, label: "Rename chat…", onSelect: () => onPage({ kind: "rename", chat }) },
       chat && {
         id: "move-chat",
@@ -613,34 +650,30 @@ function PaletteBody({
       { id: "connect-github", icon: <Plug />, label: "Connect GitHub…", onSelect: () => close(() => onIntegrations("github")) },
       { id: "connect-gitlab", icon: <Plug />, label: "Connect GitLab…", onSelect: () => close(() => onIntegrations("gitlab")) },
       { id: "help", icon: <Keyboard />, label: "Keyboard shortcuts", shortcut: "help", onSelect: () => close(onHelp) },
+      // The chat's queued messages (session/queue.rs): all of them go, but not one already on its way.
+      chat &&
+        (chat.queue?.items?.length ?? 0) > 0 && {
+          id: "clear-queue",
+          icon: <Trash2 />,
+          label: "Clear queue",
+          detail: `${chat.queue?.items?.length ?? 0} queued`,
+          onSelect: () => run(() => api.queueClear(chat.sessionId)),
+        },
     ];
-    const rankedActions = rankEntries(
-      actions.filter((a): a is Entry => !!a),
-      query,
-    );
     const goTo: Entry = {
       id: "components",
       icon: <LayoutPanelTop />,
       label: "Component library",
       onSelect: () => close(() => y.setSelection({ kind: "components" })),
     };
-    const goToShown = rankEntries([goTo], query);
-    // While searching, the group with the best match comes first.
+    const commands = rankEntries([...actions.filter((a): a is Entry => !!a), goTo], query);
     const groups = [
       {
-        id: "actions",
-        best: rankedActions.best,
-        node: rankedActions.shown.length > 0 && (
-          <CommandGroup key="actions" heading="Actions">
-            {rankedActions.shown.map((a) => (
-              <Item key={a.id} {...a} />
-            ))}
-          </CommandGroup>
-        ),
-      },
-      {
         id: "chats",
+        scope: "go",
+        weight: GROUP_WEIGHT.chats,
         best: rankedChats.best,
+        shown: rankedChats.shown,
         node: rankedChats.shown.length > 0 && (
           <CommandGroup key="chats" heading="Chats">
             {rankedChats.shown.map((e) => {
@@ -663,10 +696,13 @@ function PaletteBody({
         ),
       },
       {
-        id: "goto",
-        best: Math.max(rankedProjects.best, goToShown.best),
-        node: (rankedProjects.shown.length > 0 || goToShown.shown.length > 0) && (
-          <CommandGroup key="goto" heading="Go to">
+        id: "projects",
+        scope: "go",
+        weight: GROUP_WEIGHT.projects,
+        best: rankedProjects.best,
+        shown: rankedProjects.shown,
+        node: rankedProjects.shown.length > 0 && (
+          <CommandGroup key="projects" heading="Projects">
             {rankedProjects.shown.map((e) => {
               const p = (e as Entry & { project: Project }).project;
               return (
@@ -680,21 +716,28 @@ function PaletteBody({
                 />
               );
             })}
-            {goToShown.shown.map((e) => (
-              <Item key={e.id} {...e} />
+          </CommandGroup>
+        ),
+      },
+      {
+        id: "commands",
+        scope: "commands",
+        weight: GROUP_WEIGHT.commands,
+        best: commands.best,
+        shown: commands.shown,
+        node: commands.shown.length > 0 && (
+          <CommandGroup key="commands" heading="Commands">
+            {commands.shown.map((a) => (
+              <Item key={a.id} {...a} />
             ))}
           </CommandGroup>
         ),
       },
-    ];
-    if (query.trim()) groups.sort((a, b) => b.best - a.best);
+    ].filter((g) => !scope || g.scope === scope);
+    // Stable: equal weighted scores (and an empty query) keep chats, projects, commands.
+    if (query.trim()) groups.sort((a, b) => b.best * b.weight - a.best * a.weight);
     body = groups.map((g) => g.node);
-    const shownGroups: Record<string, Entry[]> = {
-      actions: rankedActions.shown,
-      chats: rankedChats.shown,
-      goto: [...rankedProjects.shown, ...goToShown.shown],
-    };
-    firstId = groups.map((g) => shownGroups[g.id][0]?.id).find(Boolean) ?? "";
+    firstId = groups.map((g) => g.shown[0]?.id).find(Boolean) ?? "";
   }
 
   if (page.kind === "rename" || page.kind === "promote" || page.kind === "addConnection" || page.kind === "resume") return body;
@@ -707,11 +750,33 @@ function PaletteBody({
       <CommandInput
         autoFocus
         value={search}
-        onValueChange={setSearch}
-        placeholder={placeholder}
+        onValueChange={(v) => {
+          // A leading @ or # on the root page turns into the scope chip.
+          const s = root && !scope ? scopeOf(v[0]) : null;
+          if (s) setScope(s);
+          setSearch(s ? v.slice(1) : v);
+        }}
+        placeholder={scope ? `Filter ${SCOPES[scope].label.toLowerCase()}…` : placeholder}
+        scope={
+          scope && (
+            <Badge
+              variant="secondary"
+              data-slot="palette-scope"
+              aria-label={`Searching ${SCOPES[scope].label.toLowerCase()} only`}
+              className="order-first ml-1 gap-1"
+            >
+              <span aria-hidden>{SCOPES[scope].prefix}</span>
+              {SCOPES[scope].label}
+            </Badge>
+          )
+        }
         onKeyDown={(e) => {
-          // Backspace on an empty search goes back to the top level.
-          if (e.key === "Backspace" && !search && !root) onPage({ kind: "root" });
+          if (e.key !== "Backspace" || search) return;
+          // Backspace on an empty search drops the scope, then goes back to the top level.
+          if (scope) {
+            e.preventDefault();
+            setScope(null);
+          } else if (!root) onPage({ kind: "root" });
         }}
       />
       <CommandList className="max-h-96" ref={list}>

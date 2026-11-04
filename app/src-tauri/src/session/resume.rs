@@ -134,6 +134,8 @@ impl Hub {
             dirs_changed: false,
             remembered: std::collections::BTreeMap::new(),
             trusted_mcp_servers: vec![],
+            config: super::ChatConfig::default(),
+            queue: super::Queue::default(),
         };
         let token = random_token();
         let mut session = Session::new(info, vec![], self.store.as_ref().map(|d| d.join(file_name(acp_id))));
@@ -167,12 +169,17 @@ impl Hub {
         let guide = self.add_ui_server(&agent, &token, Some(acp_id), &mut params);
         crate::mcp_servers::inject(&mut params, agent.caps.mcp_http, agent.caps.mcp_sse, &account);
 
-        if let Err(e) = agent.conn.request("session/load", params).await {
-            // Nothing half-imported stays behind: no chat, no file, no UI token.
-            let _ = self.delete_session(acp_id);
-            return Err(self.shared.rpc_error(&account.id, &e, "Couldn't reopen this session"));
-        }
+        let loaded = match agent.conn.request("session/load", params).await {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                // Nothing half-imported stays behind: no chat, no file, no UI token.
+                let _ = self.delete_session(acp_id);
+                return Err(self.shared.rpc_error(&account.id, &e, "Couldn't reopen this session"));
+            }
+        };
         self.shared.with(acp_id, |s| {
+            // The model and effort it runs with, as the agent says (`session/config.rs`).
+            s.info.config.options = super::config::offered(&loaded);
             s.importing = None;
             s.attached = Some(agent.generation);
             s.guide = guide;
@@ -222,7 +229,7 @@ pub(super) fn user_chunk(shared: &Shared, s: &mut Session, update: &Value) {
         }
         _ => {
             s.plan_index = None;
-            shared.push(s, Entry::User { text, attachments: vec![] });
+            shared.push(s, Entry::User { text, attachments: vec![], files: vec![], references: vec![] });
         }
     }
 }

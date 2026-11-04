@@ -662,7 +662,12 @@ async fn session_check(conn: &Connection, params: &Value, expect: &Expect, updat
             Some(id) => {
                 let seen = updates();
                 let seen = if seen.is_empty() { String::new() } else { format!("; updates: {}", seen.into_iter().collect::<Vec<_>>().join(", ")) };
-                Check::pass(NAME, format!("works without a login (session {id}){seen}"))
+                // The model, effort and other settings it offers (session/config.rs): listed, and a shape yaah can't read fails.
+                match crate::session::config_summary(&r) {
+                    Ok(s) if s.is_empty() => Check::pass(NAME, format!("works without a login (session {id}){seen}")),
+                    Ok(s) => Check::pass(NAME, format!("works without a login (session {id}){seen}; settings: {s}")),
+                    Err(e) => Check::fail(NAME, format!("session {id}, but {e}")),
+                }
             }
             None => Check::fail(NAME, format!("answered without a sessionId: {r}")),
         },
