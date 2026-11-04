@@ -1,6 +1,7 @@
 // A terminal's colours from the app's CSS variables, so it follows the yaah theme
 // (and a VS Code theme picked in Settings) and light/dark. Engines want plain
 // colours, and the app's are often `oklch(…)`: each is resolved through a canvas.
+import { codeScale } from "@/lib/fonts";
 import type { TerminalTheme } from "./engine";
 
 let probe: CanvasRenderingContext2D | null | undefined;
@@ -49,5 +50,18 @@ export function onThemeChange(cb: () => void): () => void {
   return () => mo.disconnect();
 }
 
-/** The app's monospace font (Geist Mono when it's installed). */
+/** The app's monospace font (Geist Mono when it's installed), when the root has no `--font-code`. */
 export const TERMINAL_FONT = '"Geist Mono", "GeistMono", ui-monospace, SFMono-Regular, Menlo, Monaco, "DejaVu Sans Mono", monospace';
+
+/**
+ * The code font and size a terminal draws in: Settings → Fonts' `--font-code` and
+ * `--font-code-scale` on the root (index.css has the defaults; the code scale follows
+ * the interface scale unless code has a size of its own). `baseSize` is the view's size
+ * at the default scale (12 for a pane, 11.5 for a tool card).
+ */
+export function readTerminalFont(baseSize: number): { fontFamily: string; fontSize: number } {
+  return {
+    fontFamily: getComputedStyle(document.documentElement).getPropertyValue("--font-code").trim() || TERMINAL_FONT,
+    fontSize: Math.round(baseSize * codeScale() * 10) / 10,
+  };
+}

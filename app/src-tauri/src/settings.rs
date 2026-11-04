@@ -260,6 +260,93 @@ pub fn set_theme(light: &str, dark: &str) -> Result<(), String> {
     set("theme", json!({ "light": light, "dark": dark }))
 }
 
+// ── fonts ────────────────────────────────────────────────────────────────────
+/// Interface text size in px (the chat's body text; the root size scales with it, so all rem-based text,
+/// spacing and icons follow). 14 is today's look.
+pub const UI_SIZES: std::ops::RangeInclusive<u8> = 12..=20;
+pub const UI_SIZE_DEFAULT: u8 = 14;
+/// Code size in px (code blocks, diffs, terminals). Unset, it follows the interface size: 12 at 14.
+pub const CODE_SIZES: std::ops::RangeInclusive<u8> = 10..=20;
+pub const CODE_SIZE_DEFAULT: u8 = 12;
+
+/// The fonts the user picked: a family per slot (`None` is the system default, today's look) and sizes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Fonts {
+    pub ui: Option<String>,
+    pub code: Option<String>,
+    pub ui_size: Option<u8>,
+    pub code_size: Option<u8>,
+}
+
+/// A number for CSS: at most four decimals, no trailing zeros.
+fn css_number(n: f64) -> String {
+    let s = format!("{n:.4}");
+    s.trim_end_matches('0').trim_end_matches('.').to_owned()
+}
+
+/// What `settings.json` holds, each part checked: a family that isn't plain and installed, or a size
+/// out of range, reads as the default.
+fn fonts_in(s: &Map<String, Value>, valid: impl Fn(&str) -> bool) -> Fonts {
+    let f = s.get("fonts").unwrap_or(&Value::Null);
+    let family = |k: &str| f[k].as_str().filter(|n| valid(n)).map(str::to_owned);
+    let size = |k: &str, range: &std::ops::RangeInclusive<u8>| f[k].as_u64().and_then(|n| u8::try_from(n).ok()).filter(|n| range.contains(n));
+    Fonts { ui: family("ui"), code: family("code"), ui_size: size("uiSize", &UI_SIZES), code_size: size("codeSize", &CODE_SIZES) }
+}
+
+/// The fonts for the UI: the choice, the ranges, and the CSS variables to set on the root
+/// (`null` leaves index.css's default). Every value here is built by Rust: a family is quoted and
+/// escaped (`fonts::css_value`), sizes are numbers.
+fn fonts_for_ui(f: &Fonts) -> Value {
+    let ui_scale = f.ui_size.map(|n| f64::from(n) / f64::from(UI_SIZE_DEFAULT));
+    let code_scale = f.code_size.map(|n| f64::from(n) / f64::from(CODE_SIZE_DEFAULT));
+    json!({
+        "ui": f.ui,
+        "code": f.code,
+        "uiSize": f.ui_size,
+        "codeSize": f.code_size,
+        "limits": {
+            "uiSize": { "min": UI_SIZES.start(), "max": UI_SIZES.end(), "default": UI_SIZE_DEFAULT },
+            "codeSize": { "min": CODE_SIZES.start(), "max": CODE_SIZES.end(), "default": CODE_SIZE_DEFAULT },
+        },
+        "css": {
+            "--font-ui": f.ui.as_deref().map(|n| crate::fonts::css_value(crate::fonts::Slot::Ui, n)),
+            "--font-code": f.code.as_deref().map(|n| crate::fonts::css_value(crate::fonts::Slot::Code, n)),
+            "--font-ui-scale": ui_scale.map(css_number),
+            "--font-code-scale": code_scale.map(css_number),
+        },
+    })
+}
+
+pub fn fonts() -> Value {
+    fonts_for_ui(&fonts_in(&load(), crate::fonts::valid_family))
+}
+
+/// Save the whole choice; a family that isn't installed or a size out of range is refused.
+pub fn set_fonts(f: &Fonts) -> Result<Value, String> {
+    set_fonts_in(file(), f, crate::fonts::valid_family)
+}
+
+fn set_fonts_in(file: &JsonFile, f: &Fonts, valid: impl Fn(&str) -> bool) -> Result<Value, String> {
+    for name in [&f.ui, &f.code].into_iter().flatten() {
+        if !valid(name) {
+            return Err(format!("{name:?} isn't a font installed on this machine"));
+        }
+    }
+    if f.ui_size.is_some_and(|n| !UI_SIZES.contains(&n)) {
+        return Err(format!("the interface size is {} to {} px", UI_SIZES.start(), UI_SIZES.end()));
+    }
+    if f.code_size.is_some_and(|n| !CODE_SIZES.contains(&n)) {
+        return Err(format!("the code size is {} to {} px", CODE_SIZES.start(), CODE_SIZES.end()));
+    }
+    let saved = json!({ "ui": f.ui, "code": f.code, "uiSize": f.ui_size, "codeSize": f.code_size });
+    file.update(|all: &mut Map<String, Value>| {
+        all.insert("fonts".into(), saved);
+        Ok(())
+    })?;
+    Ok(fonts_for_ui(&fonts_in(&file.read(), valid)))
+}
+
 // ── tool cards ───────────────────────────────────────────────────────────────
 /// How a tool call's card opens in a chat: "auto" (open while it runs), "collapsed"
 /// or "expanded". Keyed by the card's kind of tool: a name (`ToolSearch`, `Load skill`,
@@ -418,6 +505,7 @@ pub fn general() -> Value {
     json!({
         "appearance": appearance_in(&s),
         "theme": theme_in(&s),
+        "fonts": fonts_for_ui(&fonts_in(&s, crate::fonts::valid_family)),
         "toolCards": tool_cards_in(&s),
         "teachAgents": teach_agents_in(&s),
         "trustReadOnly": trust_read_only_in(&s),
@@ -576,6 +664,72 @@ mod tests {
         assert!(set_layout_in(&file, dup).is_err());
         assert_eq!(file.read::<Map<String, Value>>()["layout"]["root"]["a"]["id"], "p1");
         assert_eq!(file.read::<Map<String, Value>>()["layout"]["root"]["type"], "split");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fonts_default_to_the_system_look_and_round_trip() {
+        let installed = |n: &str| crate::fonts::plain_name(n) && ["Georgia", "Menlo"].contains(&n);
+        let dir = std::env::temp_dir().join(format!("yaah-fonts-{}", crate::random::token()));
+        let file = JsonFile::new(dir.join("settings.json"), false);
+        file.update(|m: &mut Map<String, Value>| Ok(m.insert("appearance".into(), json!("dark")))).unwrap();
+
+        let none = fonts_for_ui(&fonts_in(&file.read(), installed));
+        assert_eq!(
+            (none["ui"].clone(), none["code"].clone(), none["uiSize"].clone(), none["codeSize"].clone()),
+            (Value::Null, Value::Null, Value::Null, Value::Null)
+        );
+        assert!(none["css"].as_object().unwrap().values().all(Value::is_null), "the default sets no CSS: index.css's look stays");
+        assert_eq!(none["limits"]["uiSize"], json!({ "min": 12, "max": 20, "default": 14 }));
+
+        let chosen = Fonts { ui: Some("Georgia".into()), code: Some("Menlo".into()), ui_size: Some(16), code_size: Some(15) };
+        let back = set_fonts_in(&file, &chosen, installed).unwrap();
+        assert_eq!(fonts_in(&file.read(), installed), chosen, "round-trips");
+        assert_eq!(back["css"]["--font-ui"], r#""Georgia", "Geist Variable", system-ui, sans-serif"#);
+        assert!(back["css"]["--font-code"].as_str().unwrap().starts_with(r#""Menlo", "#));
+        assert_eq!(back["css"]["--font-ui-scale"], "1.1429");
+        assert_eq!(back["css"]["--font-code-scale"], "1.25");
+        assert_eq!(file.read::<Map<String, Value>>()["appearance"], "dark", "other settings stay");
+
+        // Reset: back to the defaults.
+        set_fonts_in(&file, &Fonts::default(), installed).unwrap();
+        assert_eq!(fonts_in(&file.read(), installed), Fonts::default());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn fonts_are_checked_when_saved_and_when_read() {
+        let installed = |n: &str| crate::fonts::plain_name(n) && ["Georgia", "Menlo"].contains(&n);
+        let dir = std::env::temp_dir().join(format!("yaah-fonts-{}", crate::random::token()));
+        let file = JsonFile::new(dir.join("settings.json"), false);
+        let injection = r#"Georgia", sans-serif; } body { display: none } :root { --x: ""#;
+        for bad in [
+            Fonts { ui: Some("Comic Sans Nowhere".into()), ..Fonts::default() },
+            Fonts { code: Some(injection.into()), ..Fonts::default() },
+            Fonts { ui_size: Some(11), ..Fonts::default() },
+            Fonts { ui_size: Some(21), ..Fonts::default() },
+            Fonts { code_size: Some(9), ..Fonts::default() },
+            Fonts { code_size: Some(255), ..Fonts::default() },
+        ] {
+            assert!(set_fonts_in(&file, &bad, installed).is_err(), "{bad:?}");
+        }
+        assert!(file.read::<Map<String, Value>>().get("fonts").is_none(), "nothing refused was written");
+        for edge in [12, 20] {
+            assert!(set_fonts_in(&file, &Fonts { ui_size: Some(edge), ..Fonts::default() }, installed).is_ok());
+        }
+
+        // A crafted settings.json: every odd value reads as the default, and no CSS comes of it.
+        let s: Map<String, Value> = serde_json::from_value(json!({
+            "fonts": { "ui": injection, "code": "Uninstalled Mono", "uiSize": 99, "codeSize": "13" }
+        }))
+        .unwrap();
+        assert_eq!(fonts_in(&s, installed), Fonts::default());
+        let css = &fonts_for_ui(&fonts_in(&s, installed))["css"];
+        assert!(css.as_object().unwrap().values().all(Value::is_null), "{css}");
+        let s: Map<String, Value> = serde_json::from_value(json!({ "fonts": "Georgia" })).unwrap();
+        assert_eq!(fonts_in(&s, installed), Fonts::default(), "not an object");
+        let s: Map<String, Value> = serde_json::from_value(json!({ "fonts": { "ui": "Georgia", "uiSize": 12.5 } })).unwrap();
+        assert_eq!(fonts_in(&s, installed), Fonts { ui: Some("Georgia".into()), ..Fonts::default() }, "sizes are whole px");
         std::fs::remove_dir_all(dir).unwrap();
     }
 

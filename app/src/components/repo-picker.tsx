@@ -307,7 +307,7 @@ export function RepoPicker({ open: isOpen, onClose, exclude, onAdd, addTo }: Pro
                       <span className="truncate text-sm font-medium">{r.name}</span>
                       {r.remote && r.remote !== r.name && <span className="truncate text-xs text-muted-foreground">{r.remote}</span>}
                     </div>
-                    <div className="truncate font-mono text-[11px] text-muted-foreground">{compactPath(r.path)}</div>
+                    <div className="truncate font-mono text-[0.6875rem] text-muted-foreground">{compactPath(r.path)}</div>
                   </div>
                   {added ? (
                     <Badge variant="outline">added</Badge>

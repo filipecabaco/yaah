@@ -28,6 +28,12 @@ it("parses only the block that changed as text is appended", () => {
   expect(parses.texts).toEqual(["\n- one"]);
 });
 
+it("parses prose with stray < once: the compatibility pass escapes them, so nothing needs repairing", () => {
+  parses.texts.length = 0;
+  render(<Markdown>{"Vec<T> and <Enter> to go, if a<b then {c}, see <https://example.com>"}</Markdown>);
+  expect(parses.texts).toHaveLength(1);
+});
+
 it("reuses parsed blocks when the same text is drawn again (a chat opened again)", () => {
   const text = "A reply that was drawn before.\n\nWith two blocks, one *emphasised*.";
   render(<Markdown>{text}</Markdown>).unmount();
@@ -37,18 +43,16 @@ it("reuses parsed blocks when the same text is drawn again (a chat opened again)
   expect(container.querySelector("em")?.textContent).toBe("emphasised");
 });
 
-it("parses only the last block of a streamed MDX reply, keeping an open element's blocks together", async () => {
-  const { loadMdx } = await import("@/lib/mdx");
-  await loadMdx();
+it("parses only the last block of a streamed MDX reply, keeping an open element's blocks together", () => {
   const head = '---\ntitle: Realtime\n---\n\nimport { Admonition } from "ui";\n\n<Admonition type="note">\n\nFirst.\n\n</Admonition>\n\n';
-  const { rerender, container } = render(<Markdown>{head + "Then"}</Markdown>);
+  const { rerender, container } = render(<Markdown>{head + "Next"}</Markdown>);
   expect(container.querySelector('[data-mdx="admonition"]')).toHaveTextContent("First.");
   parses.texts.length = 0;
-  rerender(<Markdown>{head + "Then we"}</Markdown>);
-  expect(parses.texts).toEqual(["\nThen we"]);
+  rerender(<Markdown>{head + "Next we"}</Markdown>);
+  expect(parses.texts).toEqual(["\nNext we"]);
   // An element still open takes in the blocks after it, so it is parsed whole as it grows.
   parses.texts.length = 0;
-  rerender(<Markdown>{head + "Then we\n\n<Tip>\n\nOne\n\nTwo"}</Markdown>);
+  rerender(<Markdown>{head + "Next we\n\n<Tip>\n\nOne\n\nTwo"}</Markdown>);
   expect(parses.texts).toEqual(["\n<Tip>\n\nOne\n\nTwo\n</Tip>"]);
   expect(container.querySelector('[data-type="tip"]')).toHaveTextContent("One");
 });

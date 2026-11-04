@@ -69,7 +69,7 @@ export function ModelPicker({
           <span className={cn("truncate", !value && "text-muted-foreground")}>
             {current?.label ?? value ?? (loading ? "Loading models…" : (none ?? "Pick a model"))}
           </span>
-          {value && <span className="truncate font-mono text-[11px] text-muted-foreground">{value}</span>}
+          {value && <span className="truncate font-mono text-[0.6875rem] text-muted-foreground">{value}</span>}
         </span>
         {current && <ModelMeta model={current} />}
         {loading ? (
@@ -100,7 +100,7 @@ export function ModelPicker({
               <CommandItem key={m.id} value={m.id} keywords={[m.label]} data-checked={m.id === value} onSelect={() => pick(m.id)}>
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate">{m.label}</span>
-                  <span className="truncate font-mono text-[11px] text-muted-foreground">{m.id}</span>
+                  <span className="truncate font-mono text-[0.6875rem] text-muted-foreground">{m.id}</span>
                 </span>
                 <ModelMeta model={m} />
               </CommandItem>

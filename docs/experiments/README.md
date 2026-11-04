@@ -3,6 +3,7 @@
 Screenshots and notes from experiments and visual checks, one folder per experiment (`YYYY-MM-DD-topic/`), each with a
 README saying what was tried and what each image shows.
 
+- [2026-11-04-mdx-default](2026-11-04-mdx-default/): one MDX-first Markdown renderer for every text: the MDX docs reply and a plain Markdown reply (links, a code fence) look as before, light and dark
 - [2026-11-03-mdx](2026-11-03-mdx/): an MDX docs section (Supabase style) in an agent reply, drawn as data with nothing run: frontmatter folded, imports hidden, `{expressions}` as code, Admonition, Tabs, Steps, details and an unknown component, light and dark
 - [2026-11-03-permissions](2026-11-03-permissions/): answered permission requests folded into their tool cards as chips, reads in the chat's folders and trusted MCP servers answered without asking, and runs of tool calls grouped into one row (light and dark)
 - [2026-11-03-chat-bubbles](2026-11-03-chat-bubbles/): the agent's reply in a soft muted bubble on the left (before/after at 2000, 1440 and a 420 px pane, light and dark, plus WKWebView), and why the user's bubble had sat mid-column
@@ -21,3 +22,6 @@ README saying what was tried and what each image shows.
 - [2026-11-03-website](2026-11-03-website/): screenshots of the app (browser mock, 2×, light and dark) used by the website in `site/`, and full-page checks of the site at 1440, 1024 and 375 px
 - [earlier-ui-checks](earlier-ui-checks/): visual checks from earlier builds (command palette, diffs, quick chats, showcase)
 - [2026-11-04-pane-close](2026-11-04-pane-close/): quick close button on every split pane (two and three panes, light and dark, sidebar hidden)
+- [2026-11-04-appearance-icons](2026-11-04-appearance-icons/): Settings Appearance mode cards, icon alignment before and after (light and dark)
+- [2026-11-04-expand-fill](2026-11-04-expand-fill/): Expand dialog fills with the main scroll area (file-view before and after, logs, git graph, tests, db query; light and dark)
+- [2026-11-04-fonts](2026-11-04-fonts/): Settings Fonts (interface and code font and size): the section, the pickers, chat, terminal, map and diff at 12 and 20 px, light and dark

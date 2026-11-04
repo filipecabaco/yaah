@@ -1,5 +1,5 @@
 {
-  "about": "Base components for agent-built UI. Rust validates trees against this file (src-tauri/src/ui_library.rs) and React renders them (src/components/ui-render.tsx). Keep the two in step when adding one. Each primitive lists the libraries it is built on in `uses`; a component's libraries are the union over the primitives it contains.",
+  "about": "Base components for agent-built UI. Rust validates trees against this file (src-tauri/src/ui_library.rs) and React renders them (src/components/ui-render.tsx). Keep the two in step when adding one. Each primitive lists the libraries it is built on in `uses`; a component's libraries are the union over the primitives it contains. Expanded (the Expand button, F), the UI fills a large dialog: `textfile`, `filetree`, `json`, `table`, `gitgraph`, `gitstatus`, `diffstat`, `wordcount` and `diffreview` give their main scroll area all the height left, with no cap. For any other node (a `stack`, `list`, `code`, `markdown`…) that should take it, set `\"grow\": true` on the node itself (next to `type`, not in `props`): expanded it fills the height and scrolls inside. Mark one node; the rest stay at their natural size, top-aligned.",
   "primitives": {
     "stack": {
       "description": "Lays children out in a row or column.",
@@ -130,7 +130,7 @@
       }
     },
     "markdown": {
-      "description": "Markdown text (GitHub flavoured). MDX renders too, as data (nothing runs): frontmatter folded, imports hidden, `{expressions}` as code, common docs components (Admonition, Tabs, Steps, Cards, details) drawn natively.",
+      "description": "Markdown text (GitHub flavoured), read as MDX and drawn as data (nothing runs): frontmatter folded, imports and comments hidden, `{braces}` as text, simple HTML (`<br>`, `<kbd>`) and common docs components (Admonition, Tabs, Steps, Cards, details) drawn natively.",
       "uses": [
         "react-markdown",
         "remark-gfm"

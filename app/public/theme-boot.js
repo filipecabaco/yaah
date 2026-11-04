@@ -21,3 +21,17 @@
     // No storage, or a value from something else: the OS setting decides, as on a first start.
   }
 })();
+// The fonts and sizes of the last run (src/lib/fonts.ts), so text doesn't jump when the settings arrive.
+(function () {
+  try {
+    var saved = JSON.parse(localStorage.getItem("yaah:fonts") || "null");
+    if (!saved || typeof saved !== "object") return;
+    // Only what Rust builds (settings.rs `fonts_for_ui`): a quoted family and a plain stack, or a number.
+    var family = /^"[^"\\]+"(, ("[A-Za-z0-9 -]+"|[A-Za-z0-9-]+))+$/;
+    var number = /^\d{1,2}(\.\d{1,4})?$/;
+    var shape = { "--font-ui": family, "--font-code": family, "--font-ui-scale": number, "--font-code-scale": number };
+    for (var k in shape) if (typeof saved[k] === "string" && shape[k].test(saved[k])) document.documentElement.style.setProperty(k, saved[k]);
+  } catch (e) {
+    // No storage: the default fonts until the settings arrive.
+  }
+})();

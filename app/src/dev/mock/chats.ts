@@ -478,11 +478,47 @@ const folderRequest: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
+/** Library components with their first example, one UI each (file-view as .mdx and as source): to try Expand on every kind of scroll area. */
+const MDX_SAMPLE = `# Release notes\n\n${Array.from({ length: 20 }, (_, i) => `## Section ${i + 1}\n\nParagraph ${i + 1} with some **bold** text and \`code\`.\n`).join("\n")}`;
+const expandFill: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  ...(
+    [
+      ["file-view", { text: MDX_SAMPLE, path: "docs/release.mdx" }],
+      ["file-view", undefined],
+      ["container-logs", undefined],
+      ["test-report", undefined],
+      ["git-graph", undefined],
+      ["db-query", undefined],
+    ] as [string, Record<string, unknown> | undefined][]
+  ).map(([name, props], i): Recording[number] => {
+    const c = bundledComponents.find((b) => b.name === name);
+    const given = props ?? c?.examples?.[0]?.props ?? {};
+    return {
+      event: "session-entry",
+      index: i + 1,
+      entry: {
+        type: "ui",
+        askId: null,
+        answer: null,
+        title: null,
+        component: c?.name ?? name,
+        version: c?.version ?? 1,
+        tree: { type: "$component", name: c?.name, version: c?.version ?? 1, props: given, tree: c?.tree },
+        props: given,
+      },
+    };
+  }),
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
 const routes: [RegExp, Recording][] = [
   [/command output|tool cards/i, commandOutput],
   [/diff of my project|workspace of yaah|request folders/i, folderRequest],
   [/big diff/i, bigDiff],
+  [/expand fill/i, expandFill],
   [/assembl|deploys/i, assembling],
   [/\bmdx\b|docs page/i, mdxReply],
   [/\blinks?\b|markdown/i, markdownReply],

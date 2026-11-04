@@ -145,7 +145,7 @@ export function ComponentsView({
         <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3" aria-label="Components">
           {groups.map(([source, list]) => (
             <div key={source} className="flex flex-col gap-0.5">
-              <h2 className="px-2 pt-3 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+              <h2 className="px-2 pt-3 pb-1 text-[0.6875rem] font-medium tracking-wide text-muted-foreground uppercase">
                 {source === "yaah" ? "Provided by yaah" : label(source)}
               </h2>
               {list.map((c) => (
@@ -314,7 +314,7 @@ function ComponentDetail({
           <div className="flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
             Built on
             {c.uses.map((u) => (
-              <Badge key={u} variant="outline" className="font-mono text-[10px]">
+              <Badge key={u} variant="outline" className="font-mono text-[0.625rem]">
                 {u}
               </Badge>
             ))}

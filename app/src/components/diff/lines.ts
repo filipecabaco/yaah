@@ -2,11 +2,14 @@
 // windowing, the wrap preference, and finding a hunk to scroll to.
 import { useState } from "react";
 import type { DiffFile, Hunk, Line } from "@/components/diff/model";
+import { codeScale } from "@/lib/fonts";
 
 /** Columns a tab takes. Browsers default to 8, which turns tab-indented code into a staircase. */
 export const TAB = 4;
-/** Height of one row (a hunk header or a line) when lines don't wrap. */
+/** Height of one row (a hunk header or a line) when lines don't wrap, at the default code size (index.css `--code-row`). */
 export const ROW = 20;
+/** A row's height in px now: `ROW` scaled with the code size (Settings → Fonts). */
+export const rowHeight = (scale = codeScale()) => ROW * scale;
 /** Rows drawn above and below what's on screen. */
 export const OVERSCAN = 40;
 /** Past this many rows a file stays windowed (and unwrapped): wrapped rows have no fixed height to window by. */
@@ -69,7 +72,7 @@ export function hunkTop(body: HTMLElement, starts: number[], index: number): num
   const top = rows?.offsetTop ?? 0;
   const header = rows?.querySelector<HTMLElement>(`[data-hunk-header="${index}"]`);
   if (rows?.dataset.wrapped === "true" && header) return top + header.offsetTop - sticky;
-  return top + (starts[index] ?? 0) * ROW - sticky;
+  return top + (starts[index] ?? 0) * rowHeight() - sticky;
 }
 
 /** A hunk as unified diff text (its header and lines), for the clipboard or a message. */

@@ -119,12 +119,12 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
             <LayoutPanelTop className="size-3" />
             {entry.title ?? (entry.component ? null : "UI")}
             {entry.askId && entry.answer == null && (
-              <Badge variant="secondary" className="h-4 px-1 text-[10px]">
+              <Badge variant="secondary" className="h-4 px-1 text-[0.625rem]">
                 waiting for you
               </Badge>
             )}
             {entry.component && entry.version != null && (
-              <Badge variant="outline" className="h-4 px-1 font-mono text-[10px]">
+              <Badge variant="outline" className="h-4 px-1 font-mono text-[0.625rem]">
                 {entry.component} v{entry.version}
               </Badge>
             )}

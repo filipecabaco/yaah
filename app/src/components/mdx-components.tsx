@@ -1,6 +1,5 @@
 // The components MDX boxes draw as (see lib/mdx-render.ts, which builds the
 // boxes): yaah's own primitives, given only the literal props the parse kept.
-// Loaded with the MDX renderer, only when a text looks like MDX.
 import { Children, useState, type ReactNode } from "react";
 import { CircleAlert, Info, Lightbulb, OctagonAlert, TriangleAlert, type LucideIcon } from "lucide-react";
 import { cn } from "cn";

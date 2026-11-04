@@ -1,26 +1,26 @@
-// The one markdown renderer for agent text (chat replies and agent-built UI).
+// The one Markdown renderer for agent text (chat replies and agent-built UI).
+// Every text is read as MDX, made to read like plain Markdown where MDX differs
+// (lib/mdx.ts), so Markdown draws as it always has and MDX (frontmatter, imports,
+// `<Components>`) is drawn as data, never run (lib/mdx-render.ts).
 // Agent and third-party text is untrusted, so:
-// - no raw HTML: react-markdown escapes it (no rehype-raw), and its URL
-//   transform already drops `javascript:` and other unsafe schemes;
+// - no raw HTML: tags draw as yaah's components or a few plain elements, never
+//   with their attributes; react-markdown's URL transform drops `javascript:`
+//   and other unsafe schemes;
 // - links never navigate the app's own webview: http(s) opens in the system
 //   browser, anything else is inert text;
 // - remote images don't load until clicked (no tracking pixels on render);
-//   data: images show directly;
-// - MDX (frontmatter, imports, `<Components>`, `{expressions}`) is drawn as
-//   data and never run: see lib/mdx.ts and components/mdx.tsx. Text that doesn't
-//   look like MDX takes the plain Markdown path, unchanged.
+//   data: images show directly.
 //
 // Text is drawn block by block (lib/markdown-blocks.ts): each top-level block is
 // parsed once and kept, so a streamed reply re-parses only its last block, and
 // reopening a chat reuses blocks parsed before.
-import { Fragment, memo, useEffect, useMemo, useState, useSyncExternalStore, type ComponentProps, type ReactNode } from "react";
-import ReactMarkdown, { type Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Fragment, memo, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import type { Components } from "react-markdown";
 import { ImageOff } from "lucide-react";
 import { hostOf, isWebUrl, openExternal } from "@/lib/links";
 import { Lru } from "@/lib/lru";
-import { splitBlocks } from "@/lib/markdown-blocks";
-import { loadMdx, looksLikeMdx, mdxBlocks, mdxRenderer, onMdxLoaded, prepareMdx, splitFrontmatter } from "@/lib/mdx";
+import { mdxBlocks, prepareMdx, splitFrontmatter } from "@/lib/mdx";
+import { MDX_COMPONENTS, renderMdx } from "@/lib/mdx-render";
 
 function Link({ href, children }: ComponentProps<"a">) {
   if (!isWebUrl(href)) return <span className="underline decoration-dotted">{children}</span>;
@@ -63,62 +63,31 @@ export function SafeImage({ src, alt, width, className }: { src: unknown; alt?: 
 const components: Components = {
   a: Link,
   img: ({ src, alt }) => <SafeImage src={src} alt={alt} />,
+  ...MDX_COMPONENTS,
 };
-const plugins = [remarkGfm];
 
 /** Parsed blocks by their text, across every message (React elements can be shown again anywhere). */
 const parsed = new Lru<string, ReactNode>(2000);
-const parsedMdx = new Lru<string, ReactNode>(500);
 
 /** One block's elements, from the cache or parsed now. */
-function renderBlock(text: string): ReactNode {
+const Block = memo(function Block({ text }: { text: string }) {
   let out = parsed.get(text);
   if (out === undefined) {
     // react-markdown's `Markdown` is a plain function of its options (no hooks), so its elements can be kept.
-    out = ReactMarkdown({ children: text, remarkPlugins: plugins, components });
+    out = renderMdx(text, components);
     parsed.set(text, out);
   }
   return out;
-}
-
-/** One block of MDX; plain Markdown if it can't be parsed (or the MDX renderer hasn't loaded yet). */
-function renderMdxBlock(text: string): ReactNode {
-  const mdx = mdxRenderer();
-  if (!mdx) return renderBlock(text);
-  let out = parsedMdx.get(text);
-  if (out === undefined) {
-    try {
-      out = mdx.renderMdx(text, components);
-    } catch {
-      out = renderBlock(text);
-    }
-    parsedMdx.set(text, out);
-  }
-  return out;
-}
-
-const Block = memo(function Block({ text, mdx }: { text: string; mdx: boolean }) {
-  return mdx ? renderMdxBlock(text) : renderBlock(text);
 });
 
-/** The text as drawn: plain Markdown blocks, or MDX's frontmatter and blocks. */
-function prepare(text: string, whole: boolean): { mdx: boolean; yaml: string | null; blocks: string[] } {
-  if (!looksLikeMdx(text)) return { mdx: false, yaml: null, blocks: whole ? [text] : splitBlocks(text) };
+/** The text as drawn: its frontmatter, and the rest in blocks. */
+function prepare(text: string, whole: boolean): { yaml: string | null; blocks: string[] } {
   const { yaml, body } = splitFrontmatter(text);
   const src = prepareMdx(body);
-  return { mdx: true, yaml, blocks: whole ? [src] : mdxBlocks(src) };
+  return { yaml, blocks: whole ? [src] : mdxBlocks(src) };
 }
 
-/** Whether the MDX renderer is in, loading it once `wanted`. */
-function useMdxRenderer(wanted: boolean): boolean {
-  const ready = useSyncExternalStore(onMdxLoaded, () => mdxRenderer() !== null);
-  useEffect(() => {
-    if (wanted && !ready) loadMdx().catch((e: unknown) => console.error("could not load the MDX renderer", e));
-  }, [wanted, ready]);
-  return ready;
-}
-
-/** MDX frontmatter: folded away, its YAML shown as text when opened. */
+/** Frontmatter: folded away, its YAML shown as text when opened. */
 function Frontmatter({ yaml }: { yaml: string }) {
   const title = /^title:[ \t]*(["']?)(.+?)\1[ \t]*$/m.exec(yaml)?.[2];
   return (
@@ -133,7 +102,6 @@ function Frontmatter({ yaml }: { yaml: string }) {
 
 function Rendered({ text, whole }: { text: string; whole: boolean }) {
   const doc = useMemo(() => prepare(text, whole), [text, whole]);
-  const mdx = useMdxRenderer(doc.mdx) && doc.mdx;
   return (
     <div className="markdown">
       {doc.yaml !== null && <Frontmatter yaml={doc.yaml} />}
@@ -141,7 +109,7 @@ function Rendered({ text, whole }: { text: string; whole: boolean }) {
         // The newline react-markdown puts between top-level blocks, so the DOM is the same as one whole render.
         <Fragment key={i}>
           {(i > 0 || doc.yaml !== null) && "\n"}
-          <Block text={b} mdx={mdx} />
+          <Block text={b} />
         </Fragment>
       ))}
     </div>

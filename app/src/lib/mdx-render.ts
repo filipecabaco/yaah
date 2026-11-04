@@ -1,8 +1,8 @@
-// MDX drawn as data (loaded only when a text looks like MDX; see lib/mdx.ts).
-// The MDX syntax is parsed (micromark-extension-mdx, which knows no JavaScript)
-// and turned into plain Markdown nodes and boxes for a few of yaah's own
-// components (components/mdx-components.tsx). No expression, attribute or
-// import is ever evaluated: there is no compiler here.
+// Markdown, read as MDX and drawn as data (the text side is lib/mdx.ts). The MDX
+// syntax is parsed (micromark-extension-mdx-jsx, which knows no JavaScript) and
+// turned into plain Markdown nodes and boxes for a few of yaah's own components
+// (components/mdx-components.tsx). No attribute or import is ever evaluated, and
+// there are no expressions: there is no compiler here.
 // - a small set of docs components map onto the app's primitives: admonitions
 //   (`Admonition`, `Callout`, `Note`, `Tip`, `Info`, `Warning`, `Caution`,
 //   `Danger`) to an alert, `Tabs` with `TabPanel`/`Tab`/`TabItem` to tabs,
@@ -11,13 +11,12 @@
 // - plain HTML elements draw as themselves, without their attributes;
 // - any other component shows its children in a quiet box labelled with its name;
 // - props are only ever string, number or boolean literals; other attribute
-//   expressions are dropped, and `{expressions}` in text show as code.
-import type { ReactNode } from "react";
+//   expressions are dropped.
+import { createElement, type ReactNode } from "react";
 import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { mdx } from "micromark-extension-mdx";
+import { mdxJsx } from "micromark-extension-mdx-jsx";
 import { mdxJsxFromMarkdown } from "mdast-util-mdx-jsx";
-import { mdxExpressionFromMarkdown } from "mdast-util-mdx-expression";
 import {
   Admonition,
   MdxCard,
@@ -32,7 +31,7 @@ import {
   UnknownInline,
 } from "@/components/mdx-components";
 import { isWebUrl } from "@/lib/links";
-import { openTags } from "@/lib/mdx";
+import { ADMONITIONS, HTML, KINDS, TRANSPARENT, prepareMdx, scanJsx } from "@/lib/mdx";
 
 // ── The MDX tree, as far as this file reads it ──────────────────────────────
 
@@ -55,11 +54,16 @@ interface Node {
   props?: Map<string, Literal>;
 }
 
-/** Syntax only: MDX's JSX and `{…}` (no JavaScript parser, so nothing is even read as code). */
-function remarkMdxSyntax(this: { data(): object }) {
+/**
+ * Syntax only: MDX's JSX, with HTML and autolinks off (lib/mdx.ts writes
+ * autolinks as links). Indented code stays on unless the block has a component
+ * on its own lines, whose content may be indented as in MDX.
+ */
+function remarkMdxSyntax(this: { data(): object }, { indentedCode }: { indentedCode: boolean }) {
   const data = this.data() as { micromarkExtensions?: unknown[]; fromMarkdownExtensions?: unknown[] };
-  (data.micromarkExtensions ??= []).push(mdx());
-  (data.fromMarkdownExtensions ??= []).push(mdxJsxFromMarkdown(), mdxExpressionFromMarkdown());
+  const off = ["autolink", "htmlFlow", "htmlText", ...(indentedCode ? [] : ["codeIndented"])];
+  (data.micromarkExtensions ??= []).push(mdxJsx(), { disable: { null: off } });
+  (data.fromMarkdownExtensions ??= []).push(mdxJsxFromMarkdown());
 }
 
 /** MDX nodes into Markdown nodes and boxes for the components below. */
@@ -69,23 +73,6 @@ function remarkMdxAsData() {
   };
 }
 
-const ADMONITIONS = new Set(["Admonition", "Callout", "Note", "Tip", "Info", "Warning", "Caution", "Danger", "Important"]);
-// Maps, not objects: a tag or prop named `constructor` or `__proto__` must find nothing.
-const KINDS = new Map([
-  ["Tabs", "tabs"],
-  ["TabPanel", "tab"],
-  ["Tab", "tab"],
-  ["TabItem", "tab"],
-  ["details", "details"],
-  ["Details", "details"],
-  ["summary", "summary"],
-  ["Summary", "summary"],
-  ["Steps", "steps"],
-  ["Step", "step"],
-  ["Cards", "cards"],
-  ["CardGroup", "cards"],
-  ["Card", "card"],
-]);
 /** What each container lifts out of a paragraph of its own (a one-line `<Tab>…</Tab>`). */
 const CHILD_KIND = new Map([
   ["tabs", "tab"],
@@ -93,34 +80,13 @@ const CHILD_KIND = new Map([
   ["steps", "step"],
   ["cards", "card"],
 ]);
-/** HTML elements drawn as themselves, with no attributes. */
-const HTML = new Map([
-  ..."kbd sub sup mark u small abbr ul ol li table thead tbody tr th td blockquote h1 h2 h3 h4 h5 h6 hr br p pre code figure figcaption strong em del"
-    .split(" ")
-    .map((t): [string, string] => [t, t]),
-  ["b", "strong"],
-  ["i", "em"],
-  ["s", "del"],
-]);
-/** Wrappers whose children are shown in their place. */
-const TRANSPARENT = new Set(["", "div", "span", "section", "article", "main", "header", "footer", "center", "Fragment"]);
 
 function convert(nodes: Node[]): Node[] {
   return nodes.flatMap((node): Node[] => {
     switch (node.type) {
-      case "mdxFlowExpression":
-      case "mdxTextExpression": {
-        const value = node.value ?? "";
-        // `{/* a comment */}` is MDX's comment: nothing to show.
-        if (!value.trim() || /^\s*\/\*[\s\S]*\*\/\s*$/.test(value)) return [];
-        const code: Node = { type: "inlineCode", value: `{${value}}` };
-        return [node.type === "mdxFlowExpression" ? { type: "paragraph", children: [code] } : code];
-      }
       case "mdxJsxFlowElement":
       case "mdxJsxTextElement":
         return element(node, node.type === "mdxJsxFlowElement");
-      case "mdxjsEsm":
-        return [];
       case "paragraph": {
         // A component alone on its line (`<Note>Short.</Note>`) is a block, not text in a paragraph.
         const real = (node.children ?? []).filter((n) => !(n.type === "text" && !n.value?.trim()));
@@ -255,7 +221,8 @@ function element(node: Node, flow: boolean): Node[] {
   return [out];
 }
 
-const MDX_COMPONENTS = {
+/** The components the boxes draw as (Markdown's own `a` and `img` come from components/markdown.tsx). */
+export const MDX_COMPONENTS = {
   "mdx-admonition": Admonition,
   "mdx-tabs": MdxTabs,
   "mdx-tab": MdxTab,
@@ -269,7 +236,9 @@ const MDX_COMPONENTS = {
   "mdx-unknown-inline": UnknownInline,
 };
 
-const plugins = [remarkMdxSyntax, remarkGfm, remarkMdxAsData] as Options["remarkPlugins"];
+const plugins = (indentedCode: boolean) => [[remarkMdxSyntax, { indentedCode }], remarkGfm, remarkMdxAsData] as Options["remarkPlugins"];
+const WITH_INDENTED_CODE = plugins(true);
+const WITHOUT_INDENTED_CODE = plugins(false);
 
 // ── Parsing, with repairs ───────────────────────────────────────────────────
 
@@ -282,8 +251,8 @@ function offsetOf(src: string, line: number, column: number): number {
 
 /**
  * `src` changed so that the error `e` won't happen again, or null if it can't be.
- * A tag left open (a reply still streaming) is closed at the end; otherwise the
- * `<` or `{` that started the bad construct is escaped, so it shows as text.
+ * A tag left open is closed at the end; otherwise the `<` that started the bad
+ * construct is escaped, so it shows as text.
  */
 function repair(src: string, e: unknown, tried: Set<string>): string | null {
   const err = e as { message?: string; line?: number; column?: number };
@@ -298,28 +267,41 @@ function repair(src: string, e: unknown, tried: Set<string>): string | null {
   const column = where ? Number(where[2]) : err.column;
   if (!line || !column) return null;
   for (let i = Math.min(offsetOf(src, line, column), src.length - 1); i >= 0; i--) {
-    if ((src[i] === "<" || src[i] === "{") && src[i - 1] !== "\\") return `${src.slice(0, i)}\\${src.slice(i)}`;
+    if (src[i] === "<" && src[i - 1] !== "\\") return `${src.slice(0, i)}\\${src.slice(i)}`;
   }
   return null;
 }
 
 /**
- * One block of MDX as React elements. Malformed or partial MDX is repaired a few
- * times (see `repair`); past that this throws, and the caller draws plain Markdown.
+ * One block of prepared text (lib/mdx.ts) as React elements; never throws. An
+ * element a streaming reply hasn't closed yet is closed, and a block that still
+ * won't parse is repaired a few times (see `repair`). Past that, every `<` in it
+ * is shown as text, and if even that fails, the whole block is.
  */
-export function renderMdx(src: string, base: Components): ReactNode {
-  const components = { ...base, ...MDX_COMPONENTS } as Components;
+export function renderMdx(src: string, components: Components): ReactNode {
+  const { open, flow } = scanJsx(src);
+  const remarkPlugins = flow ? WITHOUT_INDENTED_CODE : WITH_INDENTED_CODE;
+  const parse = (children: string) => ReactMarkdown({ children, remarkPlugins, components });
   const tried = new Set<string>();
-  // Elements a streaming reply hasn't closed yet are closed up front (one parse, not a failed one and a repair).
-  for (const name of openTags(src).reverse()) src += `\n</${name}>`;
+  // Closed up front: one parse, not a failed one and a repair.
+  let text =
+    src +
+    open
+      .reverse()
+      .map((name) => `\n</${name}>`)
+      .join("");
   for (let attempt = 0; attempt < 16; attempt++) {
     try {
-      return ReactMarkdown({ children: src, remarkPlugins: plugins, components });
+      return parse(text);
     } catch (e) {
-      const next = repair(src, e, tried);
-      if (next === null) throw e;
-      src = next;
+      const next = repair(text, e, tried);
+      if (next === null) break;
+      text = next;
     }
   }
-  throw new Error("MDX could not be repaired");
+  try {
+    return parse(prepareMdx(src, { jsx: false }));
+  } catch {
+    return createElement("p", null, src);
+  }
 }

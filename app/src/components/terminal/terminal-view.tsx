@@ -11,7 +11,7 @@ import { terminalShortcut } from "@/lib/shortcuts";
 import { frameBytes, terminalApi, type TerminalAttached, type TerminalExit, type TerminalFrame } from "@/lib/terminal-api";
 import { cn } from "@/lib/utils";
 import { loadEngine, type TerminalEngine } from "./engine";
-import { onThemeChange, readTerminalTheme, TERMINAL_FONT } from "./theme";
+import { onThemeChange, readTerminalFont, readTerminalTheme } from "./theme";
 
 /** Acknowledge at least this often (bytes drawn), so Rust's reader never waits long. */
 const ACK_EVERY = 64 << 10;
@@ -29,6 +29,7 @@ export type TerminalViewProps = {
   /** Bytes to show when the terminal is gone from Rust (a released agent terminal after a restart). */
   replay?: Uint8Array | null;
   scrollback?: number;
+  /** At the default code size; Settings → Fonts scales it (theme.ts `readTerminalFont`). */
   fontSize?: number;
   className?: string;
   onAttached?: (info: TerminalAttached) => void;
@@ -126,8 +127,7 @@ export function TerminalView({
         interactive: interactive && !info?.agent,
         renderer,
         theme: readTerminalTheme(el),
-        fontFamily: TERMINAL_FONT,
-        fontSize,
+        ...readTerminalFont(fontSize),
         scrollback,
         size,
         onData: (d) => void terminalApi.write(terminalId, d).catch((e: unknown) => console.error("terminal write", e)),
@@ -176,7 +176,14 @@ export function TerminalView({
       });
     });
     ro.observe(el);
-    const stopTheme = onThemeChange(() => engine?.setTheme(readTerminalTheme(el)));
+    // The theme and the fonts are both variables on the root: a change to either redraws, and a new
+    // code font or size changes the cell size, so the grid is fitted again (and the PTY told).
+    const stopTheme = onThemeChange(() => {
+      if (!engine) return;
+      engine.setTheme(readTerminalTheme(el));
+      const font = readTerminalFont(fontSize);
+      if (engine.setFont(font.fontFamily, font.fontSize) && !fixedSize) engine.fit();
+    });
     // Keys the terminal leaves to the app run here; the rest stay in the terminal (the app never sees ⌘N or Ctrl+L).
     const onKey = (e: KeyboardEvent) => {
       const hit = terminalShortcut(e);

@@ -210,7 +210,10 @@ function HunkView({ file, hunk, index, wrap }: { file: DiffFile; hunk: Hunk; ind
   const ask = chat ? () => askAbout(chat, file, hunk) : null;
   return (
     // Right-clicking the hunk offers the same in the enclosing menu (e.g. a tool card's).
-    <div className="font-mono text-xs" ref={ask ? menuActions([{ label: "Ask about this", icon: <MessageSquareText />, onSelect: ask }]) : undefined}>
+    <div
+      className="font-mono text-code"
+      ref={ask ? menuActions([{ label: "Ask about this", icon: <MessageSquareText />, onSelect: ask }]) : undefined}
+    >
       <HunkHeader hunk={hunk} index={index} tools={ask && <AskButton onClick={ask} />} />
       {hunk.lines.map((l, i) => (
         <DiffLine key={i} line={l} wrap={wrap} />
@@ -360,7 +363,7 @@ function Review({
                     <Counts file={f} />
                   </span>
                   <span className="flex items-center gap-2 pl-5">
-                    <span className="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">
+                    <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-muted-foreground">
                       {f.path.split("/").slice(0, -1).join("/") || "."}
                     </span>
                     <Bar file={f} max={max} />

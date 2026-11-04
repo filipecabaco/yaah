@@ -24,9 +24,9 @@ type Result = { columns: string[]; rows: Record<string, unknown>[]; truncated: b
 type Schema = { tables: { schema: string; table: string; columns: { name: string; type: string }[] }[] };
 
 const theme = EditorView.theme({
-  "&": { fontSize: "12px", backgroundColor: "transparent" },
+  "&": { fontSize: "var(--text-code)", backgroundColor: "transparent" },
   "&.cm-focused": { outline: "none" },
-  ".cm-content": { fontFamily: "var(--font-mono, ui-monospace, monospace)", padding: "8px 0" },
+  ".cm-content": { fontFamily: "var(--font-code)", padding: "8px 0" },
   ".cm-gutters": { backgroundColor: "transparent", border: "none", color: "var(--muted-foreground)" },
   ".cm-activeLine, .cm-activeLineGutter": { backgroundColor: "color-mix(in oklab, var(--muted) 60%, transparent)" },
   ".cm-tooltip": { backgroundColor: "var(--popover)", color: "var(--popover-foreground)", border: "1px solid var(--border)", borderRadius: "6px" },
@@ -198,7 +198,9 @@ export default function UiSql({ connection, sql = "", limit, title }: { connecti
             ))}
           </select>
           {title && <span className="truncate text-xs text-muted-foreground">{title}</span>}
-          <span className="ml-auto text-[11px] text-muted-foreground">{tables != null ? `${plural(tables, "table")} · read-only` : "read-only"}</span>
+          <span className="ml-auto text-[0.6875rem] text-muted-foreground">
+            {tables != null ? `${plural(tables, "table")} · read-only` : "read-only"}
+          </span>
           {history.length > 1 && (
             <label className="flex items-center gap-1 text-xs text-muted-foreground" title="Earlier queries">
               <History className="size-3.5" />

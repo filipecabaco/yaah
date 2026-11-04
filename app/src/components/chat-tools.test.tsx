@@ -204,8 +204,10 @@ describe("a tool card's text", () => {
     expect(pre.className).not.toMatch(/(^|\s)overflow-auto(\s|$)/);
     expect(pre.className).not.toMatch(/(^|\s)h-\d/);
     expect(pre.className).toContain("max-h-96");
-    // One line of text plus its padding: line-height 1.25 rem, never under the padding.
-    expect(pre.className).toContain("leading-5");
+    // One line of text plus its padding: a code row's line height (1.25 rem at the default sizes), never under the padding.
+    expect(pre.className).toContain("leading-(--code-row)");
+    // In the code size (Settings → Fonts), which a text colour doesn't merge away.
+    expect(pre.className).toContain("text-code");
   });
 
   it("wraps plain output of a call that worked, in the usual colour", async () => {

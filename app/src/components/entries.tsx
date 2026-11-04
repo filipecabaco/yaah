@@ -362,7 +362,7 @@ function Pre({ children, layout = "prose", failed = false }: { children: string;
     <pre
       data-layout={layout}
       className={cn(
-        "max-h-96 rounded-md bg-muted px-2 pt-2 font-mono text-xs leading-5 [tab-size:4]",
+        "max-h-96 rounded-md bg-muted px-2 pt-2 font-mono text-code leading-(--code-row) [tab-size:4]",
         layout === "code" ? "overflow-auto pb-3 whitespace-pre" : "overflow-y-auto pb-2 [overflow-wrap:anywhere] break-words whitespace-pre-wrap",
         failed && "bg-destructive/5 text-destructive",
       )}
@@ -411,7 +411,7 @@ function AllowedChip({ entry }: { entry: PermissionEntry }) {
   if (!chip) return null;
   const said = chip.reason ? `${chip.label}: ${chip.reason}` : chip.label;
   return (
-    <span className="flex min-w-0 shrink items-center gap-1 text-[11px] text-muted-foreground" title={`${said}\n${entry.chosen ?? ""}`.trim()}>
+    <span className="flex min-w-0 shrink items-center gap-1 text-[0.6875rem] text-muted-foreground" title={`${said}\n${entry.chosen ?? ""}`.trim()}>
       <ShieldCheck className="size-3 shrink-0" aria-hidden />
       <span className="shrink-0">{chip.label}</span>
       {chip.reason && <span className="hidden truncate @2xl:inline">· {chip.reason}</span>}
@@ -636,7 +636,7 @@ function AddedDirsEntry({ entry }: { entry: Of<"addedDirs"> }) {
       <FolderPlus className="size-3 shrink-0" aria-hidden />
       <span className="min-w-0" title={entry.paths.join("\n")}>
         Added <span className="font-medium text-foreground">{list}</span> to this {entry.to}
-        <span className="block truncate font-mono text-[11px]">{entry.paths.map((p) => compactPath(p)).join(" · ")}</span>
+        <span className="block truncate font-mono text-[0.6875rem]">{entry.paths.map((p) => compactPath(p)).join(" · ")}</span>
       </span>
       <span className="h-px flex-1 bg-border" aria-hidden />
     </div>

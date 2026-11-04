@@ -223,6 +223,18 @@ pub fn set_theme(light: String, dark: String) -> Result<(), String> {
     settings::set_theme(&light, &dark)
 }
 
+/// The font families installed on this machine (fonts.rs): scanned once, then kept.
+#[tauri::command]
+pub async fn installed_fonts() -> Result<crate::fonts::Installed, String> {
+    tauri::async_runtime::spawn_blocking(|| crate::fonts::installed().clone()).await.map_err(|e| e.to_string())
+}
+
+/// Save the interface and code fonts and sizes; what the UI should apply comes back.
+#[tauri::command]
+pub async fn set_fonts(fonts: settings::Fonts) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || settings::set_fonts(&fonts)).await.map_err(|e| e.to_string())?
+}
+
 /// A dropped-in VS Code theme, by file name (never a path).
 #[tauri::command]
 pub fn read_custom_theme(name: String) -> Result<serde_json::Value, String> {

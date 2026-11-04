@@ -62,6 +62,8 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 
 **Buttons.** A `button` with `prompt` sends that text to you as the user's next message; `draft` puts text in their message box to edit first.
 
+**Expand fills the dialog.** The user can expand any UI (Expand button or F) into a large dialog. `textfile`, `filetree`, `json`, `table`, `gitgraph`, `gitstatus`, `diffstat`, `wordcount` and `diffreview`, and components built on them (`file-view`, `container-logs`, `pr-view`, …), then use all the height with no cap; forms and cards stay at their natural size. When your own tree has one main region that should take the space (a long `list`, `code`, `markdown`, a `stack` of rows), put `"grow": true` on that node (beside `type`, not in `props`); mark only one, and toolbars or headers around it keep their size.
+
 **Point with `find`.** `table`, `tests`, `filetree`, `json` and `textfile` take `find`: it fills their search box to show where something is (a file in a tree, a line in a file, a JSON key, some rows, a test). Re-render with the same `id` and a new `find` to point elsewhere.
 
 **Live data.** For data yaah reads itself (`system`, `docker.*`, `git.*`, `github.*`, `linear.*`, `postgres.*`; see `sources` in `ui_catalog`), look first with `source_read`, then wrap the UI in a `live` node with that `source` and `every` (ms) for refreshing. Children bind the latest result as `{{data}}`, and `history: N` keeps samples as `{{history}}` for charts over time. It keeps updating after your turn ends; you never see credentials.
@@ -73,7 +75,7 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 ] }
 ```
 
-**MDX in Markdown.** Chat text and `markdown` draw MDX (an `.mdx` docs page) safely; nothing in it runs. Frontmatter folds away, `import`/`export` lines are hidden, `{expressions}` show as code. `Admonition`, `Callout`, `Note`, `Tip`, `Info`, `Warning`, `Caution`, `Danger` (`type`, `title`) draw as an alert; `Tabs` with `TabPanel`, `Tab` or `TabItem` (`label`, `value`, `id`) as tabs; also `details`/`summary`, `Steps`/`Step`, `Cards`/`Card` and `img`/`Image`. Other components show their content in a box labelled with their name. Props are string or number literals only.
+**MDX in Markdown.** Chat text and `markdown` are read as MDX (an `.mdx` docs page) and drawn safely; nothing in it runs, and plain Markdown reads as usual. Frontmatter folds away, `import`/`export` lines and comments are hidden, `{braces}` are text. `Admonition`, `Callout`, `Note`, `Tip`, `Info`, `Warning`, `Caution`, `Danger` (`type`, `title`) draw as an alert; `Tabs` with `TabPanel`, `Tab` or `TabItem` (`label`, `value`, `id`) as tabs; also `details`/`summary`, `Steps`/`Step`, `Cards`/`Card`, `img`/`Image` and simple HTML (`<br>`, `<kbd>`, `<sup>`). Other components show their content in a box labelled with their name; close them (`</Name>` or `/>`) or they show as text. Props are string or number literals only.
 
 **Command output.** Pass short output as printed to the primitive or component made for it (`tests`, `filetree`, `json`, `textfile`, `wordcount`, `gitgraph`, `gitstatus`, `diffstat`). Don't restate it in prose. Anything long is referenced instead (next section).
 

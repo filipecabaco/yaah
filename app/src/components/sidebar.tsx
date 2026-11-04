@@ -466,7 +466,7 @@ function ProjectNode({
             {project.name}
           </button>
           {project.status !== "ongoing" && (
-            <Badge variant="outline" className="h-4 px-1 text-[10px]">
+            <Badge variant="outline" className="h-4 px-1 text-[0.625rem]">
               {project.status}
             </Badge>
           )}
@@ -682,7 +682,7 @@ function QuickChats({
             >
               <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 flex-1 truncate">{c.title}</span>
-              {folder && <span className="max-w-20 shrink-0 truncate font-mono text-[10px] text-muted-foreground">{folder}</span>}
+              {folder && <span className="max-w-20 shrink-0 truncate font-mono text-[0.625rem] text-muted-foreground">{folder}</span>}
               {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
             </button>
           </ChatMenu>

@@ -8,6 +8,7 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { asArray, asNumber, isObj, optText, show } from "@/lib/narrow";
 import { cn } from "@/lib/utils";
+import { inlineMax, useUiView } from "@/components/ui-view";
 
 /** `key` is our own slot name; the agent's field names never reach CSS (shadcn writes config keys into a <style>). */
 type Series = { key: string; label: string };
@@ -105,6 +106,7 @@ export default function UiChart(props: {
   // Negative values (e.g. churn) stack below zero instead of on top of the positives.
   const signed = data.some((r) => series.some((s) => num(r[s.key]) < 0));
   const height = props.height || 240;
+  const { expanded } = useUiView();
   // Long category names don't fit under vertical bars and Recharts drops the ones that collide;
   // every bar must be labelled, so long-labelled bar charts lie on their side.
   const horizontal = kind === "bar" && data.some((r) => show(r[X]).length > 8);
@@ -220,7 +222,7 @@ export default function UiChart(props: {
           {chart}
         </ChartContainer>
       ) : (
-        <div className="max-h-80 overflow-auto rounded-md border">
+        <div className={cn("overflow-auto rounded-md border", inlineMax(expanded, "max-h-80"))}>
           <Table>
             <TableHeader>
               <TableRow>

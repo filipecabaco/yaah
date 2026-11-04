@@ -488,7 +488,7 @@ function ImportPanel({ onImported }: { onImported: (added: McpServerInfo[]) => P
                   {(c.envKeys.length > 0 || c.headerKeys.length > 0) && (
                     <span className="flex flex-wrap gap-1">
                       {[...c.envKeys, ...c.headerKeys].map((k) => (
-                        <Badge key={k} variant="outline" className="font-mono text-[10px] text-muted-foreground">
+                        <Badge key={k} variant="outline" className="font-mono text-[0.625rem] text-muted-foreground">
                           {k}
                         </Badge>
                       ))}

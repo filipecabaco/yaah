@@ -227,7 +227,7 @@ function ChatFolders({ roots, pending, inProject, onAdd }: { roots: string[]; pe
           >
             <div className="min-w-0">
               <div className="truncate">{baseName(root)}</div>
-              <div className="truncate font-mono text-[11px] text-muted-foreground">{compactPath(root)}</div>
+              <div className="truncate font-mono text-[0.6875rem] text-muted-foreground">{compactPath(root)}</div>
             </div>
           </DropdownMenuItem>
         ))}
@@ -662,7 +662,11 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
                           {s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : <FileText />)}
                           {s.path ? <FileLabel label={s.label} /> : <span className="shrink-0 font-mono">{s.label}</span>}
                           {s.local && (
-                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-[10px]" title="yaah's own command, not sent to the agent">
+                            <Badge
+                              variant="secondary"
+                              className="h-4 shrink-0 px-1 text-[0.625rem]"
+                              title="yaah's own command, not sent to the agent"
+                            >
                               yaah
                             </Badge>
                           )}

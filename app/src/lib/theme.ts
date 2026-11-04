@@ -26,7 +26,10 @@ let preview: string | null = null;
 const customPalettes = new Map<string, Palette>();
 /** CSS variables set on the root: at first, the ones public/theme-boot.js restored from the last run. */
 const rootStyle = document.documentElement.style;
-let applied: string[] = Array.from({ length: rootStyle.length }, (_, i) => rootStyle.item(i)).filter((k) => k.startsWith("--"));
+// (Not the fonts, which lib/fonts.ts keeps.)
+let applied: string[] = Array.from({ length: rootStyle.length }, (_, i) => rootStyle.item(i)).filter(
+  (k) => k.startsWith("--") && !k.startsWith("--font-"),
+);
 /** Where the last applied theme is kept for public/theme-boot.js, which applies it before the app loads. */
 export const THEME_CACHE = "yaah:theme";
 export type CachedTheme = { dark: boolean; tokens: Record<string, string> };

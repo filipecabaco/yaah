@@ -169,6 +169,13 @@ export const createXtermEngine: EngineFactory = (el, o) => {
     setTheme(t) {
       term.options.theme = toXterm(t);
     },
+    setFont(family, size) {
+      if (term.options.fontFamily === family && term.options.fontSize === size) return false;
+      // xterm measures the new cell size itself; the view fits the grid to it.
+      term.options.fontFamily = family;
+      term.options.fontSize = size;
+      return true;
+    },
     search: (q, dir = "next") => (dir === "next" ? search.findNext(q) : search.findPrevious(q)),
     serialize() {
       const buf = term.buffer.active;
