@@ -548,6 +548,28 @@ pub async fn resolve_text(i: &'static Integrations, text: &str) -> Vec<Resolved>
 /// The blocks a message's references add, for an agent that does (`embedded`)
 /// or doesn't take embedded resources. All of their text together stays within
 /// [`TOTAL_CHARS`]; what's cut says so.
+/// The live component in yaah's pack that shows this item, with the props it takes: the agent
+/// is told so it can render the item instead of retelling it (`components/*.json`).
+pub fn viewer(r: &Reference) -> Option<(&'static str, Value)> {
+    let split = |sep: char| r.id.rsplit_once(sep).and_then(|(scope, n)| Some((scope.to_owned(), n.parse::<u64>().ok()?)));
+    match (r.service, r.kind) {
+        (WorkService::Linear, _) => Some(("linear-issue", json!({ "id": r.id }))),
+        (WorkService::Github, Kind::Pr) => split('#').map(|(repo, number)| ("pr-view", json!({ "repo": repo, "number": number }))),
+        (WorkService::Github, _) => split('#').map(|(repo, number)| ("github-issue", json!({ "repo": repo, "number": number }))),
+        (WorkService::Gitlab, Kind::Issue) => split('#').map(|(project, iid)| ("gitlab-issue", json!({ "project": project, "iid": iid }))),
+        (WorkService::Gitlab | WorkService::LinearProject, _) => None,
+    }
+}
+
+/// The hint that goes with a referenced item: which live component shows it, and how.
+fn viewer_hint(r: &Reference) -> Option<String> {
+    let (name, props) = viewer(r)?;
+    Some(format!(
+        "To show {} to the user, render yaah's live `{name}` component with `ui_render` and props `{props}`; it reads the item itself and stays current, so don't retell what it shows.",
+        r.token
+    ))
+}
+
 pub fn content(resolved: &[Resolved], embedded: bool) -> Content {
     let mut out = Content::default();
     let mut left = TOTAL_CHARS;
@@ -567,6 +589,11 @@ pub fn content(resolved: &[Resolved], embedded: bool) -> Content {
             format!("{}\n\n_(cut: a message's references carry at most {TOTAL_CHARS} characters)_", clip(md, left))
         };
         left = left.saturating_sub(len);
+        // Which live component shows it: the agent renders that rather than retelling the item.
+        let md = match viewer_hint(reference) {
+            Some(hint) => format!("{md}\n\n{hint}"),
+            None => md,
+        };
         if embedded {
             let uri = if reference.url.starts_with("https://") {
                 reference.url.clone()
