@@ -14,7 +14,7 @@ import { testReport, dbQuery, ask, bugForm, bugValues, saveMarkerMap, renderMark
 // The yaah pack: app/src-tauri/components/*.json, grouped by what they show.
 const pack: [string, string[]][] = [
   ["Tests and files", ["test-report", "file-tree", "file-view", "json-view", "word-count"]],
-  ["Git", ["git-graph", "git-status", "diff-stat"]],
+  ["Git", ["git-graph", "git-status", "diff-stat", "diff-review"]],
   ["This machine and Docker", ["system-monitor", "docker-dashboard", "container-logs"]],
   ["Databases", ["db-explorer", "db-query", "sql-editor"]],
   ["GitHub and GitLab", ["pr-view", "pr-list", "github-issue", "gitlab-issue"]],
@@ -47,6 +47,12 @@ const shortcuts: [string, string[]][] = [
   ["Stop the running turn", ["⌘", "."]],
   ["Previous and next chat", ["⌘", "[", "]"]],
   ["Nth chat of the current project", ["⌘", "1–9"]],
+  ["Split the pane right, or down", ["⌘", "D", "⇧D"]],
+  ["Move to the next pane over", ["⌘", "⌥", "←↑↓→"]],
+  ["Balance the panes", ["⌃", "⌘", "="]],
+  ["Close the pane", ["⌘", "W"]],
+  ["New terminal to the right", ["⌘", "T"]],
+  ["Show or hide the sidebar", ["⌘", "B"]],
   ["Keyboard shortcuts", ["⌘", "/"]],
   ["Settings", ["⌘", ","]],
 ];
@@ -59,7 +65,7 @@ const composerKeys: [string, string[]][] = [
 
 // install.sh --help: the options worth showing here.
 const installOptions: [string, string][] = [
-  ["--version v0.1.0", "Install that release instead of the latest."],
+  ["--version v0.4.0", "Install that release instead of the latest."],
   ["--deb", "Linux: install the .deb with apt (needs sudo) instead of the AppImage."],
   ["--dry-run", "Print what would happen; download, write and remove nothing."],
   ["--uninstall", "Remove what the installer put there. Keeps your data in ~/.yaah and ~/.config/yaah."],
@@ -169,13 +175,13 @@ const principles: [string, string][] = [
       <div class="mt-6">
         <Feature id="agent-ui" title="UI built from data, not code">
           <p>
-            Through yaah's MCP server the agent renders a component with its props, or an ad-hoc tree of yaah's 45 primitives: text,
+            Through yaah's MCP server the agent renders a component with its props, or an ad-hoc tree of yaah's 46 primitives: text,
             tables, charts, forms, diffs, maps, Mermaid diagrams, a browser preview and more. A component is JSON: a tree with
             <code>{"{{bindings}}"}</code> to its props, a JSON Schema and examples. yaah draws it with the same shadcn components as the rest of
             the app, and no agent code runs.
           </p>
           <p>Rendering again with the same <code>id</code> updates the UI in place, which is how status panels and long jobs stay current.</p>
-          <p><strong>The yaah pack</strong> ships with the app: 23 read-only components that agents use and compose.</p>
+          <p><strong>The yaah pack</strong> ships with the app: 24 read-only components that agents use and compose.</p>
           <dl class="grid gap-x-6 gap-y-3 pt-1 text-[14px] leading-6 sm:grid-cols-2">
             {
               pack.map(([group, names]) => (
@@ -247,6 +253,45 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
           />
         </Feature>
 
+        <Feature id="charts" title="Charts and maps that fit">
+          <p>
+            The <code>chart</code> primitive draws bars, lines, areas and <strong>dumbbells</strong>: two dots per row joined by a line, for polls
+            against results or before against after. A chart can carry reference lines, end labels and sorting, and its value axis is fitted to
+            the data. A <code>map</code> fits its markers instead of showing the whole world. Every chart has a legend and a table view.
+          </p>
+          <p>
+            Chart colours follow whichever of the 65 VS Code themes is active, checked for contrast and for separation under the common kinds of
+            colour blindness.
+          </p>
+          <Shot
+            slot="media"
+            name="dumbbell-chart"
+            width={1200}
+            height={769}
+            alt="An election dashboard in a chat: stat cards, then a dumbbell chart of the final poll average against the result for 14 states, with the margin on a fitted axis."
+            caption="The mock's election dashboard: a dumbbell chart of polls against results, with tabs for the map and the table."
+          />
+        </Feature>
+
+        <Feature id="mdx" title="Markdown and MDX, drawn and never run">
+          <p>
+            Agent text and files go through one renderer for Markdown and MDX. Code fences, tables, <code>&lt;Steps&gt;</code>, <code>&lt;details&gt;</code>,
+            frontmatter and MDX comments are drawn; a component yaah doesn't know is shown as plain text.
+          </p>
+          <p>
+            MDX is parsed for its syntax only and turned into data. Imports, <code>{"{expressions}"}</code> and scripts are never evaluated, so a
+            docs page an agent writes can't run anything in the app.
+          </p>
+          <Shot
+            slot="media"
+            name="mdx-reply"
+            width={1200}
+            height={701}
+            alt="A chat reply written as MDX: a docs page about Realtime with tabs for JavaScript and Dart, numbered steps and a collapsed question."
+            caption=""Summarise the Realtime docs page as MDX": tabs, steps and a details block, drawn from data."
+          />
+        </Feature>
+
         <Feature id="libraries" title="Component libraries">
           <p>
             Components are saved and versioned, by you or by the agent with <code>ui_save_component</code>, and every chat can use them. Beside
@@ -265,7 +310,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             name="settings-components"
             width={1400}
             height={1007}
-            alt="Settings, Components tab: the built-in yaah library with 23 components, your own collection, an installed library from a git URL with Update and Remove, and a form to add a library from a git URL or a folder."
+            alt="Settings, Components tab: the built-in yaah library with 24 components, your own collection, an installed library from a git URL with Update and Remove, and a form to add a library from a git URL or a folder."
             caption="Settings → Components, with a sample library from the browser mock installed from git."
           />
         </Feature>
@@ -296,6 +341,79 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             height={1007}
             alt="Settings, Agents (ACP) tab: your agents on the left with presets to add below, and the default Claude agent's command, version and config folder on the right."
             caption="Settings → Agents (ACP): your agents, and presets to add."
+          />
+        </Feature>
+
+        <Feature id="providers" title="Your own model account">
+          <p>
+            goose, OpenCode and Claude Code can run on your <strong>Amazon Bedrock</strong> (an AWS profile or SSO login) or <strong>OpenRouter</strong>
+            account instead of the agent's own sign-in. Add a provider under Settings → Model providers, test it, and bind it to an agent profile
+            with the model you pick.
+          </p>
+          <p>
+            Keys are kept in your keychain and handed only to the agent process that needs them. A provider that stops working, such as an expired
+            SSO login, says so and offers the sign-in.
+          </p>
+          <Shot
+            slot="media"
+            name="settings-providers"
+            width={1400}
+            height={1008}
+            alt="Settings, Model providers tab: an OpenRouter key that works with the credit left, and an Amazon Bedrock profile with an expired SSO login and a Sign in with AWS SSO button."
+            caption="Settings → Model providers, in the browser mock."
+          />
+        </Feature>
+
+        <Feature id="panes" title="Split panes and terminals">
+          <p>
+            <Kbd>⌘</Kbd> <Kbd>D</Kbd> splits the window like a terminal does, and <Kbd>⌘</Kbd> <Kbd>⇧</Kbd> <Kbd>D</Kbd> splits it downward. Each pane
+            holds its own chat, project or terminal, with its own scroll and message box. Drag a divider, or double-click it to even things out;
+            <Kbd>⌃</Kbd> <Kbd>⌘</Kbd> <Kbd>=</Kbd> balances every pane. Each pane has a close button, and the sidebar folds away with <Kbd>⌘</Kbd> <Kbd>B</Kbd>.
+            The layout is saved and comes back when you restart.
+          </p>
+          <p>
+            A <strong>terminal pane</strong> runs your login shell in the folder you pick: <Kbd>⌘</Kbd> <Kbd>T</Kbd>, <strong>New terminal</strong> on the home
+            screen, the pane picker, or <Kbd>⌘</Kbd> <Kbd>K</Kbd>. It takes the code font and size from Settings. <strong>Expand</strong>, or
+            <Kbd>⌘</Kbd> <Kbd>⇧</Kbd> <Kbd>Enter</Kbd>, shows the same shell in a large dialog. When the shell exits its pane closes. Shells don't
+            outlive the app: after a restart the pane opens a new one in the same folder.
+          </p>
+          <p>
+            <strong>Open in terminal</strong> opens a chat's or project's folder in your own terminal app (Ghostty, iTerm or Terminal on macOS).
+          </p>
+          <p>
+            yaah also offers agents the ACP terminal capability. An agent that uses it has its commands shown live in the tool card, with Stop and
+            "Open as pane". Claude Code's and Codex's current adapters run their own commands and don't call it yet.
+          </p>
+          <div slot="media" class="space-y-5">
+            <Shot
+            name="split-panes"
+            width={1600}
+            height={1000}
+            alt="yaah with three panes: a chat about ENG-142 with a collapsed group of six tool calls, a terminal pane running echo commands, and a project pane for billing revamp."
+            caption="A chat, a terminal and a project side by side. In the browser mock the shell is a stand-in that echoes what you type."
+          />
+            <Shot
+            name="terminal-expanded"
+            width={1200}
+            height={261}
+            alt="A terminal expanded into a large dialog, showing the same shell and its output, with a hint to press Command Shift Enter to go back."
+            caption="The same shell, expanded."
+          />
+          </div>
+        </Feature>
+
+        <Feature id="resume" title="Resume a session from the CLI">
+          <p>
+            <strong>Resume a session…</strong> (<Kbd>⌘</Kbd> <Kbd>K</Kbd>, a new pane's picker, or the home screen's quick chat menu) lists the
+            sessions you started in the Claude Code or Codex CLI. Pick one and carry on in yaah, with its transcript and the folder it ran in.
+          </p>
+          <Shot
+            slot="media"
+            name="pane-picker"
+            width={800}
+            height={624}
+            alt="A new pane's picker: New chat, Add repositories, New project, New terminal and Resume a session, then recent chats."
+            caption="A new pane opens on a picker: a chat, a project, a terminal, or a session from a CLI."
           />
         </Feature>
 
@@ -361,19 +479,63 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
         <Feature id="security" title="Permissions and the security model">
           <ul class="space-y-3">
             <li><strong>Tool calls ask first.</strong> A command or an edit waits for Yes, "don't ask again", or No. Only yaah's own <code>ui_*</code> tools run without asking; <code>source_read</code> asks like any other tool.</li>
+            <li><strong>Fewer requests reach you.</strong> Reads and searches inside the chat's folders are allowed without asking (you can turn that off). You can trust an MCP server's tools for a project, or for a quick chat. "Don't ask again" is remembered with the chat. Edits, commands, fetches and anything outside the folders still ask.</li>
+            <li><strong>Answers fold away.</strong> An allowed request becomes a small chip on its tool card ("Allowed", "Auto-allowed · read-only in this chat's folders"), so only pending questions take space.</li>
             <li><strong>No agent code runs in the app.</strong> Agent UI is JSON drawn by yaah's renderer, and libraries are data too.</li>
             <li><strong>Data access is read-only.</strong> Postgres only as a read-only role, in a read-only transaction. GitHub, Linear and GitLab are read, never written.</li>
             <li><strong>Credentials stay in yaah.</strong> Agents see connection names, not passwords or tokens.</li>
             <li><strong>Web content loads on click.</strong> A web page in a browser frame waits for you to load it. Local previews are served from a separate origin with a strict Content-Security-Policy.</li>
             <li><strong>Your agent's settings stay yours.</strong> yaah writes nothing into <code>~/.claude*</code>, <code>~/.codex</code> or any other agent config.</li>
           </ul>
-          <Shot
-            slot="media"
+          <div slot="media" class="space-y-5">
+            <Shot
             name="permission"
             width={1200}
-            height={585}
-            alt="A permission request in a chat: the agent wants to run node --test --test-reporter=spec, with Yes, Yes and don't ask again, and No."
-            caption="The agent wants to run the tests, and waits for your answer."
+            height={468}
+            alt="A permission request in a chat: the agent wants to call a Linear tool, with Yes, Yes and don't ask again, No, and Always allow tools from Linear in this chat."
+            caption="The agent wants to call a Linear tool and waits: allow once, remember it, or trust the server."
+          />
+            <Shot
+            name="permission-chips"
+            width={1200}
+            height={561}
+            alt="A chat with six tool calls folded into one row, opened: Linear and read calls marked Auto-allowed, a failed npm test, and an rm -rf build marked Allowed and failed."
+            caption="Answered requests become chips on the tool cards, and a run of calls is one row."
+          />
+          </div>
+        </Feature>
+
+        <Feature id="chat" title="A calmer chat">
+          <p>
+            The chat runs the full width of its pane. Your message is a bubble on the right; the agent's reply sits in a soft bubble. Two or more tool
+            calls in a row collapse into one line that names them and counts what failed or was auto-allowed. Click it to see the cards.
+          </p>
+          <p>
+            Any UI an agent renders has an <strong>Expand</strong> button that shows it in a dialog filled edge to edge: a dashboard, a diff, a long
+            table.
+          </p>
+          <Shot
+            slot="media"
+            name="expanded-ui"
+            width={1600}
+            height={1000}
+            alt="An election night dashboard expanded to fill a dialog: stat cards, then a dumbbell chart of polls against results."
+            caption="Expand on the election dashboard."
+          />
+        </Feature>
+
+        <Feature id="fonts" title="Fonts and sizes">
+          <p>
+            Pick an interface font and a code font from the families installed on your machine, and a size for each (interface text 12–20 px, code
+            10–20 px). They apply everywhere: chats, the components agents draw, chart and map labels, diffs and terminals.
+          </p>
+          <Shot
+            slot="media"
+            name="settings-fonts"
+            width={1400}
+            height={1008}
+            alt="Settings, General tab, Fonts: Interface and Code font pickers, size sliders from 12 to 20 and 10 to 20, and a preview of both."
+            caption="Settings → General → Fonts."
           />
         </Feature>
 
@@ -383,8 +545,12 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             the 65 VS Code themes that ship with yaah, or drop any theme's <code>.json</code> into <code>~/.config/yaah/themes/</code>.
           </p>
           <p>
-            Colours are corrected where a theme falls short, so text stays readable (4.5:1 for text, 3:1 for accents), and charts keep their
-            colour-blind-safe palette.
+            Colours are corrected where a theme falls short, so text stays readable (4.5:1 for text, 3:1 for accents) in every theme, and chart
+            colours are derived from the theme and kept apart for colour-blind readers.
+          </p>
+          <p>
+            Text and controls keep a minimum size, focus returns to where it came from, and there's a skip link. The home screen scores 100 in
+            Lighthouse's accessibility audit.
           </p>
           <Shot
             slot="media"
@@ -572,7 +738,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
           <p class="mt-2">
             Each chat gets an HTTP MCP server on <code>127.0.0.1</code> with its own secret token, handed to the agent when the session starts.
             Its tools: <code>ui_catalog</code>, <code>ui_guide</code>, <code>ui_get_component</code>, <code>ui_render</code>, <code>ui_ask</code>, <code>ui_get_values</code>,
-            <code>ui_set_values</code>, <code>ui_save_component</code> and <code>source_read</code>.
+            <code>ui_set_values</code>, <code>ui_save_component</code>, <code>ui_request_folders</code> and <code>source_read</code>.
           </p>
         </div>
         <div>

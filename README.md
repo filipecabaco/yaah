@@ -40,14 +40,14 @@ Prefer to click? Grab the `.dmg`, `.AppImage` or `.deb` from [Releases](https://
 Coding agents are great at work and terrible at showing it. They paste diffs into chat, dump JSON, describe dashboards
 in prose, and ask you questions one line at a time. yaah gives them a better way to answer.
 
-- **Real UI, built from data.** Agents render forms, tables, charts, maps, live PRs, database queries, git graphs and diffs
-  straight into the chat. Components are data, not code, so nothing an agent writes ever runs in the app.
-- **Work on it together.** Forms are shared: the agent fills in what it knows, you correct the rest, and it sees your edits.
-- **Live, not pasted.** Point a component at your machine, Docker, Postgres (read-only), GitHub, GitLab or Linear, and it
+- **Real UI, built from data:** agents render forms, tables, charts (dumbbells included), maps, MDX, live PRs, database queries,
+  git graphs and diffs straight into the chat. Components are data, not code, so nothing an agent writes ever runs in the app.
+- **Work on it together:** forms are shared. The agent fills in what it knows, you correct the rest, and it sees your edits.
+- **Live, not pasted:** point a component at your machine, Docker, Postgres (read-only), GitHub, GitLab or Linear, and it
   stays current without another agent turn. Diffs come straight from git instead of being copied token by token.
-- **Any agent.** Claude Code, Codex, Gemini CLI, goose, OpenCode, GitHub Copilot, Qwen Code, Cline, Kiro, Kimi, Mistral Vibe,
+- **Any agent:** Claude Code, Codex, Gemini CLI, goose, OpenCode, GitHub Copilot, Qwen Code, Cline, Kiro, Kimi, Mistral Vibe,
   Cursor, Auggie, or any command that speaks the [Agent Client Protocol](https://agentclientprotocol.com).
-- **Any model.** Run goose, OpenCode or Claude Code on **Amazon Bedrock** (your AWS profile or SSO) or **OpenRouter**, with
+- **Any model:** run goose, OpenCode or Claude Code on **Amazon Bedrock** (your AWS profile or SSO) or **OpenRouter**, with
   keys kept in your keychain.
 
 <table>
@@ -93,14 +93,35 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
   - data: Postgres explorer, SQL editor;
   - machines: Docker dashboards, container logs, system monitor;
   - trackers: GitHub, GitLab and Linear issues, boards and cycles.
-- **Your own component library.** Agents save the UI they build and improve it over versions. Copy any component, install
+- **Your own component library:** agents save the UI they build and improve it over versions. Copy any component, install
   libraries from git, or share yours as a library for your team.
-- **Projects that start from your tracker.** Pick a GitHub, GitLab or Linear issue (or paste its link) and yaah creates
+- **Projects that start from your tracker:** pick a GitHub, GitLab or Linear issue (or paste its link) and yaah creates
   the project, writes the issue into its brief, adds your local clone and drafts the first message.
-- **Split panes.** ⌘D splits the window like a terminal; each pane runs its own chat, project or agent.
-- **Switch agents mid-chat.** Hand the conversation to another agent for the next message.
-- **Keyboard-first.** ⌘K for everything, with your shortcuts listed in Settings.
-- **Any VS Code theme.** 65 built in, or drop your own in.
+- **Split panes and terminals:** ⌘D / ⌘⇧D split the window like a terminal, ⌃⌘= balances the panes, and every pane has a
+  close button. A pane holds a chat, a project or your login shell (⌘T); ⌘⇧Enter expands a terminal into a large dialog. The
+  sidebar folds away with ⌘B.
+- **Open in terminal, and agents' commands live:** open any folder in Ghostty, iTerm or Terminal. When an agent runs its commands
+  through ACP's terminal capability, the tool card shows them live. (Claude Code's and Codex's current adapters run their own
+  commands and don't use it yet.)
+- **Resume a session…** Import a session you started in the Claude Code or Codex CLI and carry on in yaah.
+- **A calmer chat:** full-width, your message on the right and the agent's reply in a soft bubble. Runs of tool calls fold into
+  one row, and any rendered UI has an Expand button that fills a dialog.
+- **Fewer permission prompts:** reads inside the chat's folders are allowed without asking, MCP servers can be trusted per
+  project, "don't ask again" is remembered, and answered requests fold into chips on the tool cards. Edits, commands and
+  fetches still ask.
+- **Switch agents mid-chat:** hand the conversation to another agent for the next message.
+- **Keyboard-first:** ⌘K for everything, with your shortcuts listed in Settings.
+- **Any VS Code theme:** 65 built in, or drop your own in. Text keeps at least 4.5:1 contrast in every theme, chart colours follow the
+  theme, and the home screen scores 100 in Lighthouse accessibility.
+- **Your fonts:** pick an interface font and a code font and their sizes; they apply everywhere, terminals included.
+- **Your model account:** goose, OpenCode and Claude Code can run on Amazon Bedrock or OpenRouter.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/shots/split-panes-dark.webp">
+    <img src="site/public/shots/split-panes-light.webp" alt="Three panes side by side: a chat with folded tool calls, a terminal and a project" width="900">
+  </picture>
+</p>
 
 <p align="center">
   <picture>
@@ -111,11 +132,12 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
 
 ## Safe by design
 
-- **Agent UI is data.** Components render with yaah's own building blocks, and web pages load only when you click.
-- **Read-only by default.** Postgres runs as a read-only role (yaah refuses superusers), and every tracker integration only reads.
-- **The agent asks before its tools run** (edits, commands, fetches), unless you said "don't ask again". Only yaah's own UI tools skip the prompt.
-- **Secrets stay put.** Tokens are in your keychain or a 0600 file. They go only to the process that needs them, and never into an agent's command line.
-- **Agent adapters are verified before they're used.** yaah installs each adapter once and checks newer versions daily. A
+- **Agent UI is data:** components render with yaah's own building blocks, and web pages load only when you click.
+- **Read-only by default:** Postgres runs as a read-only role (yaah refuses superusers), and every tracker integration only reads.
+- **The agent asks before its tools run** (edits, commands, fetches), unless you said "don't ask again" or the call is a read inside the chat's folders or comes from an MCP server you trusted. Only yaah's own UI tools skip the prompt.
+- **MDX never runs:** yaah parses its syntax only and never evaluates imports, expressions or scripts.
+- **Secrets stay put:** tokens are in your keychain or a 0600 file. They go only to the process that needs them, and never into an agent's command line.
+- **Agent adapters are verified before they're used:** yaah installs each adapter once and checks newer versions daily. A
   new version is adopted only after a conformance suite and `npm audit` pass. You can hold any version.
 
 ## How it works
