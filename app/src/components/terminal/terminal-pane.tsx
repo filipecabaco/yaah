@@ -39,6 +39,9 @@ function openShell(pane: string, cwd: string | undefined, size: { cols: number; 
   return p;
 }
 
+/** A shell that ends sooner than this after its pane attached failed to start: its pane stays open. */
+export const QUICK_EXIT_MS = 1000;
+
 export function TerminalPane({
   pane,
   content,
@@ -57,10 +60,12 @@ export function TerminalPane({
   const [error, setError] = useState<string | null>(null);
   const [exit, setExit] = useState<TerminalExit | null>(null);
   const [title, setTitle] = useState("shell");
-  const latest = useRef({ content, onContent });
+  const latest = useRef({ content, onContent, onClose });
+  // When this pane's view attached to its shell: an exit soon after is a failed start, not the user's `exit`.
+  const attachedAt = useRef<number | null>(null);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    latest.current = { content, onContent };
+    latest.current = { content, onContent, onClose };
   });
 
   const launch = useCallback(() => {
@@ -82,6 +87,7 @@ export function TerminalPane({
   }, [content.id, launch]);
 
   const restart = () => {
+    setExit(null);
     if (content.id) void terminalApi.close(content.id);
     latest.current.onContent({ kind: "terminal", cwd: content.cwd });
   };
@@ -139,9 +145,17 @@ export function TerminalPane({
           className="flex-1"
           onAttached={(info) => {
             setTitle(info.title);
+            attachedAt.current = Date.now();
+            // Already over when this view attached (e.g. after a restart): say so rather than vanish.
             if (info.exit) setExit(info.exit);
           }}
-          onExit={setExit}
+          onExit={(e) => {
+            // The shell ended while it was being shown (`exit`, Ctrl-D, a killed shell): close the pane,
+            // as terminal apps do. One that died right after starting keeps the bar, so its error stays readable.
+            const ranFor = attachedAt.current === null ? 0 : Date.now() - attachedAt.current;
+            if (ranFor >= QUICK_EXIT_MS) latest.current.onClose();
+            else setExit(e);
+          }}
           onGone={() => start(RESTARTED_NOTE)}
         />
       ) : (
