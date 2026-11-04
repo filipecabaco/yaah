@@ -240,7 +240,7 @@ describe("the focused pane", () => {
     // Back in the chat's pane, the sidebar shows the chat instead.
     await user.click(composerIn("p1"));
     const chatRow = within(sidebar).getByRole("button", { name: "New chat" });
-    await waitFor(() => expect(chatRow).toHaveClass("bg-sidebar-accent"));
+    await waitFor(() => expect(chatRow.parentElement).toHaveClass("bg-sidebar-accent"));
     expect(project.parentElement).not.toHaveClass("bg-sidebar-accent");
   });
 

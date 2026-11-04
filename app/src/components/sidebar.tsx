@@ -28,7 +28,7 @@ import {
 import { openInTerminalApp } from "@/lib/terminal-api";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark, Wordmark } from "@/components/brand/mark";
-import { ChatMenu, CopyMenuItem } from "@/components/menus";
+import { ChatMenu, ChatRowActions, CopyMenuItem, ROW_ACTION } from "@/components/menus";
 import { Hint } from "@/components/shortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -467,7 +467,7 @@ function ProjectNode({
       >
         <div
           className={cn(
-            "group flex items-center gap-1 rounded-md pr-2 text-sm hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
+            "group flex items-center gap-1 rounded-md pr-0.5 text-sm hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
             selected && "bg-sidebar-accent",
             project.status === "archived" && "opacity-60",
           )}
@@ -487,6 +487,18 @@ function ProjectNode({
               {project.status}
             </Badge>
           )}
+          <button type="button" className={ROW_ACTION} aria-label={`Rename ${project.name}`} title="Rename" onClick={() => onRename(project.id)}>
+            <Pencil className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            className={cn(ROW_ACTION, "hover:text-destructive")}
+            aria-label={`Delete ${project.name}`}
+            title="Delete…"
+            onClick={() => onDelete(project.id)}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
         </div>
       </ProjectMenu>
       <CollapsibleContent>
@@ -494,16 +506,21 @@ function ProjectNode({
           {chats.length === 0 && <span className="px-2 py-1 text-xs text-muted-foreground">No chats</span>}
           {chats.map((c) => (
             <ChatMenu key={c.sessionId} chat={c} onOpen={() => onSelect({ kind: "chat", id: c.sessionId })}>
-              <button
-                onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
+              <div
                 className={cn(
-                  "flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
+                  "group flex items-center rounded-md hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
                   selection?.kind === "chat" && selection.id === c.sessionId && "bg-sidebar-accent",
                 )}
               >
-                <span className="min-w-0 flex-1 truncate">{c.title}</span>
-                {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
-              </button>
+                <button
+                  onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs"
+                >
+                  <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                  {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
+                </button>
+                <ChatRowActions chat={c} />
+              </div>
             </ChatMenu>
           ))}
         </div>
@@ -690,18 +707,23 @@ function QuickChats({
         const folder = c.cwd.includes("/.yaah/scratch/") ? null : baseName(c.cwd);
         return (
           <ChatMenu key={c.sessionId} chat={c} onOpen={() => onSelect({ kind: "chat", id: c.sessionId })}>
-            <button
-              onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
+            <div
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
+                "group flex items-center rounded-md hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
                 selection?.kind === "chat" && selection.id === c.sessionId && "bg-sidebar-accent",
               )}
             >
-              <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate">{c.title}</span>
-              {folder && <span className="max-w-20 shrink-0 truncate font-mono text-2xs text-muted-foreground">{folder}</span>}
-              {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
-            </button>
+              <button
+                onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
+                className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm"
+              >
+                <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                {folder && <span className="max-w-20 shrink-0 truncate font-mono text-2xs text-muted-foreground">{folder}</span>}
+                {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
+              </button>
+              <ChatRowActions chat={c} />
+            </div>
           </ChatMenu>
         );
       })}
