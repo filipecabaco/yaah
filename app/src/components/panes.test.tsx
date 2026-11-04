@@ -206,6 +206,15 @@ describe("moving and closing", () => {
     expect(screen.getByRole("button", { name: /^quick chat\b(?!s)/i })).toBeInTheDocument();
   });
 
+  it("⌘W on the last pane showing a chat goes back to the home screen", async () => {
+    const { user } = await started();
+    await quickChatIn(user, "p1");
+    act(closePane);
+    expect(paneEls()).toHaveLength(1);
+    expect(await screen.findByRole("button", { name: /^quick chat\b(?!s)/i })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Message" })).toBeNull();
+  });
+
   it("⌘W on the last pane closes the library, as Esc does", async () => {
     const { user } = await started();
     await quickChatIn(user, "p1");
@@ -231,7 +240,7 @@ describe("the focused pane", () => {
     // Back in the chat's pane, the sidebar shows the chat instead.
     await user.click(composerIn("p1"));
     const chatRow = within(sidebar).getByRole("button", { name: "New chat" });
-    await waitFor(() => expect(chatRow).toHaveClass("bg-sidebar-accent"));
+    await waitFor(() => expect(chatRow.parentElement).toHaveClass("bg-sidebar-accent"));
     expect(project.parentElement).not.toHaveClass("bg-sidebar-accent");
   });
 

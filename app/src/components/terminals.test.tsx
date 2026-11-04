@@ -11,7 +11,9 @@ import { setTerminalEngine } from "@/components/terminal/engine";
 import { QUICK_EXIT_MS, RESTARTED_NOTE } from "@/components/terminal/terminal-pane";
 import { installBrowserMock } from "@/dev/browser-mock";
 import { startAgentTerminal } from "@/dev/mock/terminals";
-import type { Entry } from "@/lib/api";
+import { inProject, originOf } from "@/components/terminal/use-terminals";
+import type { Entry, Project, SessionInfo } from "@/lib/api";
+import { panesOf, type Layout } from "@/lib/layout";
 import { isMac } from "@/lib/shortcuts";
 import { renderApp } from "@/test/app";
 import { textEngine } from "@/test/text-engine";
@@ -126,6 +128,169 @@ describe("terminal panes", () => {
       const c = state.layout?.root.type === "pane" ? state.layout.root.content : null;
       expect(c?.kind === "terminal" && c.id && state.terminals[c.id]).toBeTruthy();
     });
+  });
+});
+
+describe("a terminal opened from a project", () => {
+  const sidebar = () => screen.getByRole("complementary", { name: "Sidebar" });
+  const projectList = (name: string) => within(sidebar()).queryByRole("list", { name: `Open panes in ${name}` });
+  const openPanesGroup = () => within(sidebar()).queryByRole("region", { name: "Open panes" });
+  /** The saved terminal panes' contents. */
+  const savedTerminals = (layout: Layout | null) =>
+    layout ? panesOf(layout.root).flatMap((p) => (p.content?.kind === "terminal" ? [p.content] : [])) : [];
+
+  /** A chat in the mock's project (billing revamp: api, web), from its page. */
+  async function projectChat() {
+    const r = await started();
+    await r.user.click(within(sidebar()).getByRole("button", { name: "billing revamp" }));
+    await r.user.click(await screen.findByRole("button", { name: /^New chat as/ }));
+    await screen.findByRole("combobox", { name: "Message" });
+    await waitFor(() => expect(Object.values(r.mock.sessions)).toHaveLength(1));
+    return { ...r, project: r.mock.projects[0] };
+  }
+
+  it("from a project chat starts in the project's repo and is listed under the project, not in Open panes", async () => {
+    const { mock, project } = await projectChat();
+    press("t", "KeyT");
+    await waitFor(() => expect(terminalPanes()).toHaveLength(1));
+    await waitFor(() => expect(Object.values(mock.terminals).map((t) => t.cwd)).toContain(project.dirs[0]));
+    const list = await waitFor(() => {
+      const l = projectList(project.name);
+      expect(l).not.toBeNull();
+      return l!;
+    });
+    const row = within(list).getByRole("button", { name: /^Terminal:/ });
+    expect(row).toHaveAttribute("aria-current", "true");
+    expect(row).toHaveAccessibleName(/Terminal: api/);
+    expect(openPanesGroup()).toBeNull();
+    // Saved with its project, and with its shell once open.
+    await waitFor(() => {
+      const [t, ...more] = savedTerminals(mock.layout);
+      expect(more).toHaveLength(0);
+      expect(t).toMatchObject({ cwd: project.dirs[0], projectId: project.id });
+      expect(t.id).toBeTruthy();
+    });
+  });
+
+  it("from a quick chat stays in Open panes, with no project", async () => {
+    const { mock, chat } = await withChat();
+    press("t", "KeyT");
+    const group = await waitFor(() => {
+      const g = openPanesGroup();
+      expect(g).not.toBeNull();
+      return g!;
+    });
+    expect(within(group).getByRole("button", { name: /^Terminal:/ })).toBeInTheDocument();
+    expect(projectList("billing revamp")).toBeNull();
+    await waitFor(() => expect(savedTerminals(mock.layout)).toEqual([expect.objectContaining({ cwd: chat.cwd })]));
+    expect(savedTerminals(mock.layout)[0]).not.toHaveProperty("projectId");
+  });
+
+  it("from the project's page or its sidebar menu belongs to the project too", async () => {
+    const { user, mock } = await started();
+    const project = mock.projects[0];
+    await user.click(within(sidebar()).getByRole("button", { name: project.name }));
+    await user.click(await screen.findByRole("button", { name: "New terminal" }));
+    await waitFor(() => expect(terminalPanes()).toHaveLength(1));
+    // To the right of the project page.
+    expect(paneEls()).toHaveLength(2);
+    fireEvent.contextMenu(within(sidebar()).getByRole("button", { name: project.name }));
+    await user.click(await screen.findByRole("menuitem", { name: "New terminal" }));
+    await waitFor(() => expect(terminalPanes()).toHaveLength(2));
+    await waitFor(() => expect(within(projectList(project.name)!).getAllByRole("button", { name: /^Terminal:/ })).toHaveLength(2));
+    expect(openPanesGroup()).toBeNull();
+    await waitFor(() =>
+      expect(savedTerminals(mock.layout).map((t) => [t.cwd, t.projectId])).toEqual([
+        [project.dirs[0], project.id],
+        [project.dirs[0], project.id],
+      ]),
+    );
+  });
+
+  it("keeps its project after a restart", async () => {
+    const { mock, project, unmount } = await projectChat();
+    press("t", "KeyT");
+    await waitFor(() => expect(savedTerminals(mock.layout)[0]?.id).toBeTruthy());
+    const saved = structuredClone(mock.layout!);
+    unmount();
+
+    // A fresh mock: the chat beside it is gone (its pane is dropped), the project and the link are not.
+    const state = installBrowserMock({ delay: 0 });
+    state.layout = saved;
+    render(<App />);
+    expect(await screen.findByText(RESTARTED_NOTE)).toBeInTheDocument();
+    const list = await waitFor(() => {
+      const l = projectList(project.name);
+      expect(l).not.toBeNull();
+      return l!;
+    });
+    expect(within(list).getByRole("button", { name: /^Terminal:/ })).toBeInTheDocument();
+    expect(openPanesGroup()).toBeNull();
+    // The new shell's id is saved; the link stays.
+    await waitFor(() => {
+      const [t] = savedTerminals(state.layout);
+      expect(t?.id && state.terminals[t.id]).toBeTruthy();
+      expect(t?.projectId).toBe(project.id);
+    });
+  });
+
+  it("moves to Open panes, still running, when its project is deleted", async () => {
+    const { user, mock, project } = await projectChat();
+    press("t", "KeyT");
+    await waitFor(() => expect(projectList(project.name)).not.toBeNull());
+    const pane = terminalPanes()[0];
+    await waitFor(() => expect(textIn(pane)).toContain("dev@yaah %"));
+    // Back in the chat's pane: the project's Delete… opens its page there, with the confirmation.
+    await user.click(screen.getByRole("combobox", { name: "Message" }));
+    await user.click(within(sidebar()).getByRole("button", { name: `Delete ${project.name}` }));
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    const group = await waitFor(() => {
+      const g = openPanesGroup();
+      expect(g).not.toBeNull();
+      return g!;
+    });
+    expect(within(group).getByRole("button", { name: /^Terminal:/ })).toBeInTheDocument();
+    expect(terminalPanes()[0]).toBe(pane);
+    await waitFor(() => expect(savedTerminals(mock.layout)).toHaveLength(1));
+    await waitFor(() => expect(savedTerminals(mock.layout)[0]).not.toHaveProperty("projectId"));
+  });
+
+  it("whose project went while yaah was closed comes back in Open panes", async () => {
+    const state = installBrowserMock({ delay: 0 });
+    state.layout = {
+      root: { type: "pane", id: "p1", content: { kind: "terminal", cwd: "/Users/dev/workspace/api", projectId: "gone" } },
+      focused: "p1",
+    };
+    render(<App />);
+    const group = await screen.findByRole("region", { name: "Open panes" });
+    expect(within(group).getByRole("button", { name: /^Terminal:/ })).toBeInTheDocument();
+    await waitFor(() => expect(savedTerminals(state.layout)[0]?.id).toBeTruthy());
+    expect(savedTerminals(state.layout)[0]).not.toHaveProperty("projectId");
+  });
+});
+
+describe("originOf: where a pane opened from another starts", () => {
+  const project: Project = { id: "pr", name: "p", dirs: ["/w/api", "/w/web/"], status: "ongoing", createdAt: 0, contextDir: "/h/.yaah/projects/pr" };
+  const chat = (cwd: string, projectId: string | null) => ({ cwd, projectId }) as SessionInfo;
+  const y = { projects: [project], sessions: { a: chat("/w/web/src", "pr"), b: chat("/elsewhere", "pr"), q: chat("/w/api", null) } };
+
+  it("keeps a project chat's own folder when it is the project's, else the first repo", () => {
+    expect(originOf({ kind: "chat", id: "a" }, y)).toEqual({ cwd: "/w/web/src", projectId: "pr" });
+    expect(originOf({ kind: "chat", id: "b" }, y)).toEqual({ cwd: "/w/api", projectId: "pr" });
+    expect(originOf({ kind: "chat", id: "q" }, y)).toEqual({ cwd: "/w/api" });
+    expect(originOf({ kind: "project", id: "pr" }, y)).toEqual({ cwd: "/w/api", projectId: "pr" });
+    expect(originOf({ kind: "project", id: "nope" }, y)).toEqual({});
+    expect(originOf({ kind: "terminal", cwd: "/x", projectId: "pr" }, y)).toEqual({ cwd: "/x", projectId: "pr" });
+    expect(originOf({ kind: "terminal", cwd: "/x", projectId: "gone" }, y)).toEqual({ cwd: "/x", projectId: undefined });
+    expect(originOf(null, y)).toEqual({});
+  });
+
+  it("counts a folder as the project's when it is one of its repos, its brief folder or inside one", () => {
+    expect(inProject("/w/api", project)).toBe(true);
+    expect(inProject("/w/web/deep/er", project)).toBe(true);
+    expect(inProject("/h/.yaah/projects/pr", project)).toBe(true);
+    expect(inProject("/w/api-billing", project)).toBe(false);
+    expect(inProject("/w", project)).toBe(false);
   });
 });
 

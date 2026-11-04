@@ -38,15 +38,20 @@ pub enum Content {
     Picker,
     /// A terminal pane: a shell in `cwd` (the default folder when there's none).
     /// `id` is the running shell's (`terminals.rs`); after a restart it names
-    /// nothing, and the pane opens a new shell in the same folder.
+    /// nothing, and the pane opens a new shell in the same folder. `project_id`:
+    /// the project it was opened from (the sidebar lists it there), dropped when
+    /// that project is deleted.
     Terminal {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
+        #[serde(default, rename = "projectId", skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
     },
     /// A diff pane: the working-tree changes of the repository `cwd` is in (the pane's own
     /// folder choice), in `mode` (`all`, `staged`, `unstaged` or `branch`) against `base`.
+    /// `project_id` as for a terminal.
     Diff {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cwd: Option<String>,
@@ -54,24 +59,43 @@ pub enum Content {
         mode: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base: Option<String>,
+        #[serde(default, rename = "projectId", skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
     },
 }
 
 /// A folder path or terminal id longer than this isn't one the UI made.
 const MAX_FIELD: usize = 4096;
 
+/// A project id the UI could have saved (projects.rs makes 16-character tokens).
+fn sane_project(p: Option<&String>) -> bool {
+    p.is_none_or(|p| !p.is_empty() && p.len() <= MAX_ID && !p.chars().any(char::is_control))
+}
+
 impl Content {
     fn sane(&self) -> bool {
         match self {
-            Self::Terminal { cwd, id } => {
-                cwd.as_ref().is_none_or(|c| c.len() <= MAX_FIELD && !c.contains('\0')) && id.as_ref().is_none_or(|i| i.len() <= MAX_ID)
+            Self::Terminal { cwd, id, project_id } => {
+                cwd.as_ref().is_none_or(|c| c.len() <= MAX_FIELD && !c.contains('\0'))
+                    && id.as_ref().is_none_or(|i| i.len() <= MAX_ID)
+                    && sane_project(project_id.as_ref())
             }
-            Self::Diff { cwd, mode, base } => {
+            Self::Diff { cwd, mode, base, project_id } => {
                 cwd.as_ref().is_none_or(|c| c.len() <= MAX_FIELD && !c.contains('\0'))
                     && mode.as_ref().is_none_or(|m| m.len() <= MAX_ID)
                     && base.as_ref().is_none_or(|b| b.len() <= MAX_FIELD && !b.contains('\0'))
+                    && sane_project(project_id.as_ref())
             }
             _ => true,
+        }
+    }
+
+    /// A terminal or diff no longer belongs to a project that's gone; it stays open, unlinked.
+    fn unlink_gone(&mut self, project_exists: &impl Fn(&str) -> bool) {
+        if let Self::Terminal { project_id, .. } | Self::Diff { project_id, .. } = self
+            && project_id.as_deref().is_some_and(|p| !project_exists(p))
+        {
+            *project_id = None;
         }
     }
 }
@@ -141,6 +165,18 @@ impl Node {
                 (Some(a), Some(b)) => Some(Self::Split { id, dir, ratio, a: Box::new(a), b: Box::new(b) }),
                 (one, other) => one.or(other),
             },
+        }
+    }
+
+    /// Every terminal and diff linked to a project that's gone, unlinked.
+    fn unlink_gone(&mut self, project_exists: &impl Fn(&str) -> bool) {
+        match self {
+            Self::Pane { content: Some(c), .. } => c.unlink_gone(project_exists),
+            Self::Pane { content: None, .. } => {}
+            Self::Split { a, b, .. } => {
+                a.unlink_gone(project_exists);
+                b.unlink_gone(project_exists);
+            }
         }
     }
 
@@ -215,7 +251,7 @@ impl Layout {
             return Err(format!("two panes or splits are called {dup}"));
         }
         if !self.root.sane() {
-            return Err("a terminal pane's folder or id is too long".into());
+            return Err("a terminal or diff pane's folder, id or project isn't one the UI makes".into());
         }
         let root = self.root.with_sane_ratios();
         let mut panes = vec![];
@@ -226,6 +262,7 @@ impl Layout {
 
     /// Without the panes on chats or projects that are gone (`chat_exists`,
     /// `project_exists`), their neighbours taking the space. The home pane when none is left.
+    /// A terminal or diff linked to a project that's gone stays, without the link.
     #[must_use]
     pub fn pruned(self, chat_exists: impl Fn(&str) -> bool, project_exists: impl Fn(&str) -> bool) -> Self {
         let keep = |c: Option<&Content>| match c {
@@ -234,7 +271,8 @@ impl Layout {
             _ => true,
         };
         let focused = self.focused;
-        let Some(root) = self.root.pruned(&keep) else { return Self::home() };
+        let Some(mut root) = self.root.pruned(&keep) else { return Self::home() };
+        root.unlink_gone(&project_exists);
         let mut ids = vec![];
         root.panes(&mut ids);
         let focused = if ids.contains(&focused.as_str()) { focused } else { ids[0].to_owned() };
@@ -401,6 +439,66 @@ mod tests {
         assert_eq!(pruned.pane_ids(), ["p2", "p3"]);
         let long = json!({ "root": pane("p1", json!({ "kind": "diff", "base": "x".repeat(5000) })), "focused": "p1" });
         assert!(from_saved(Some(&long)).is_none());
+    }
+
+    #[test]
+    fn a_terminal_or_diffs_project_link_is_kept_and_dropped_with_its_project() {
+        let saved = json!({
+            "root": split(
+                "s1",
+                "row",
+                0.5,
+                pane("p1", json!({ "kind": "terminal", "cwd": "/work/api", "id": "tabc", "projectId": "pr1" })),
+                split(
+                    "s2",
+                    "column",
+                    0.5,
+                    pane("p2", json!({ "kind": "diff", "cwd": "/work/web", "mode": "staged", "projectId": "pr1" })),
+                    pane("p3", json!({ "kind": "terminal", "cwd": "/work/other", "projectId": "pr2" })),
+                ),
+            ),
+            "focused": "p2",
+        });
+        let l = from_saved(Some(&saved)).expect("valid");
+        assert_eq!(serde_json::to_value(&l).unwrap(), saved, "saved as the UI sent it, links included");
+        assert!(
+            matches!(&l.root, Node::Split { a, .. } if matches!(&**a, Node::Pane { content: Some(Content::Terminal { project_id: Some(p), .. }), .. } if p == "pr1"))
+        );
+
+        // Nothing deleted: unchanged.
+        assert_eq!(l.clone().pruned(|_| true, |_| true), l);
+
+        // pr1 was deleted: its panes stay, in place and still focused, without the link; pr2's keeps its own.
+        let pruned = serde_json::to_value(l.pruned(|_| true, |p| p == "pr2")).unwrap();
+        assert_eq!(pruned["focused"], "p2");
+        assert_eq!(pruned["root"]["a"]["content"], json!({ "kind": "terminal", "cwd": "/work/api", "id": "tabc" }));
+        assert_eq!(pruned["root"]["b"]["a"]["content"], json!({ "kind": "diff", "cwd": "/work/web", "mode": "staged" }));
+        assert_eq!(pruned["root"]["b"]["b"]["content"]["projectId"], "pr2");
+
+        // Through for_ui too, as a start reads it.
+        let v = for_ui(from_saved(Some(&saved)), Sidebar::default(), |_| true, |_| false);
+        assert!(v["panes"]["root"]["a"]["content"].get("projectId").is_none());
+    }
+
+    #[test]
+    fn a_project_link_the_ui_could_not_have_made_is_refused_and_unknown_fields_ignored() {
+        let with = |project: Value| json!({ "root": pane("p1", json!({ "kind": "terminal", "cwd": "/w", "projectId": project })), "focused": "p1" });
+        assert!(from_saved(Some(&with(json!("x".repeat(65))))).is_none(), "too long");
+        assert!(from_saved(Some(&with(json!("")))).is_none(), "empty");
+        assert!(from_saved(Some(&with(json!("pr\n1")))).is_none(), "a control character");
+        assert!(from_saved(Some(&with(json!(42)))).is_none(), "not a string");
+        let diff = json!({ "root": pane("p1", json!({ "kind": "diff", "projectId": "x".repeat(65) })), "focused": "p1" });
+        assert!(from_saved(Some(&diff)).is_none(), "a diff's too");
+        // `null` is no link, as when the field is missing.
+        let none = from_saved(Some(&with(Value::Null))).expect("valid");
+        assert_eq!(serde_json::to_value(&none).unwrap()["root"]["content"], json!({ "kind": "terminal", "cwd": "/w" }));
+        // A field the UI doesn't make is ignored, as everywhere in the layout (serde's default), and not saved back.
+        let extra = json!({ "root": pane("p1", json!({ "kind": "terminal", "cwd": "/w", "projectID": "pr1", "colour": "red" })), "focused": "p1" });
+        let l = from_saved(Some(&extra)).expect("valid");
+        assert_eq!(serde_json::to_value(&l).unwrap()["root"]["content"], json!({ "kind": "terminal", "cwd": "/w" }));
+        // A chat or project pane has no link to keep: one sent with it is ignored likewise.
+        let chat = json!({ "root": pane("p1", json!({ "kind": "chat", "id": "c1", "projectId": "pr1" })), "focused": "p1" });
+        assert_eq!(serde_json::to_value(from_saved(Some(&chat)).unwrap()).unwrap()["root"]["content"], json!({ "kind": "chat", "id": "c1" }));
     }
 
     #[test]

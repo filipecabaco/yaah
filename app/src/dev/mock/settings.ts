@@ -12,7 +12,7 @@ import {
   type SidebarState,
   type WindowLayout,
 } from "@/lib/api";
-import { prune, type Layout } from "@/lib/layout";
+import { mapContents, prune, unlinkUnless, type Layout } from "@/lib/layout";
 // The real templates Rust embeds (src-tauri/agent-guide/), so Settings shows what agents are told.
 import guideTemplate from "../../../src-tauri/agent-guide/guide.md?raw";
 import uiSkill from "../../../src-tauri/agent-guide/yaah-ui.md?raw";
@@ -256,15 +256,19 @@ export function settingsReplies({ state }: Mock): Replies {
     },
     set_workspace_roots: ({ roots }: { roots: string[] }): string[] => (state.workspaceRoots = roots),
     reveal_data_dir: () => null,
-    // layout.rs: panes on chats or projects that are gone are dropped on the way out.
-    window_layout: (): WindowLayout => ({
-      panes:
-        state.layout &&
-        prune(state.layout, (c) =>
-          c?.kind === "chat" ? c.id in state.sessions : c?.kind === "project" ? state.projects.some((p) => p.id === c.id) : true,
-        ),
-      sidebar: state.sidebar,
-    }),
+    // layout.rs: panes on chats or projects that are gone are dropped on the way out, and links to gone projects.
+    window_layout: (): WindowLayout => {
+      const exists = (id: string) => state.projects.some((p) => p.id === id);
+      return {
+        panes:
+          state.layout &&
+          mapContents(
+            prune(state.layout, (c) => (c?.kind === "chat" ? c.id in state.sessions : c?.kind === "project" ? exists(c.id) : true)),
+            (c) => unlinkUnless(c, exists),
+          ),
+        sidebar: state.sidebar,
+      };
+    },
     set_layout: ({ layout }: { layout: Layout }) => {
       state.layout = structuredClone(layout);
       return null;

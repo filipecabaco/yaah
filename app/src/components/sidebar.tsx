@@ -28,7 +28,7 @@ import {
 import { openInTerminalApp } from "@/lib/terminal-api";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark, Wordmark } from "@/components/brand/mark";
-import { ChatMenu, CopyMenuItem } from "@/components/menus";
+import { ChatMenu, ChatRowActions, CopyMenuItem, ROW_ACTION } from "@/components/menus";
 import { Hint } from "@/components/shortcuts";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -108,8 +108,13 @@ type Props = {
   onToggle: () => void;
   /** A new width, once a drag of its edge ends (or per key). */
   onWidth: (width: number) => void;
-  /** Open terminal and diff panes, in reading order: listed beside the chats, nothing when there are none. */
+  /** Open terminal and diff panes that belong to no project, in reading order: listed beside the chats, nothing when there are none. */
   openPanes: Pane[];
+  /** Open terminal and diff panes opened from a project, by project: listed under it, with its chats. */
+  projectPanes: Record<string, Pane[]>;
+  /** A terminal or diff pane in the project's first repo, listed under it (its context menu). */
+  onProjectTerminal: (projectId: string) => void;
+  onProjectDiff: (projectId: string) => void;
   /** The pane the keyboard is in. */
   focusedPaneId: string;
   onFocusPane: (id: string) => void;
@@ -276,6 +281,12 @@ export const Sidebar = memo(function Sidebar(props: Props) {
                       onRename={props.onRenameProject}
                       onAddRepos={props.onAddRepos}
                       onDelete={props.onDeleteProject}
+                      onTerminal={props.onProjectTerminal}
+                      onDiff={props.onProjectDiff}
+                      panes={props.projectPanes[p.id] ?? NO_PANES}
+                      focusedPaneId={props.focusedPaneId}
+                      onFocusPane={props.onFocusPane}
+                      onClosePane={props.onClosePane}
                     />
                   ))}
                 </nav>
@@ -424,6 +435,8 @@ export function CollapsedTitleBar({ shown, onToggle, onPalette }: { shown: boole
   );
 }
 
+const NO_PANES: Pane[] = [];
+
 function ProjectNode({
   project,
   chats,
@@ -436,6 +449,12 @@ function ProjectNode({
   onRename,
   onAddRepos,
   onDelete,
+  onTerminal,
+  onDiff,
+  panes,
+  focusedPaneId,
+  onFocusPane,
+  onClosePane,
 }: {
   project: Project;
   chats: SessionInfo[];
@@ -448,6 +467,13 @@ function ProjectNode({
   onRename: (id: string) => void;
   onAddRepos: (id: string) => void;
   onDelete: (id: string) => void;
+  onTerminal: (id: string) => void;
+  onDiff: (id: string) => void;
+  /** Its open terminal and diff panes, listed after its chats. */
+  panes: Pane[];
+  focusedPaneId: string;
+  onFocusPane: (id: string) => void;
+  onClosePane: (id: string) => void;
 }) {
   const [open, setOpen] = useState(true);
   const selected = selection?.kind === "project" && selection.id === project.id;
@@ -464,10 +490,12 @@ function ProjectNode({
         onRename={onRename}
         onAddRepos={onAddRepos}
         onDelete={onDelete}
+        onTerminal={onTerminal}
+        onDiff={onDiff}
       >
         <div
           className={cn(
-            "group flex items-center gap-1 rounded-md pr-2 text-sm hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
+            "group flex items-center gap-1 rounded-md pr-0.5 text-sm hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
             selected && "bg-sidebar-accent",
             project.status === "archived" && "opacity-60",
           )}
@@ -487,6 +515,18 @@ function ProjectNode({
               {project.status}
             </Badge>
           )}
+          <button type="button" className={ROW_ACTION} aria-label={`Rename ${project.name}`} title="Rename" onClick={() => onRename(project.id)}>
+            <Pencil className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            className={cn(ROW_ACTION, "hover:text-destructive")}
+            aria-label={`Delete ${project.name}`}
+            title="Delete…"
+            onClick={() => onDelete(project.id)}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
         </div>
       </ProjectMenu>
       <CollapsibleContent>
@@ -494,18 +534,30 @@ function ProjectNode({
           {chats.length === 0 && <span className="px-2 py-1 text-xs text-muted-foreground">No chats</span>}
           {chats.map((c) => (
             <ChatMenu key={c.sessionId} chat={c} onOpen={() => onSelect({ kind: "chat", id: c.sessionId })}>
-              <button
-                onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
+              <div
                 className={cn(
-                  "flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
+                  "group flex items-center rounded-md hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
                   selection?.kind === "chat" && selection.id === c.sessionId && "bg-sidebar-accent",
                 )}
               >
-                <span className="min-w-0 flex-1 truncate">{c.title}</span>
-                {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
-              </button>
+                <button
+                  onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs"
+                >
+                  <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                  {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
+                </button>
+                <ChatRowActions chat={c} />
+              </div>
             </ChatMenu>
           ))}
+          {panes.length > 0 && (
+            <ul aria-label={`Open panes in ${project.name}`} className="flex flex-col gap-0.5">
+              {panes.map((p) => (
+                <PaneRow key={p.id} pane={p} focused={p.id === focusedPaneId} onFocus={onFocusPane} onClose={onClosePane} dense />
+              ))}
+            </ul>
+          )}
         </div>
       </CollapsibleContent>
     </Collapsible>
@@ -584,6 +636,8 @@ function ProjectMenu({
   onRename,
   onAddRepos,
   onDelete,
+  onTerminal,
+  onDiff,
   children,
 }: {
   project: Project;
@@ -596,6 +650,8 @@ function ProjectMenu({
   onRename: (id: string) => void;
   onAddRepos: (id: string) => void;
   onDelete: (id: string) => void;
+  onTerminal: (id: string) => void;
+  onDiff: (id: string) => void;
   children: ReactElement;
 }) {
   return (
@@ -613,6 +669,12 @@ function ProjectMenu({
         >
           <MessageSquarePlus /> New chat as {account?.label ?? "…"}
           {active && <ContextMenuShortcut>{formatKeys(SHORTCUTS.newChat.keys)}</ContextMenuShortcut>}
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onTerminal(project.id)}>
+          <SquareTerminal /> New terminal
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onDiff(project.id)}>
+          <GitCompare /> Open diff
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => onRename(project.id)}>
@@ -690,18 +752,23 @@ function QuickChats({
         const folder = c.cwd.includes("/.yaah/scratch/") ? null : baseName(c.cwd);
         return (
           <ChatMenu key={c.sessionId} chat={c} onOpen={() => onSelect({ kind: "chat", id: c.sessionId })}>
-            <button
-              onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
+            <div
               className={cn(
-                "flex items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
+                "group flex items-center rounded-md hover:bg-sidebar-accent data-[state=open]:bg-sidebar-accent",
                 selection?.kind === "chat" && selection.id === c.sessionId && "bg-sidebar-accent",
               )}
             >
-              <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate">{c.title}</span>
-              {folder && <span className="max-w-20 shrink-0 truncate font-mono text-2xs text-muted-foreground">{folder}</span>}
-              {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
-            </button>
+              <button
+                onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
+                className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm"
+              >
+                <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                {folder && <span className="max-w-20 shrink-0 truncate font-mono text-2xs text-muted-foreground">{folder}</span>}
+                {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
+              </button>
+              <ChatRowActions chat={c} />
+            </div>
           </ChatMenu>
         );
       })}
@@ -717,7 +784,8 @@ function QuickChats({
 /**
  * Terminals and diffs that are open in panes, as chats are listed: an icon, a name (the folder or
  * repository), a detail (the shell, the change count), the focused one marked, a click to go to it
- * and a close button. Nothing at all while none is open; a row goes when its pane closes.
+ * and a close button. Nothing at all while none is open; a row goes when its pane closes. Panes that
+ * belong to a project are listed under it instead (`ProjectNode`).
  */
 function OpenPanes({
   panes,
@@ -750,11 +818,14 @@ function PaneRow({
   focused,
   onFocus,
   onClose,
+  dense,
 }: {
   pane: Pane;
   focused: boolean;
   onFocus: (id: string) => void;
   onClose: (id: string) => void;
+  /** Under a project, at its chats' size; the icon sets it apart from them. */
+  dense?: boolean;
 }) {
   const info = usePaneInfo(pane.id);
   const content = pane.content;
@@ -778,9 +849,9 @@ function PaneRow({
               aria-current={focused || undefined}
               title={cwd ? `${kind}: ${cwd}` : kind}
               onClick={() => onFocus(pane.id)}
-              className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm"
+              className={cn("flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left", dense ? "text-xs" : "text-sm")}
             >
-              <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
+              <Icon className={cn("shrink-0 text-muted-foreground", dense ? "size-3" : "size-3.5")} aria-hidden />
               <span className="sr-only">{kind}: </span>
               <span className="min-w-0 flex-1 truncate">{name}</span>
               {info?.detail && <span className="max-w-24 shrink-0 truncate text-2xs text-muted-foreground">{info.detail}</span>}

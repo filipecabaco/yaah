@@ -8,7 +8,7 @@ import { setTerminalEngine } from "@/components/terminal/engine";
 import { installBrowserMock } from "@/dev/browser-mock";
 import { touchFakeRepo } from "@/dev/mock/diff";
 import { isMac } from "@/lib/shortcuts";
-import { singlePane, sameContent, splitPane } from "@/lib/layout";
+import { panesOf, singlePane, sameContent, splitPane, unlinkUnless } from "@/lib/layout";
 import { renderApp } from "@/test/app";
 import { textEngine } from "@/test/text-engine";
 
@@ -57,6 +57,17 @@ describe("layout.ts: the diff kind", () => {
       false,
     );
     expect(sameContent({ kind: "diff" }, { kind: "terminal" })).toBe(false);
+    expect(sameContent({ kind: "diff", cwd: "/a", projectId: "p" }, { kind: "diff", cwd: "/a" })).toBe(false);
+  });
+
+  it("drops a link to a project that's gone, and nothing else", () => {
+    const keep = (id: string) => id === "kept";
+    expect(unlinkUnless({ kind: "diff", cwd: "/a", mode: "staged", projectId: "gone" }, keep)).toEqual({ kind: "diff", cwd: "/a", mode: "staged" });
+    const kept = { kind: "terminal", cwd: "/a", projectId: "kept" } as const;
+    expect(unlinkUnless(kept, keep)).toBe(kept);
+    const chat = { kind: "chat", id: "c" } as const;
+    expect(unlinkUnless(chat, keep)).toBe(chat);
+    expect(unlinkUnless(null, keep)).toBeNull();
   });
 
   it("splits a pane onto one", () => {
@@ -199,6 +210,32 @@ describe("the sidebar's open panes", () => {
     await waitFor(() => expect(openPanes()).toBeNull());
     // The chat is still there.
     expect(screen.getByRole("combobox", { name: "Message" })).toBeInTheDocument();
+  });
+
+  it("list a diff opened from a project under it, until it is pointed at a folder outside the project", async () => {
+    const r = await started();
+    const project = r.mock.projects[0];
+    const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
+    await r.user.click(within(sidebar).getByRole("button", { name: project.name }));
+    await r.user.click(await screen.findByRole("button", { name: "Open diff" }));
+    const pane = await findDiffPane();
+    expect(await within(pane).findByRole("navigation", { name: "Files" })).toBeInTheDocument();
+    const list = await within(sidebar).findByRole("list", { name: `Open panes in ${project.name}` });
+    const row = await within(list).findByRole("button", { name: /^Diff:/ });
+    expect(row).toHaveAttribute("aria-current", "true");
+    expect(openPanes()).toBeNull();
+    // A mode change keeps the link.
+    await r.user.click(within(pane).getByRole("combobox", { name: "What to compare" }));
+    await r.user.click(await screen.findByRole("option", { name: "Staged" }));
+    const savedDiff = () => (r.mock.layout ? panesOf(r.mock.layout.root).find((p) => p.content?.kind === "diff")?.content : undefined);
+    await waitFor(() => expect(savedDiff()).toMatchObject({ cwd: project.dirs[0], mode: "staged", projectId: project.id }));
+
+    // Another repo, not the project's: the pane goes on, under Open panes.
+    await r.user.click(within(pane).getAllByRole("button", { name: "Choose another folder" })[0]);
+    const group = await screen.findByRole("region", { name: "Open panes" });
+    expect(await within(group).findByRole("button", { name: /^Diff:/ })).toBeInTheDocument();
+    expect(within(sidebar).queryByRole("list", { name: `Open panes in ${project.name}` })).toBeNull();
+    await waitFor(() => expect(savedDiff()).toEqual({ kind: "diff", cwd: "/Users/dev/workspace/infra" }));
   });
 
   it("goes away with a terminal pane that closes itself", async () => {

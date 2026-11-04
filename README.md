@@ -20,8 +20,8 @@
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="site/public/shots/scenarios-map-dark.webp">
-    <img src="site/public/shots/scenarios-map-light.webp" alt="An agent answering with a live map, tabs and a table inside a yaah chat" width="900">
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/shots/map-connection-dark.webp">
+    <img src="site/public/shots/map-connection-light.webp" alt="An agent answering with a map of daily flights between 12 hubs, drawn as arcs as wide as the traffic, inside a yaah chat" width="900">
   </picture>
 </p>
 
@@ -40,7 +40,7 @@ Prefer to click? Grab the `.dmg`, `.AppImage` or `.deb` from [Releases](https://
 Coding agents are great at work and terrible at showing it. They paste diffs into chat, dump JSON, describe dashboards
 in prose, and ask you questions one line at a time. yaah gives them a better way to answer.
 
-- **Real UI, built from data:** agents render forms, tables, charts (dumbbells included), maps, MDX, live PRs, database queries,
+- **Real UI, built from data:** agents render forms, tables, charts, maps, flow graphs, MDX, live PRs, database queries,
   git graphs and diffs straight into the chat. Components are data, not code, so nothing an agent writes ever runs in the app.
 - **Work on it together:** forms are shared. The agent fills in what it knows, you correct the rest, and it sees your edits.
 - **Live, not pasted:** point a component at your machine, Docker, Postgres (read-only), GitHub, GitLab or Linear, and it
@@ -93,24 +93,31 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
   - data: Postgres explorer, SQL editor;
   - machines: Docker dashboards, container logs, system monitor;
   - trackers: GitHub, GitLab and Linear issues, boards and cycles.
+- **Charts, maps and flow graphs on d3:** bars, lines, areas and dumbbells; choropleth, bubble, connection, hexbin and outline
+  maps of the world, Europe or US states, plus street maps with routes and clusters; sankey and network graphs.
+- **The message box:** drop, paste or attach images and files; pick the model and effort the agent offers; type `#`,
+  `github#`, `gitlab#` or `linear#` to attach an issue or PR, and the agent is told which live viewer shows it; lists continue on
+  Shift+Enter and ⌘B / ⌘I / ⌘E format a selection. Send while the agent is busy and the message waits in a queue.
 - **Your own component library:** agents save the UI they build and improve it over versions. Copy any component, install
   libraries from git, or share yours as a library for your team.
 - **Projects that start from your tracker:** pick a GitHub, GitLab or Linear issue (or paste its link) and yaah creates
   the project, writes the issue into its brief, adds your local clone and drafts the first message.
-- **Split panes and terminals:** ⌘D / ⌘⇧D split the window like a terminal, ⌃⌘= balances the panes, and every pane has a
-  close button. A pane holds a chat, a project or your login shell (⌘T); ⌘⇧Enter expands a terminal into a large dialog. The
-  sidebar folds away with ⌘B.
+- **Split panes, terminals and diffs:** ⌘D / ⌘⇧D split the window like a terminal, ⌃⌘= balances the panes, and ⌘W on the
+  last pane goes home. A pane holds a chat, a project, your login shell (⌘T) or a read-only diff of a repo (all changes, staged,
+  unstaged, or against a branch). Open terminals and diffs are listed in the sidebar, under their project when opened from one.
 - **Open in terminal, and agents' commands live:** open any folder in Ghostty, iTerm or Terminal. When an agent runs its commands
   through ACP's terminal capability, the tool card shows them live. (Claude Code's and Codex's current adapters run their own
   commands and don't use it yet.)
 - **Resume a session…** Import a session you started in the Claude Code or Codex CLI and carry on in yaah.
 - **A calmer chat:** full-width, your message on the right and the agent's reply in a soft bubble. Runs of tool calls fold into
-  one row, and any rendered UI has an Expand button that fills a dialog.
-- **Fewer permission prompts:** reads inside the chat's folders are allowed without asking, MCP servers can be trusted per
-  project, "don't ask again" is remembered, and answered requests fold into chips on the tool cards. Edits, commands and
-  fetches still ask.
+  one row, screenshots agents take show inline, a chat opens at its latest message, and any rendered UI has an Expand button that
+  fills a dialog.
+- **Fewer permission prompts:** reads inside the chat's folders are allowed without asking, an MCP server can be trusted in one
+  chat, a project, all quick chats or every chat, "don't ask again" is remembered, and answered requests fold into chips on the
+  tool cards. Web searches can be allowed in Settings. Edits, commands and fetches still ask.
 - **Switch agents mid-chat:** hand the conversation to another agent for the next message.
-- **Keyboard-first:** ⌘K for everything, with your shortcuts listed in Settings.
+- **Keyboard-first:** ⌘K lists chats, then projects, then commands (`@` or `#` narrows it), and your shortcuts are listed in
+  Settings. Chat and project rows have Rename and Delete buttons.
 - **Any VS Code theme:** 65 built in, or drop your own in. Text keeps at least 4.5:1 contrast in every theme, chart colours follow the
   theme, and the home screen scores 100 in Lighthouse accessibility.
 - **Your fonts:** pick an interface font and a code font and their sizes; they apply everywhere, terminals included.
@@ -119,8 +126,15 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
 
 <p align="center">
   <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/shots/composer-references-dark.webp">
+    <img src="site/public/shots/composer-references-light.webp" alt="The message box with two images and a file attached, and the # list of matching GitHub and Linear items above it" width="900">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
     <source media="(prefers-color-scheme: dark)" srcset="site/public/shots/split-panes-dark.webp">
-    <img src="site/public/shots/split-panes-light.webp" alt="Three panes side by side: a chat with folded tool calls, a terminal and a project" width="900">
+    <img src="site/public/shots/split-panes-light.webp" alt="Three panes side by side: a project chat with folded tool calls, a terminal and the project page" width="900">
   </picture>
 </p>
 
@@ -135,7 +149,7 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
 
 - **Agent UI is data:** components render with yaah's own building blocks, and web pages load only when you click.
 - **Read-only by default:** Postgres runs as a read-only role (yaah refuses superusers), and every tracker integration only reads.
-- **The agent asks before its tools run** (edits, commands, fetches), unless you said "don't ask again" or the call is a read inside the chat's folders or comes from an MCP server you trusted. Only yaah's own UI tools skip the prompt.
+- **The agent asks before its tools run** (edits, commands, fetches), unless you said "don't ask again", the call is a read inside the chat's folders, or it comes from an MCP server you trusted. Only yaah's own UI tools skip the prompt.
 - **MDX never runs:** yaah parses its syntax only and never evaluates imports, expressions or scripts.
 - **Secrets stay put:** tokens are in your keychain or a 0600 file. They go only to the process that needs them, and never into an agent's command line.
 - **Agent adapters are verified before they're used:** yaah installs each adapter once and checks newer versions daily. A

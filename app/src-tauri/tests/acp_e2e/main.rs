@@ -84,6 +84,7 @@ fn main() {
             resume_opens_the_chat_yaah_already_has_and_leaves_nothing_on_failure,
         ),
         ("resume_refuses_agents_that_cant_list_or_reopen", resume_refuses_agents_that_cant_list_or_reopen),
+        ("a_chat_whose_session_the_agent_lost_goes_on_in_a_fresh_one", a_chat_whose_session_the_agent_lost_goes_on_in_a_fresh_one),
         ("resume_lists_each_profiles_own_sessions_on_its_own_agent", resume_lists_each_profiles_own_sessions_on_its_own_agent),
         ("agents_run_commands_in_yaahs_terminals", agents_run_commands_in_yaahs_terminals),
         (
@@ -1533,6 +1534,21 @@ fn resume_opens_the_chat_yaah_already_has_and_leaves_nothing_on_failure() {
     let err = f.import(&personal, "cli-2", &f.dir.join("gone").to_string_lossy(), None, &[]).unwrap_err();
     assert!(err.contains("isn't there any more"), "{err}");
     assert_eq!(f.requests("session/load").len(), 2);
+}
+
+fn a_chat_whose_session_the_agent_lost_goes_on_in_a_fresh_one() {
+    let mut f = Fixture::new(&[("YAAH_AGENT_LOSES_SESSIONS", "1")]);
+    let sid = f.chat();
+    f.turn(&sid, "echo first");
+    // After a restart the agent answers session/load with "Resource not found" (-32002).
+    f.restart();
+    let t = f.turn(&sid, "echo second");
+    assert_eq!(last_agent_text(&t), "echo: echo second", "the message goes, in a fresh session");
+    assert_eq!(f.requests("session/load").len(), 1, "reopening was tried once");
+    assert_eq!(f.requests("session/new").len(), 2);
+    let prompt = f.requests("session/prompt").pop().unwrap().to_string();
+    assert!(prompt.contains("User: echo first"), "the conversation is handed over: {prompt}");
+    assert!(!t.entries.iter().any(|e| matches!(e, Entry::Error { .. })), "no error shown");
 }
 
 fn resume_refuses_agents_that_cant_list_or_reopen() {

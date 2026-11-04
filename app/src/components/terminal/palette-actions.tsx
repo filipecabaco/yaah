@@ -1,5 +1,5 @@
 // The ⌘K palette's terminal actions: a new terminal pane (in the default folder, or
-// the focused pane's), and "Open in terminal" (the user's own terminal app).
+// the focused pane's, belonging to its project), and "Open in terminal" (the user's own terminal app).
 import type { ReactNode } from "react";
 import { ExternalLink, GitCompare } from "lucide-react";
 import { compactPath } from "@/lib/format";
@@ -12,7 +12,8 @@ export type Terminals = ReturnType<typeof useTerminals>;
 type Action = { id: string; icon?: ReactNode; label: string; detail?: string; shortcut?: ShortcutId; onSelect: () => void };
 
 export function terminalActions(t: Terminals, icon: ReactNode, close: (then?: () => void) => void): Action[] {
-  const folder = t.focusedFolder();
+  const origin = t.focusedOrigin();
+  const folder = origin.cwd;
   const actions: Action[] = [
     { id: "new-terminal", icon, label: "New terminal", detail: "in the default folder", onSelect: () => close(() => t.open({}, "split")) },
   ];
@@ -21,7 +22,7 @@ export function terminalActions(t: Terminals, icon: ReactNode, close: (then?: ()
     icon: <GitCompare />,
     label: "Open diff…",
     detail: "changes of a git repository",
-    onSelect: () => close(() => t.openDiff(undefined)),
+    onSelect: () => close(() => t.openDiff({})),
   });
   if (folder) {
     actions.push(
@@ -30,7 +31,7 @@ export function terminalActions(t: Terminals, icon: ReactNode, close: (then?: ()
         icon: <GitCompare />,
         label: "Diff of this folder",
         detail: compactPath(folder),
-        onSelect: () => close(() => t.openDiff(folder)),
+        onSelect: () => close(() => t.openDiff(origin)),
       },
       {
         id: "new-terminal-here",

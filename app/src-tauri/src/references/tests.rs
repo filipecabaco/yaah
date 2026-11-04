@@ -170,12 +170,18 @@ fn content_follows_the_agents_capabilities() {
         resolved("linear#ENG-1", "", Some("# ENG-1 Cents"), None),
         resolved("gitlab#team/api!4", "", None, Some("GitLab: not found")),
     ];
+    let mut refs = refs;
+    refs[0].reference.kind = Kind::Pr;
     let embedded = content(&refs, true);
     assert_eq!(embedded.before.len(), 2);
+    let pr_hint = "To show github#acme/api#9 to the user, render yaah's live `pr-view` component with `ui_render` and props \
+                   `{\"number\":9,\"repo\":\"acme/api\"}`; it reads the item itself and stays current, so don't retell what it shows.";
     assert_eq!(
         embedded.before[0],
-        json!({ "type": "resource", "resource": { "uri": "https://github.com/acme/api/pull/9", "mimeType": "text/markdown", "text": "# acme/api#9 Fix" } })
+        json!({ "type": "resource", "resource": { "uri": "https://github.com/acme/api/pull/9", "mimeType": "text/markdown", "text": format!("# acme/api#9 Fix\n\n{pr_hint}") } }),
+        "the item, then which live component shows it"
     );
+    assert!(embedded.before[1]["resource"]["text"].as_str().unwrap().ends_with("`linear-issue` component with `ui_render` and props `{\"id\":\"ENG-1\"}`; it reads the item itself and stays current, so don't retell what it shows."));
     assert_eq!(embedded.before[1]["resource"]["uri"], "linear://ENG-1", "no URL: a URI of its own");
     assert_eq!(
         embedded.after,
@@ -187,8 +193,22 @@ fn content_follows_the_agents_capabilities() {
     let plain = content(&refs, false);
     assert!(plain.before.is_empty(), "nothing embedded");
     assert_eq!(plain.after.len(), 3);
-    assert_eq!(plain.after[0]["text"], "Referenced github#acme/api#9 (read by yaah from GitHub):\n\n# acme/api#9 Fix");
+    assert_eq!(plain.after[0]["text"], format!("Referenced github#acme/api#9 (read by yaah from GitHub):\n\n# acme/api#9 Fix\n\n{pr_hint}"));
     assert!(plain.after[2]["text"].as_str().unwrap().starts_with("[yaah couldn't read gitlab#team/api!4"));
+}
+
+#[test]
+fn each_item_names_the_live_component_that_shows_it() {
+    let of = |token: &str, kind: Kind| {
+        let mut r = resolved(token, "", Some("x"), None).reference;
+        r.kind = kind;
+        viewer(&r)
+    };
+    assert_eq!(of("linear#ENG-12", Kind::Issue), Some(("linear-issue", json!({ "id": "ENG-12" }))));
+    assert_eq!(of("github#acme/api#9", Kind::Pr), Some(("pr-view", json!({ "repo": "acme/api", "number": 9 }))));
+    assert_eq!(of("github#acme/api#7", Kind::Issue), Some(("github-issue", json!({ "repo": "acme/api", "number": 7 }))));
+    assert_eq!(of("gitlab#group/sub/proj#3", Kind::Issue), Some(("gitlab-issue", json!({ "project": "group/sub/proj", "iid": 3 }))));
+    assert_eq!(of("gitlab#team/api!4", Kind::Mr), None, "no merge-request viewer in the pack");
 }
 
 #[test]
@@ -201,12 +221,13 @@ fn references_together_stay_within_the_cap() {
     ];
     let out = content(&refs, true);
     let text = |i: usize| out.before[i]["resource"]["text"].as_str().unwrap().to_owned();
-    assert_eq!(text(0), big);
+    // Each keeps its short "render the live component" hint after the (capped) details.
+    assert!(text(0).starts_with(&big) && text(0).ends_with("so don't retell what it shows."));
     assert!(text(1).starts_with("yyyyyyyyyy…"), "what's left of the cap");
     assert!(text(1).contains("at most 60000 characters"));
     assert!(text(2).contains("(cut:"), "nothing left");
     let total: usize = (0..3).map(|i| text(i).chars().count()).sum();
-    assert!(total < TOTAL_CHARS + 300, "{total}");
+    assert!(total < TOTAL_CHARS + 900, "{total}");
 }
 
 // ── reading and suggesting, against the stand-in APIs ───────────────────────

@@ -516,10 +516,15 @@ export function libraryReplies(m: Mock): Replies {
   };
 }
 
-/** Folder pickers on the library screens get a sample folder, so their flows run in a browser; others act as if cancelled. */
+/**
+ * Folder pickers on the library screens and a diff's "Choose another folder" get a sample folder, so their
+ * flows run in a browser; others act as if cancelled.
+ */
 export function pickFolder(options: unknown): string | null {
   const title = asString(asObj(asObj(options).options).title) ?? "";
   if (/component library/i.test(title)) return `${home}/workspace/acme-components`;
   if (/save the library/i.test(title)) return `${home}/Documents`;
+  // A repo outside the seeded project (seedProjects: infra).
+  if (/folder with the repository/i.test(title)) return `${home}/workspace/infra`;
   return null;
 }

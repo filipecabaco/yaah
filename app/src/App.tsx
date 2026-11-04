@@ -16,6 +16,7 @@ import { PaneGrid } from "@/components/panes";
 import { DiffPane } from "@/components/diff/diff-pane";
 import { TerminalPane } from "@/components/terminal/terminal-pane";
 import { useTerminals } from "@/components/terminal/use-terminals";
+import { linkedProject, type Pane } from "@/lib/layout";
 import { focusMain, focusPaneDom } from "@/lib/pane-focus";
 import { CollapsedTitleBar, Sidebar } from "@/components/sidebar";
 import { Button } from "@/components/ui/button";
@@ -91,8 +92,19 @@ export default function App() {
   // Terminal panes: ⌘T, the home screen, the picker, ⌘K and tool cards' "Open as pane" open them.
   const terminals = useTerminals(y);
   const select = y.setSelection;
-  // Terminal and diff panes, listed in the sidebar beside the chats (stable while the tree is).
-  const openPanes = useMemo(() => panes.panes.filter((p) => p.content?.kind === "terminal" || p.content?.kind === "diff"), [panes.panes]);
+  // Terminal and diff panes, listed in the sidebar: under the project each was opened from, the rest
+  // beside the chats (a link to a project that's gone counts as none). Stable while the tree and projects are.
+  const { openPanes, projectPanes } = useMemo(() => {
+    const loose: Pane[] = [];
+    const byProject: Record<string, Pane[]> = {};
+    for (const p of panes.panes) {
+      if (p.content?.kind !== "terminal" && p.content?.kind !== "diff") continue;
+      const project = linkedProject(p.content);
+      if (project && y.projects.some((x) => x.id === project)) (byProject[project] ??= []).push(p);
+      else loose.push(p);
+    }
+    return { openPanes: loose, projectPanes: byProject };
+  }, [panes.panes, y.projects]);
   const openChat = (id: string) => select({ kind: "chat", id });
   const selection = y.selection;
   // The Component library takes a pane; closing it goes back to what that pane showed before (use-layout.ts).
@@ -110,7 +122,10 @@ export default function App() {
   );
   // Stable, so the (memoised) sidebar doesn't re-render with the rest of the app.
   const { newQuickChat, newChatInFolder, agentId } = y;
+  const { openForProject } = terminals;
   const sidebar = {
+    onProjectTerminal: useCallback((id: string) => openForProject(id, "terminal"), [openForProject]),
+    onProjectDiff: useCallback((id: string) => openForProject(id, "diff"), [openForProject]),
     onManageAgents: useCallback(() => setSetup({ kind: "manage", id: agentId || undefined }), [agentId]),
     onSettings: useCallback(() => setSetup({ kind: "settings" }), []),
     onNewQuickChat: useCallback(() => withAgent(() => newQuickChat()), [withAgent, newQuickChat]),
@@ -217,6 +232,8 @@ export default function App() {
     closePane: () => {
       if (panes.close()) focusPaneDom(panes.focusedId());
       else if (selection?.kind === "components") closeLibrary(panes.focusedId());
+      // The last pane goes back to the home screen, as its close button and an exiting shell do.
+      else if (selection) setPaneContent(panes.focusedId(), null);
     },
     focusPane: ({ dir }) => {
       const to = dir && panes.move(dir);
@@ -360,6 +377,8 @@ export default function App() {
               return y.newChat(id, agentId);
             }}
             onLogin={setLoginFor}
+            onNewTerminal={sidebar.onProjectTerminal}
+            onOpenDiff={sidebar.onProjectDiff}
             // Asked from the sidebar, which acts on the focused pane.
             askDelete={focused && askDelete === pr.id}
             onAskDeleteSeen={clearAskDelete}
@@ -488,6 +507,7 @@ export default function App() {
                 onToggle={panes.toggleSidebar}
                 onWidth={panes.setSidebarWidth}
                 openPanes={openPanes}
+                projectPanes={projectPanes}
                 focusedPaneId={panes.layout.focused}
                 onFocusPane={focusOpenPane}
                 onClosePane={closePaneById}

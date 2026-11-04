@@ -50,23 +50,26 @@ const shortcuts: [string, string[]][] = [
   ["Split the pane right, or down", ["⌘", "D", "⇧D"]],
   ["Move to the next pane over", ["⌘", "⌥", "←↑↓→"]],
   ["Balance the panes", ["⌃", "⌘", "="]],
-  ["Close the pane", ["⌘", "W"]],
-  ["New terminal to the right", ["⌘", "T"]],
+  ["Close the pane (on the last one, back home)", ["⌘", "W"]],
+  ["New terminal to the right, in this pane's folder", ["⌘", "T"]],
   ["Show or hide the sidebar", ["⌘", "B"]],
   ["Bigger, smaller or default text", ["⌘", "=", "-", "0"]],
   ["Keyboard shortcuts", ["⌘", "/"]],
   ["Settings", ["⌘", ","]],
 ];
+// COMPOSER_KEYS in app/src/lib/shortcuts.ts, plus the # trigger and markdown keys (app/src/lib/markdown-input.ts).
 const composerKeys: [string, string[]][] = [
   ["Send", ["Enter"]],
-  ["New line", ["⇧", "Enter"]],
-  ["Slash commands, at the start", ["/"]],
+  ["New line or the next list item", ["⇧", "Enter"]],
+  ["Slash commands at the start", ["/"]],
   ["Mention a file", ["@"]],
+  ["Reference an issue or pull request", ["#"]],
+  ["Bold, italic or code over a selection", ["⌘", "B", "I", "E"]],
 ];
 
 // install.sh --help: the options worth showing here.
 const installOptions: [string, string][] = [
-  ["--version v0.4.0", "Install that release instead of the latest."],
+  ["--version v0.5.1", "Install that release instead of the latest."],
   ["--deb", "Linux: install the .deb with apt (needs sudo) instead of the AppImage."],
   ["--dry-run", "Print what would happen; download, write and remove nothing."],
   ["--uninstall", "Remove what the installer put there. Keeps your data in ~/.yaah and ~/.config/yaah."],
@@ -176,8 +179,8 @@ const principles: [string, string][] = [
       <div class="mt-6">
         <Feature id="agent-ui" title="UI built from data, not code">
           <p>
-            Through yaah's MCP server the agent renders a component with its props, or an ad-hoc tree of yaah's 46 primitives: text,
-            tables, charts, forms, diffs, maps, Mermaid diagrams, a browser preview and more. A component is JSON: a tree with
+            Through yaah's MCP server the agent renders a component with its props, or an ad-hoc tree of yaah's primitives: text,
+            tables, charts, maps, flow graphs, forms, diffs, Mermaid diagrams, a browser preview and more. A component is JSON: a tree with
             <code>{"{{bindings}}"}</code> to its props, a JSON Schema and examples. yaah draws it with the same shadcn components as the rest of
             the app, and no agent code runs.
           </p>
@@ -224,7 +227,7 @@ const principles: [string, string][] = [
             slot="media"
             name="ask-form"
             width={1200}
-            height={1005}
+            height={844}
             alt="A form the agent asked with, waiting for an answer: preferred language, a slider for hours available, a grid of project kinds, and a ranked list of what matters most."
             caption="ui_ask: the agent asks before recommending a weekend project, and waits for the answer."
           />
@@ -248,30 +251,49 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="pack-docker"
             width={1200}
-            height={1125}
+            height={844}
             alt="docker-dashboard in a chat: a table of three running containers with state, image and ports, then a bar chart and table of CPU and memory per container."
             caption="docker-dashboard: containers refreshed every 5 seconds, and CPU and memory per running container."
           />
         </Feature>
 
-        <Feature id="charts" title="Charts and maps that fit">
+        <Feature id="charts" title="Charts, maps and flow graphs">
           <p>
-            The <code>chart</code> primitive draws bars, lines, areas and <strong>dumbbells</strong>: two dots per row joined by a line, for polls
-            against results or before against after. A chart can carry reference lines, end labels and sorting, and its value axis is fitted to
-            the data. A <code>map</code> fits its markers instead of showing the whole world. Every chart has a legend and a table view.
+            The three share one figure core: React renders the SVG and d3 only computes scales and shapes. Recharts is gone, and the
+            chart code went from 95.7 to 8.5 KB gzipped.
           </p>
           <p>
-            Chart colours follow whichever of the 65 VS Code themes is active, checked for contrast and for separation under the common kinds of
-            colour blindness.
+            The <code>chart</code> primitive draws bars, lines, areas and dumbbells (two dots per row joined by a line, for polls against results
+            or before against after), with reference lines, end labels, sorting and a value axis fitted to the data.
           </p>
-          <Shot
-            slot="media"
-            name="dumbbell-chart"
-            width={1200}
-            height={769}
-            alt="An election dashboard in a chat: stat cards, then a dumbbell chart of the final poll average against the result for 14 states, with the margin on a fitted axis."
-            caption="The mock's election dashboard: a dumbbell chart of polls against results, with tabs for the map and the table."
-          />
+          <p>
+            A <code>map</code> is an outline, a choropleth, bubbles, connections (great-circle arcs between places) or a hexbin, over bundled world,
+            Europe and US-state outlines. A zoomed-in view loads a more detailed world. Street maps take markers, routes and clusters.
+          </p>
+          <p>
+            The <code>flow</code> primitive draws a sankey, for quantities moving from stage to stage, or a network of things and their links.
+            Networks of 150 nodes or more lay out in a worker.
+          </p>
+          <p>
+            Every figure has a legend, keyboard focus and a table view. Colours follow whichever of the 65 VS Code themes is active, checked for
+            contrast and for separation under the common kinds of colour blindness.
+          </p>
+          <div slot="media" class="space-y-5">
+            <Shot
+              name="map-connection"
+              width={1200}
+              height={665}
+              alt="A connection map in a chat: daily flights between 12 hubs drawn as arcs on a world map, each as wide as its traffic, with a width key."
+              caption="A connection map: flights between 12 hubs as great circles, as wide as the daily departures."
+            />
+            <Shot
+              name="flow-network"
+              width={1200}
+              height={643}
+              alt="A network flow graph in a chat: 15 services such as api, auth, postgres and kafka, coloured by tier (edge, core, data) and linked by the calls between them."
+              caption="A network: which service calls which at peak, grouped by tier."
+            />
+          </div>
         </Feature>
 
         <Feature id="mdx" title="Markdown and MDX, drawn and never run">
@@ -293,6 +315,54 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
           />
         </Feature>
 
+        <Feature id="message-box" title="The message box">
+          <p>
+            One frame: what the message attaches on top, then the text, then a toolbar with Attach, Model, Effort, the <code>/</code>{" "}
+            <code>@</code> <code>#</code> keys and Send.
+          </p>
+          <p>
+            Drop, paste or attach images and files. yaah reads only the files you hand it, tells their type from the
+            bytes, and scales large images down to 2048 px. A message takes up to 20 attachments and 20 MB of images. What the agent can't take
+            inline goes as a link to the file.
+          </p>
+          <p>
+            The Model and Effort pickers list only what the chat's agent offers. Settings → Agents sets what new chats start
+            with.
+          </p>
+          <p>
+            Type <code>#</code> to search issues and pull requests in every connected tracker; <code>github#</code>,{" "}
+            <code>gitlab#</code> and <code>linear#</code> search just one. Exact ids rank first, then your chat's repos, then items that involve you, and
+            typing doesn't send a request per key. On send, yaah reads each item (read-only, up to 10 a message), attaches it, and tells the agent
+            which live component shows it, so the agent can render the item instead of retelling it.
+          </p>
+          <p>
+            Markdown works as you type: <Kbd>⇧</Kbd> <Kbd>Enter</Kbd> continues a list or quote, Tab indents an item, and <Kbd>⌘</Kbd> <Kbd>B</Kbd>,{" "}
+            <Kbd>I</Kbd> or <Kbd>E</Kbd> make a selection bold, italic or code. A closing fence follows <code>```</code>, and a URL pasted over
+            selected text becomes a link.
+          </p>
+          <p>
+            Send while a turn runs and the message waits in the chat's queue, saved with the chat. The next one goes when a
+            turn ends normally; an error, Stop or an unanswered permission request pauses it. Queued messages can be edited, moved, removed or sent
+            now.
+          </p>
+          <div slot="media" class="space-y-5">
+            <Shot
+              name="composer-references"
+              width={1200}
+              height={429}
+              alt="The message box with two images and a Markdown file attached, the text #webhook, and the reference list above it: two GitHub items from acme/api and two Linear issues, with a note that GitLab refused its credential."
+              caption="#webhook lists matching items from GitHub and Linear. GitLab's token is revoked in the mock, so it says so and the rest still list."
+            />
+            <Shot
+              name="composer"
+              width={1200}
+              height={166}
+              alt="The message box with chips for two screenshots, a Markdown file and the pull request acme/api#212, a message that mentions github#acme/api#212, and the toolbar with Attach, Model, Effort and Send."
+              caption="Picked: the reference is plain text in the message and a chip beside the attachments."
+            />
+          </div>
+        </Feature>
+
         <Feature id="libraries" title="Component libraries">
           <p>
             Components are saved and versioned, by you or by the agent with <code>ui_save_component</code>, and every chat can use them. Beside
@@ -310,7 +380,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="settings-components"
             width={1400}
-            height={1007}
+            height={1008}
             alt="Settings, Components tab: the built-in yaah library with 24 components, your own collection, an installed library from a git URL with Update and Remove, and a form to add a library from a git URL or a folder."
             caption="Settings → Components, with a sample library from the browser mock installed from git."
           />
@@ -339,7 +409,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="settings-agents"
             width={1400}
-            height={1007}
+            height={1008}
             alt="Settings, Agents (ACP) tab: your agents on the left with presets to add below, and the default Claude agent's command, version and config folder on the right."
             caption="Settings → Agents (ACP): your agents, and presets to add."
           />
@@ -365,12 +435,21 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
           />
         </Feature>
 
-        <Feature id="panes" title="Split panes and terminals">
+        <Feature id="panes" title="Split panes, terminals and diffs">
           <p>
             <Kbd>⌘</Kbd> <Kbd>D</Kbd> splits the window like a terminal does, and <Kbd>⌘</Kbd> <Kbd>⇧</Kbd> <Kbd>D</Kbd> splits it downward. Each pane
-            holds its own chat, project or terminal, with its own scroll and message box. Drag a divider, or double-click it to even things out;
-            <Kbd>⌃</Kbd> <Kbd>⌘</Kbd> <Kbd>=</Kbd> balances every pane. Each pane has a close button, and the sidebar folds away with <Kbd>⌘</Kbd> <Kbd>B</Kbd>.
-            The layout is saved and comes back when you restart.
+            holds its own chat, project, terminal or diff, with its own scroll and message box. Drag a divider, or double-click it to even things out;
+            <Kbd>⌃</Kbd> <Kbd>⌘</Kbd> <Kbd>=</Kbd> balances every pane. Each pane has a close button, <Kbd>⌘</Kbd> <Kbd>W</Kbd> on the last one goes back
+            to the home screen, and the sidebar folds away with <Kbd>⌘</Kbd> <Kbd>B</Kbd>. The layout is saved and comes back when you restart.
+          </p>
+          <p>
+            A <strong>diff pane</strong> shows a git repository's changes, read-only: everything since the last commit, staged, unstaged, or the
+            working tree against a branch. It uses the same reviewer as the diffs agents render (files, viewed ticks, hunks) and checks for changes every
+            3 seconds while the window is visible. Open it from <Kbd>⌘</Kbd> <Kbd>K</Kbd> ("Diff of this folder"), the pane picker, or a project.
+          </p>
+          <p>
+            Open terminals and diffs are listed in the sidebar, under their project when you opened them from one. A row focuses its pane, and its
+            close button closes it.
           </p>
           <p>
             A <strong>terminal pane</strong> runs your login shell in the folder you pick: <Kbd>⌘</Kbd> <Kbd>T</Kbd>, <strong>New terminal</strong> on the home
@@ -387,10 +466,17 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
           </p>
           <div slot="media" class="space-y-5">
             <Shot
+            name="diff-pane"
+            width={1600}
+            height={1000}
+            alt="yaah with a project chat on the left and a diff pane on the right showing the uncommitted changes of the api repository: six files as tabs and refund.go's hunks. The sidebar lists the diff as api, 6 changes, under the billing revamp project."
+            caption="A diff pane beside the project chat it was opened from, listed under the project in the sidebar."
+          />
+            <Shot
             name="split-panes"
             width={1600}
             height={1000}
-            alt="yaah with three panes: a chat about ENG-142 with a collapsed group of six tool calls, a terminal pane running echo commands, and a project pane for billing revamp."
+            alt="yaah with three panes: a project chat about ENG-142 with a folded group of six tool calls, a terminal pane, and the billing revamp project page. The sidebar lists the terminal under the project."
             caption="A chat, a terminal and a project side by side. In the browser mock the shell is a stand-in that echoes what you type."
           />
             <Shot
@@ -410,11 +496,12 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
           </p>
           <Shot
             slot="media"
+            class="md:max-w-md"
             name="pane-picker"
             width={800}
-            height={624}
-            alt="A new pane's picker: New chat, Add repositories, New project, New terminal and Resume a session, then recent chats."
-            caption="A new pane opens on a picker: a chat, a project, a terminal, or a session from a CLI."
+            height={910}
+            alt="A new pane's picker: New chat, Add repositories, New project, New terminal, Open diff and Resume a session, then recent chats and projects."
+            caption="A new pane opens on a picker: a chat, a project, a terminal, a diff, or a session from a CLI."
           />
         </Feature>
 
@@ -427,6 +514,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             A <strong>project</strong> is a name, a status (planning, ongoing, done, archived) and one or more repos. Chats run in the first repo and
             can work across the rest, and the project's brief goes into each chat's first prompt.
           </p>
+          <p>Each chat and project row in the sidebar has Rename and Delete buttons, shown on hover or keyboard focus.</p>
           <Shot
             slot="media"
             name="project-linked"
@@ -451,7 +539,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="project-from-issue"
             width={1000}
-            height={1063}
+            height={1136}
             alt="The New project dialog on its From an issue tab: a search box, All, Assigned and Created filters, a GitLab sign-in error with Reconnect, and a queue of Linear and GitHub issues to start from."
             caption="⌘K → New project from an issue. In the mock, GitLab's token has been revoked, so it shows its error while the rest load."
           />
@@ -471,7 +559,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="settings-integrations"
             width={1400}
-            height={1007}
+            height={1008}
             alt="Settings, Integrations tab: GitHub connected through OAuth, a note about the repo scope and fine-grained tokens, Reconnect and Disconnect, and a field for a personal API key."
             caption="Settings → Integrations: GitHub, Linear and GitLab, and database connections."
           />
@@ -480,7 +568,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
         <Feature id="security" title="Permissions and the security model">
           <ul class="space-y-3">
             <li><strong>Tool calls ask first.</strong> A command or an edit waits for Yes, "don't ask again", or No. Only yaah's own <code>ui_*</code> tools run without asking; <code>source_read</code> asks like any other tool.</li>
-            <li><strong>Fewer requests reach you.</strong> Reads and searches inside the chat's folders are allowed without asking (you can turn that off). You can trust an MCP server's tools for a project, or for a quick chat. "Don't ask again" is remembered with the chat. Edits, commands, fetches and anything outside the folders still ask.</li>
+            <li><strong>Fewer requests reach you.</strong> Reads and searches inside the chat's folders are allowed without asking (you can turn that off), and so are Claude Code's reads of the tool results it saved for that chat. You can trust an MCP server's tools in this chat, in the project, in all quick chats or in all chats. Quick chats share one scope, so trusting a server or saying "don't ask again" in one counts for all of them. Web searches can be allowed in Settings → Chat; that's off by default. Edits, commands, fetches and anything outside the folders still ask.</li>
             <li><strong>Answers fold away.</strong> An allowed request becomes a small chip on its tool card ("Allowed", "Auto-allowed · read-only in this chat's folders"), so only pending questions take space.</li>
             <li><strong>No agent code runs in the app.</strong> Agent UI is JSON drawn by yaah's renderer, and libraries are data too.</li>
             <li><strong>Data access is read-only.</strong> Postgres only as a read-only role, in a read-only transaction. GitHub, Linear and GitLab are read, never written.</li>
@@ -492,9 +580,9 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             <Shot
             name="permission"
             width={1200}
-            height={468}
-            alt="A permission request in a chat: the agent wants to call a Linear tool, with Yes, Yes and don't ask again, No, and Always allow tools from Linear in this chat."
-            caption="The agent wants to call a Linear tool and waits: allow once, remember it, or trust the server."
+            height={493}
+            alt="A permission request in a project chat: the agent wants to call a Linear tool, with Yes, Yes and don't ask again, No, and Always allow tools from Linear in this chat, in this project or in all chats."
+            caption="The agent wants to call a Linear tool and waits: allow once, remember it, or trust the server in this chat, the project or all chats."
           />
             <Shot
             name="permission-chips"
@@ -512,17 +600,33 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             calls in a row collapse into one line that names them and counts what failed or was auto-allowed. Click it to see the cards.
           </p>
           <p>
+            Images an agent produces, such as browser screenshots from a tool call, show inline under the card's title. A folded group shows its
+            latest four in a strip under its row, and a click opens the large view.
+          </p>
+          <p>
+            A chat opens at its latest message and follows the reply while you're at the bottom. Scroll up to read and it stays put; Jump to latest
+            takes you back.
+          </p>
+          <p>
             Any UI an agent renders has an <strong>Expand</strong> button that shows it in a dialog filled edge to edge: a dashboard, a diff, a long
             table.
           </p>
-          <Shot
-            slot="media"
-            name="expanded-ui"
-            width={1600}
-            height={1000}
-            alt="An election night dashboard expanded to fill a dialog: stat cards, then a dumbbell chart of polls against results."
-            caption="Expand on the election dashboard."
-          />
+          <div slot="media" class="space-y-5">
+            <Shot
+              name="chat-images"
+              width={1200}
+              height={305}
+              alt="A chat where the agent opened a dashboard in a browser: four tool calls folded into one row, with the two screenshots it took shown as thumbnails under the row."
+              caption="Two browser screenshots, kept in sight under the folded tool calls that took them."
+            />
+            <Shot
+              name="expanded-ui"
+              width={1600}
+              height={1000}
+              alt="An election night dashboard expanded to fill a dialog: stat cards, then a dumbbell chart of polls against results."
+              caption="Expand on the election dashboard."
+            />
+          </div>
         </Feature>
 
         <Feature id="fonts" title="Fonts and sizes">
@@ -530,13 +634,17 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             Pick an interface font and a code font from the families installed on your machine, and a size for each (interface text 12–20 px, code
             10–20 px). They apply everywhere: chats, the components agents draw, chart and map labels, diffs and terminals.
           </p>
+          <p>
+            The two sizes start linked, so moving one moves the other; unlink them to give code a size of its own. <Kbd>⌘</Kbd> <Kbd>=</Kbd>,{" "}
+            <Kbd>⌘</Kbd> <Kbd>-</Kbd> and <Kbd>⌘</Kbd> <Kbd>0</Kbd> make text bigger, smaller or the default size from anywhere, terminals included.
+          </p>
           <Shot
             slot="media"
             name="settings-fonts"
             width={1400}
-            height={1008}
-            alt="Settings, General tab, Fonts: Interface and Code font pickers, size sliders from 12 to 20 and 10 to 20, and a preview of both."
-            caption="Settings → General → Fonts."
+            height={1006}
+            alt="Settings, General tab, Fonts: Interface and Code font pickers, an interface size slider at 14 px and a code size slider at 12 px marked linked, the link button between them, a preview, and a note that Command equals and Command minus change the sizes from anywhere."
+            caption="Settings → General → Fonts, with the two sizes linked."
           />
         </Feature>
 
@@ -566,6 +674,10 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
 
         <Feature id="keyboard" title="Keyboard first">
           <p>Everything has a key. <kbd class="font-sans">⌘</kbd> on macOS, <kbd class="font-sans">Ctrl</kbd> on Linux; global shortcuts always need the modifier, so typing in a field is never taken.</p>
+          <p>
+            <Kbd>⌘</Kbd> <Kbd>K</Kbd> lists your chats first, then projects, then commands. Start the search with <code>@</code> to see only chats and
+            projects, or with <code>#</code> for commands only.
+          </p>
           <div class="overflow-x-auto">
             <table class="w-full text-[14px] leading-6">
               <caption class="sr-only">Keyboard shortcuts</caption>
@@ -587,7 +699,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             In the message box: {
               composerKeys.map(([label, keys], i) => (
                 <>
-                  <span class="inline-flex gap-1 align-middle">{keys.map((k) => <Kbd>{k}</Kbd>)}</span> {label.toLowerCase()}{i < composerKeys.length - 1 ? ", " : "."}
+                  <span class="inline-flex gap-1 align-middle">{keys.map((k) => <Kbd>{k}</Kbd>)}</span> {label.toLowerCase()}{i < composerKeys.length - 1 ? "; " : "."}
                 </>
               ))
             }
@@ -597,8 +709,8 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             name="palette"
             width={900}
             height={813}
-            alt="The command palette: a search box and actions such as New quick chat, New project from an issue, Switch agent, Database connections, Add agent and Settings, with their shortcuts."
-            caption="⌘K: chats, projects and actions in one place."
+            alt="The command palette with an empty search, its placeholder reading @ chats and projects, # commands: four chats, the billing revamp project, then commands such as New chat in billing revamp, New quick chat and Resume a session."
+            caption="⌘K with nothing typed: chats, then projects, then commands."
           />
         </Feature>
 
@@ -619,7 +731,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="settings-agents-told"
             width={1400}
-            height={1007}
+            height={1008}
             alt="Settings, Chat tab: the Teach agents about yaah's UI switch, and the routes each agent gets: the yaah-ui MCP server, the guide in the system prompt, and the skills as a Claude Code plugin."
             caption="Settings → Chat → Show what agents are told."
           />
@@ -648,7 +760,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="pack-test-report"
             width={1200}
-            height={780}
+            height={561}
             alt="test-report in a chat: 1 failed and 2 passed, a red and green bar, and the failing test refunds part of an order with its AssertionError, 4999 == 1499."
           />
         </Example>
@@ -667,7 +779,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="pack-db-query"
             width={1200}
-            height={863}
+            height={638}
             alt="db-query in a chat: a bar chart of revenue by product category, service, hardware and subscription, above a table with revenue and order counts."
           />
         </Example>
@@ -689,7 +801,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="pack-form"
             width={1200}
-            height={806}
+            height={571}
             alt="A bug report form in a chat, every field marked agent: a title, numbered steps to reproduce with the cause, severity Major, and area billing / refunds, with a File bug button."
           />
         </Example>
@@ -708,7 +820,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             slot="media"
             name="scenarios-map"
             width={1200}
-            height={773}
+            height={571}
             alt="marker-map in a chat: a world map titled 20 most populous urban areas, with a marker on each city."
           />
         </Example>
@@ -886,7 +998,9 @@ pnpm dev
           <li class="border-t py-3.5"><span class="text-foreground">PDF, video, audio and slides.</span> Planned as primitives; today an agent says it can't show a PDF.</li>
           <li class="border-t py-3.5"><span class="text-foreground">Interactive widgets.</span> A sandboxed node that speaks the MCP Apps protocol is being considered.</li>
           <li class="border-t py-3.5"><span class="text-foreground">A public library index.</span> Libraries install from any git URL; there's no shared catalogue.</li>
-          <li class="border-t py-3.5"><span class="text-foreground">More integrations.</span> Sentry and GitHub Actions are the next candidates.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">A browser pane.</span> Planned: a real Chrome drawn inside a pane, which agents could drive through yaah's own tools. A short prototype comes first.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">Agents on another machine.</span> Researched, with SSH as the likely first step; nothing is built.</li>
+          <li class="border-t py-3.5"><span class="text-foreground">More trackers.</span> GitHub, GitLab and Linear only, for now. Sentry, GitHub Actions, Jira and others stay as research.</li>
           <li class="border-t py-3.5"><span class="text-foreground">Windows and Intel Macs.</span> Releases are for Apple Silicon Macs and Linux on x86_64 and arm64.</li>
         </ul>
       </div>

@@ -17,6 +17,7 @@ import {
   type ReactNode,
 } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { cn } from "@/lib/utils";
 import { Copy, ExternalLink, FolderInput, FolderOpen, FolderPlus, MessageSquare, Pencil, Square, SquareTerminal, Trash2 } from "lucide-react";
 import {
   ContextMenu,
@@ -330,6 +331,32 @@ const ChatActions = createContext<ChatActionsValue | null>(null);
 
 export function ChatActionsProvider({ value, children }: { value: ChatActionsValue; children: ReactNode }) {
   return <ChatActions value={value}>{children}</ChatActions>;
+}
+
+/** The hover buttons on a sidebar row: shown on hover or keyboard focus, as the open-pane rows' close. */
+export const ROW_ACTION =
+  "grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:bg-background/60 hover:text-foreground focus-visible:opacity-100";
+
+/** Rename and Delete on a chat row, for the mouse (right-click and ⌘K do the same). */
+export function ChatRowActions({ chat }: { chat: SessionInfo }) {
+  const actions = useContext(ChatActions);
+  if (!actions) return null;
+  return (
+    <>
+      <button type="button" className={ROW_ACTION} aria-label={`Rename ${chat.title}`} title="Rename" onClick={() => actions.rename(chat)}>
+        <Pencil className="size-3.5" />
+      </button>
+      <button
+        type="button"
+        className={cn(ROW_ACTION, "hover:text-destructive")}
+        aria-label={`Delete ${chat.title}`}
+        title="Delete…"
+        onClick={() => actions.remove(chat)}
+      >
+        <Trash2 className="size-3.5" />
+      </button>
+    </>
+  );
 }
 
 /** A chat row in the sidebar or on the project page. */
