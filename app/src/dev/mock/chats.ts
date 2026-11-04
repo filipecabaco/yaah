@@ -6,6 +6,7 @@ import type { Entry, Project, SessionInfo, SlashCommand } from "@/lib/api";
 import { baseName, home, need, now, type Mock, type Replies } from "./context";
 import { bundledComponents, recordings, type Recording } from "./fixtures";
 import { chartGallery } from "./chart-gallery";
+import { mapGallery } from "./map-gallery";
 import { addProject } from "./projects";
 import { permissionsReply, trustedAnswer, trustedFor } from "./permissions";
 
@@ -673,11 +674,41 @@ const gallery: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
+/** "map gallery": a short message, then one card per map example (map-gallery.ts). */
+const mapGalleryRecording: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  {
+    event: "session-entry",
+    index: 1,
+    entry: {
+      type: "agent",
+      text: "Here are eight map examples, from one bike station to a whole continent. All data is made up.",
+      messageId: null,
+    },
+  },
+  ...mapGallery.flatMap(([title, tree], i): Recording => {
+    const input = { title, tree };
+    const id = `map-gallery-${i}`;
+    return [
+      { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "in_progress", input) },
+      {
+        event: "session-entry",
+        index: 3 + i * 2,
+        entry: { type: "ui", askId: null, answer: null, title, component: null, version: null, tree, props: {} },
+      },
+      { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "completed", input, "Rendered.") },
+    ];
+  }),
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
 const routes: [RegExp, Recording][] = [
   [/command output|tool cards/i, commandOutput],
   [/election (dashboard|night)/i, election],
   [/chart gallery/i, gallery],
+  [/map gallery/i, mapGalleryRecording],
   [/diff of my project|workspace of yaah|request folders/i, folderRequest],
   [/big diff/i, bigDiff],
   [/expand fill/i, expandFill],
