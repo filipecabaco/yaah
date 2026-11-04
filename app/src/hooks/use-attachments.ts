@@ -112,9 +112,10 @@ export function useComposerAttachments(sessionId: string, pane: string | undefin
       onIncoming(sessionId, pane, (i) => {
         if ("paths" in i) addPaths(i.paths);
         else if ("blobs" in i) addBlobs(i.blobs);
+        else if ("staged" in i) took(Promise.resolve({ added: i.staged, refused: i.refused }), []);
         else insert.current(i.text);
       }),
-    [sessionId, pane, addPaths, addBlobs],
+    [sessionId, pane, addPaths, addBlobs, took],
   );
   // What's attached and not sent stays in Rust until the composer goes.
   useEffect(

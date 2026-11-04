@@ -10,10 +10,12 @@ import { mapGallery } from "./map-gallery";
 import { mapTypes } from "./map-types";
 import { flowGraphs } from "./flow-graphs";
 import { addProject } from "./projects";
-import { permissionsReply, trustedAnswer, trustedFor } from "./permissions";
+import { permissionsReply, savedResultsReply, scopeOf, trustedAnswer, trustedFor, trustView } from "./permissions";
+import { SCOPE_WORDS, type TrustScope } from "@/lib/trust-api";
 import { initialConfig } from "./config";
 import { screenshotChat, takeStaged } from "./attachments";
 import { referenceEntry, referencesIn } from "./references";
+import { mockQueue } from "./queue";
 import type { Attachment } from "@/lib/attachments";
 
 /** A new, empty chat (session.rs `new_session`). */
@@ -770,6 +772,7 @@ const routes: [RegExp, Recording][] = [
   [/\blinks?\b|markdown/i, markdownReply],
   [/notices|mcp servers?\b/i, notices],
   [/\btriage\b|auto-allow/i, permissionsReply],
+  [/saved results?|web search/i, savedResultsReply],
   [/yaah (ui tools|components)|docker|bug report/i, recordings.pack],
   [/side project|weekend/i, recordings.ask],
   [/cities|scenario/i, recordings.scenarios],
@@ -846,6 +849,12 @@ export function chatReplies(m: Mock): Replies {
   };
 
   const open = (fields: Pick<SessionInfo, "projectId" | "accountId" | "cwd" | "additionalDirs">) => openChat(m, fields);
+  // Messages sent while a turn runs (session/queue.rs): queued, then sent as turns end.
+  const queue = mockQueue(m, {
+    send: (sid, item) =>
+      void replay(sid, item.text, item.mentions ?? [], item.files ?? []).catch((e: unknown) => console.error("[browser-mock] replay failed", e)),
+    cancel: (sid) => cancelTurn(sid),
+  });
 
   /** Notices added mid-turn (folders added), shown once the turn ends. */
   const afterTurn: Record<string, Entry[]> = {};
@@ -876,10 +885,13 @@ export function chatReplies(m: Mock): Replies {
     for (const step of recording) {
       if (turn.cancelled) return;
       if (step.event === "session-info") {
+        // A recording can open with the chat as it was created (not running); this turn already runs.
+        if (!step.running && rendered.size === 0 && step === recording[0]) continue;
         // Keep the mock's own record in step, so e.g. a rename mid-turn doesn't look stopped.
         Object.assign(s, { running: step.running, stopReason: step.stopReason });
         if (!step.running) await flushAfterTurn(sessionId);
         await showInfo(s);
+        if (!step.running) queue.turnEnded(sessionId, step.stopReason);
         continue;
       }
       const index = offset + step.index;
@@ -904,7 +916,7 @@ export function chatReplies(m: Mock): Replies {
       await m.wait(isUpdate ? 6000 : entry.type === "agent" ? 120 : 350);
       if (turn.cancelled) return;
       // A request for a server the user already trusts is answered without asking, as session.rs does.
-      const trusted = entry.type === "permission" ? trustedAnswer(entry, trustedFor(s, state.projects)) : null;
+      const trusted = entry.type === "permission" ? trustedAnswer(entry, trustedFor(s, state)) : null;
       await show(sessionId, index, trusted ?? (entry.type === "ui" ? shiftTimes(entry, shift) : entry));
       if ((entry.type === "permission" && entry.chosen == null && !trusted) || (entry.type === "ui" && entry.askId && entry.answer == null))
         await pause();
@@ -921,6 +933,7 @@ export function chatReplies(m: Mock): Replies {
           Object.assign(s, { running: false, stopReason: "end_turn" });
           await flushAfterTurn(sessionId);
           await showInfo(s);
+          queue.turnEnded(sessionId, "end_turn");
           return;
         }
       }
@@ -959,6 +972,16 @@ export function chatReplies(m: Mock): Replies {
     await showInfo(s);
     return s;
   };
+
+  /** `cancel_turn`: the replay stops; a queue waiting on it pauses (or Send now's message goes). */
+  async function cancelTurn(sessionId: string) {
+    const s = session(sessionId);
+    if (s.running) queue.stopped(sessionId);
+    stopTurn(state.turns[sessionId]);
+    await flushAfterTurn(sessionId);
+    await showInfo(Object.assign(s, { running: false, stopReason: "cancelled" }));
+    queue.turnEnded(sessionId, "cancelled");
+  }
 
   return {
     list_sessions: (): SessionInfo[] => Object.values(state.sessions),
@@ -1043,12 +1066,16 @@ export function chatReplies(m: Mock): Replies {
       const s = session(sessionId);
       // What the composer attached, as attachments.rs sends it for this agent.
       const files = takeStaged(m, attachments, state.profiles.find((p) => p.id === s.accountId)?.report);
+      const queued = queue.ifBusy(s, text, mentions, files);
+      if (queued) return queued;
       // references.rs reads the message's `github#…` tokens before the turn starts.
       if (referencesIn(state, text).length) await m.wait(400);
       if (!state.transcripts[sessionId]?.length) s.title = (text.split("\n")[0] ?? "").slice(0, 60);
-      // The turn runs on after the command returns, as in Rust.
+      // The turn runs on after the command returns, as in Rust, where the chat is running from here on
+      // (so a message sent before the recording's first step queues rather than replacing this turn).
+      s.running = true;
       replay(sessionId, text, mentions, files).catch((e: unknown) => console.error("[browser-mock] replay failed", e));
-      return null;
+      return { status: "started" };
     },
     // session.rs `switch_agent`: the next prompt goes to another agent (a fresh session there, with a hand-off).
     switch_agent: async ({ sessionId, accountId }: { sessionId: string; accountId: string }): Promise<SessionInfo> => {
@@ -1084,33 +1111,57 @@ export function chatReplies(m: Mock): Replies {
       state.turns[sessionId]?.resume?.();
       return null;
     },
-    // session.rs `trust_server`: in the chat's project, or a quick chat's own; its waiting requests are answered.
-    trust_mcp_server: async ({ sessionId, index }: { sessionId: string; index: number }) => {
+    // session/trust.rs `trust_server`: in this chat, its project, quick chats or all chats; this request is answered.
+    trust_mcp_server: async ({ sessionId, index, scope }: { sessionId: string; index: number; scope?: TrustScope }) => {
       const s = session(sessionId);
       const request = shown(sessionId, index);
       if (request?.type !== "permission") throw new Error("no permission request at that index");
       const server = request.mcpServer;
       if (!server) throw new Error("yaah can't tell which MCP server this request is for");
+      const view = trustView(s, state);
+      const where = scope ?? view.here;
+      if (!view.offered.includes(where)) throw new Error(`this chat can't trust a server ${SCOPE_WORDS[where]}`);
+      const add = (list: string[] | undefined) => [...new Set([...(list ?? []), server.id])];
       const project = s.projectId ? state.projects.find((p) => p.id === s.projectId) : undefined;
-      if (project) {
-        project.trustedMcpServers = [...new Set([...(project.trustedMcpServers ?? []), server.id])];
+      if (where === "project" && project) {
+        project.trustedMcpServers = add(project.trustedMcpServers);
         await m.emit("projects-changed", { projectId: project.id });
-      } else {
-        s.trustedMcpServers = [...new Set([...(s.trustedMcpServers ?? []), server.id])];
+      } else if (where === "quickChats") state.quickTrusted = add(state.quickTrusted);
+      else if (where === "everywhere") state.trustedEverywhere = add(state.trustedEverywhere);
+      else {
+        s.trustedMcpServers = add(s.trustedMcpServers);
         await showInfo(s);
       }
-      const answered = trustedAnswer(request, trustedFor(s, state.projects));
+      await m.emit("trust-changed", {});
+      const answered = trustedAnswer(request, trustedFor(s, state));
       if (answered) {
         await show(sessionId, index, answered);
         state.turns[sessionId]?.resume?.();
       }
       return null;
     },
+    trust_scope: ({ sessionId }: { sessionId: string }) => trustView(session(sessionId), state),
     untrust_chat_mcp_server: async ({ sessionId, server }: { sessionId: string; server: string }): Promise<SessionInfo> => {
       const s = session(sessionId);
       s.trustedMcpServers = (s.trustedMcpServers ?? []).filter((t) => t !== server);
+      if (scopeOf(s) === "quickChats") state.quickTrusted = state.quickTrusted.filter((t) => t !== server);
       await showInfo(s);
+      await m.emit("trust-changed", {});
       return s;
+    },
+    untrust_quick_chat_mcp_server: async ({ server }: { server: string }) => {
+      state.quickTrusted = state.quickTrusted.filter((t) => t !== server);
+      await m.emit("trust-changed", {});
+      return null;
+    },
+    untrust_mcp_server_everywhere: async ({ server }: { server: string }) => {
+      state.trustedEverywhere = state.trustedEverywhere.filter((t) => t !== server);
+      await m.emit("trust-changed", {});
+      return {
+        trustReadOnly: state.trustReadOnly,
+        allowWebSearch: state.allowWebSearch,
+        trustedEverywhere: state.trustedEverywhere.map((id) => ({ id, label: id.replace(/^claude_ai_(?=.)/, "") })),
+      };
     },
     answer_ui: async ({ sessionId, index, values }: { sessionId: string; index: number; values: Record<string, unknown> }) => {
       const ui = shown(sessionId, index);
@@ -1131,10 +1182,9 @@ export function chatReplies(m: Mock): Replies {
       return null;
     },
     cancel_turn: async ({ sessionId }: { sessionId: string }) => {
-      stopTurn(state.turns[sessionId]);
-      await flushAfterTurn(sessionId);
-      await showInfo(Object.assign(session(sessionId), { running: false, stopReason: "cancelled" }));
+      await cancelTurn(sessionId);
       return null;
     },
+    ...queue.replies,
   };
 }

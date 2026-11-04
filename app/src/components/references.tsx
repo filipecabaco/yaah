@@ -116,20 +116,31 @@ export function ReferenceNotes({ references }: { references?: Reference[] }) {
   );
 }
 
-/** Below the composer: the references picked so far that the message will attach. */
-export function ReferenceChips({ references, sending, className }: { references: Reference[]; sending: boolean; className?: string }) {
+/**
+ * In the composer's frame, beside the attachments and shaped like them: the references picked so
+ * far that the message will attach, each "Reading…" while Rust reads them on send.
+ */
+export function ReferenceChips({ references, sending }: { references: Reference[]; sending: boolean }) {
   if (!references.length) return null;
   return (
-    <div className={cn("flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground", className)} aria-label="References this message attaches">
-      {sending ? <Loader2 className="size-3 animate-spin" aria-hidden /> : null}
-      <span>{sending ? "Reading" : "Attaches"}</span>
+    <ul className="flex max-w-full min-w-0 flex-wrap gap-1.5" aria-label="References this message attaches" aria-busy={sending || undefined}>
       {references.map((r) => (
-        <Badge key={r.token} variant="outline" className="max-w-72 gap-1 font-normal" title={`${r.token}\n${r.title}`}>
-          <ReferenceIcon reference={r} className="size-3" />
-          <span className="shrink-0 font-mono">{r.id}</span>
-          <span className="truncate text-muted-foreground">{r.title}</span>
-        </Badge>
+        <li
+          key={r.token}
+          className="flex max-w-[min(16rem,100%)] items-center gap-2 rounded-lg border bg-card px-2 py-1 text-xs"
+          title={`Attaches ${r.token}\n${r.title}`}
+        >
+          {sending ? (
+            <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" aria-hidden />
+          ) : (
+            <ReferenceIcon reference={r} className="size-4 text-muted-foreground" />
+          )}
+          <span className="flex min-w-0 flex-col">
+            <span className="truncate font-mono font-medium">{r.id}</span>
+            <span className="truncate text-muted-foreground">{sending ? "Reading…" : r.title}</span>
+          </span>
+        </li>
       ))}
-    </div>
+    </ul>
   );
 }

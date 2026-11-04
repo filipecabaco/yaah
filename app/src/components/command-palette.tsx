@@ -650,6 +650,15 @@ function PaletteBody({
       { id: "connect-github", icon: <Plug />, label: "Connect GitHub…", onSelect: () => close(() => onIntegrations("github")) },
       { id: "connect-gitlab", icon: <Plug />, label: "Connect GitLab…", onSelect: () => close(() => onIntegrations("gitlab")) },
       { id: "help", icon: <Keyboard />, label: "Keyboard shortcuts", shortcut: "help", onSelect: () => close(onHelp) },
+      // The chat's queued messages (session/queue.rs): all of them go, but not one already on its way.
+      chat &&
+        (chat.queue?.items?.length ?? 0) > 0 && {
+          id: "clear-queue",
+          icon: <Trash2 />,
+          label: "Clear queue",
+          detail: `${chat.queue?.items?.length ?? 0} queued`,
+          onSelect: () => run(() => api.queueClear(chat.sessionId)),
+        },
     ];
     const goTo: Entry = {
       id: "components",

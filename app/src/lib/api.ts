@@ -357,7 +357,44 @@ export type SessionInfo = {
   trustedMcpServers?: string[];
   /** The agent's settings (model, effort, …) and the user's picks (session/config.rs). */
   config?: ChatConfig;
+  /** Messages sent while a turn ran, waiting to go (session/queue.rs). Absent when empty. */
+  queue?: MessageQueue;
 };
+
+/** A message waiting in a chat's queue (session/queue.rs `Queued`). */
+export type QueuedMessage = {
+  id: string;
+  text: string;
+  /** Absolute paths of the files mentioned with @. */
+  mentions?: string[];
+  /** What the user attached, held by the queue until it is sent or removed. */
+  files?: Attachment[];
+  /** How many # references the text has (read when it is sent). */
+  references?: number;
+  /** Unix seconds. */
+  queuedAt: number;
+  /** The chat's model and effort when it was queued (option id → value); the picks at send time apply. */
+  config?: Record<string, string>;
+  /** On its way: its references are read and its turn is starting. */
+  sending?: boolean;
+};
+
+export type QueuePauseReason = "error" | "cancelled" | "permission" | "stopped" | "restart" | "sendFailed";
+
+/** A chat's queue: Rust decides the order, when the next goes, and when it pauses. */
+export type MessageQueue = {
+  items?: QueuedMessage[];
+  /** Why it isn't sending; absent while it sends as turns end. */
+  paused?: { reason: QueuePauseReason; detail?: string };
+  /** The id of the message that went last. */
+  lastSent?: string;
+};
+
+/** What `send_prompt` did: started a turn, or queued the message (`position` 1 = next). */
+export type Sent = { status: "started" } | { status: "queued"; id: string; position: number };
+
+/** What Edit on a queued message hands back to the composer. */
+export type EditedMessage = { text: string; mentions: string[]; attachments: Attachment[]; refused: { name: string; reason: string }[] };
 
 /** One value of a config option. */
 export type ConfigChoice = { value: string; name: string; description?: string; group?: string };
@@ -540,7 +577,10 @@ export type PermissionOption = {
 };
 
 /** Why yaah answered a permission request itself, and the same in words ("read-only in this chat's folders"). */
-export type PermissionAuto = { reason: "readOnly" | "trustedServer" | "remembered" | (string & {}); why: string };
+export type PermissionAuto = {
+  reason: "readOnly" | "trustedServer" | "trustedEverywhere" | "remembered" | "toolResults" | "webSearch" | (string & {});
+  why: string;
+};
 
 export type ToolContent =
   | { type: "content"; content: { type: string; text?: string } }
@@ -584,6 +624,8 @@ export type Entry =
       auto?: PermissionAuto;
       /** The MCP server the tool belongs to, when yaah can tell: the card offers to trust it. */
       mcpServer?: { id: string; label: string };
+      /** Rust's words for what the request is, above it on its card ("Claude is reading a saved tool result"). It still asks. */
+      note?: string;
     }
   | {
       type: "ui";
@@ -881,8 +923,19 @@ export const api = {
   /** Change fields of an unsent form (the agent edits the same draft). */
   editUi: (sessionId: string, index: number, values: Record<string, unknown>) => invoke<unknown>("edit_ui", { sessionId, index, values }),
   /** `attachments`: ids of what the composer attached (lib/attachments.ts `stage`). */
+  /** Sends it, or queues it while a turn runs (Rust decides; session/queue.rs). */
   sendPrompt: (sessionId: string, text: string, mentions: string[] = [], attachments: string[] = []) =>
-    invoke<void>("send_prompt", { sessionId, text, mentions, ...(attachments.length ? { attachments } : {}) }),
+    invoke<Sent>("send_prompt", { sessionId, text, mentions, ...(attachments.length ? { attachments } : {}) }),
+  /** The chat's queue (session/queue.rs): each answers with the chat's info, its queue as it is now. */
+  queueRemove: (sessionId: string, id: string) => invoke<SessionInfo>("queue_remove", { sessionId, id }),
+  /** Takes the message out of the queue; its attachments are staged in the composer again. */
+  queueEdit: (sessionId: string, id: string) => invoke<EditedMessage>("queue_edit", { sessionId, id }),
+  /** `to`: 0 = next. */
+  queueMove: (sessionId: string, id: string, to: number) => invoke<SessionInfo>("queue_move", { sessionId, id, to }),
+  queueClear: (sessionId: string) => invoke<SessionInfo>("queue_clear", { sessionId }),
+  queueResume: (sessionId: string) => invoke<SessionInfo>("queue_resume", { sessionId }),
+  /** Stops the running turn and sends this message next. */
+  queueSendNow: (sessionId: string, id: string) => invoke<SessionInfo>("queue_send_now", { sessionId, id }),
   /** The chat's next message goes to `accountId`'s agent, in a fresh session, with the conversation so far. Refused mid-turn. */
   switchAgent: (sessionId: string, accountId: string) => invoke<SessionInfo>("switch_agent", { sessionId, accountId }),
   /** A page of `accountId`'s own sessions (started in its CLI, say), from that profile's agent; optionally only those in `cwd`. */
@@ -906,7 +959,7 @@ export const api = {
     invoke<AgentConfigDefaults>("set_agent_config_default", { accountId, configId, value }),
   respondPermission: (sessionId: string, index: number, optionId: string | null) =>
     invoke<void>("respond_permission", { sessionId, index, optionId }),
-  /** "Always allow tools from <server>": trusts the request's MCP server in the chat's project, or in a quick chat. */
+  /** "Always allow tools from <server>" where the chat keeps its own (lib/trust-api.ts picks a scope). */
   trustMcpServer: (sessionId: string, index: number) => invoke<void>("trust_mcp_server", { sessionId, index }),
   untrustProjectMcpServer: (id: string, server: string) => invoke<Project>("untrust_project_mcp_server", { id, server }),
   untrustChatMcpServer: (sessionId: string, server: string) => invoke<SessionInfo>("untrust_chat_mcp_server", { sessionId, server }),

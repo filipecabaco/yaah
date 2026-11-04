@@ -1,7 +1,8 @@
 // Attachments in a chat's composer: dropping on the pane (with an overlay saying what will
-// happen), pasting, the Attach button, the chips above the textarea, and the attachments of a
-// sent message in the transcript. Rust reads and checks every file (attachments.rs); this only
-// asks it to and draws the answer.
+// happen), pasting, the Attach button, the chips at the top of the composer's frame, and the
+// attachments of a sent message in the transcript. Rust reads and checks every file
+// (attachments.rs); this only asks it to and draws the answer.
+import type { ReactNode } from "react";
 import { File as FileIcon, FileText, Folder, Loader2, Paperclip, X } from "lucide-react";
 import { Hint } from "@/components/shortcuts";
 import { ImageThumb } from "@/components/image-preview";
@@ -11,7 +12,6 @@ import type { ComposerAttachments, PaneDrag } from "@/hooks/use-attachments";
 import type { AgentReport } from "@/lib/api";
 import { capabilityText, countText, dropHeadline, sentText, type Attachment } from "@/lib/attachments";
 import { formatBytes } from "@/lib/format";
-import { cn } from "@/lib/utils";
 
 /** The overlay over a pane while something is dragged over it: what will happen, and what this agent takes. */
 export function DropOverlay({ drag, agent, report }: { drag: PaneDrag | null; agent: string; report?: AgentReport | null }) {
@@ -47,10 +47,11 @@ export function AttachButton({ onPick, disabled }: { onPick: () => Promise<void>
   return (
     <Hint label="Attach files">
       <Button
-        size="icon"
+        size="icon-sm"
         variant="ghost"
         disabled={disabled}
         aria-label="Attach files"
+        className="text-muted-foreground"
         onClick={() => void onPick().catch((e: unknown) => console.error("could not open the file picker", e))}
       >
         <Paperclip />
@@ -74,54 +75,65 @@ function describeItem(a: Attachment): string {
   return [kind, a.size != null ? formatBytes(a.size) : null, a.note].filter(Boolean).join(", ");
 }
 
-/** The chips above the textarea: what's attached, each removable; refusals and progress below. */
-export function AttachmentChips({ sessionId, state, className }: { sessionId: string; state: ComposerAttachments; className?: string }) {
+/**
+ * The top of the composer's frame (composer-shell.tsx): what's attached, each removable, in one
+ * row with `children` (the references the message attaches); progress and refusals under them.
+ * The live region is always mounted, so the first attachment is announced too.
+ */
+export function AttachmentChips({ sessionId, state, children }: { sessionId: string; state: ComposerAttachments; children?: ReactNode }) {
   const { items, refused, pending, announce } = state;
   const summary = items.length ? `${countText(items)} attached` : "";
   return (
-    <div className={cn("flex flex-col gap-1.5", !items.length && !refused.length && !pending && "contents", className)}>
+    <>
       <p className="sr-only" aria-live="polite">
         {[announce, summary].filter(Boolean).join(". ")}
       </p>
-      {items.length > 0 && (
-        <ul aria-label="Attachments" className="flex flex-wrap gap-1.5">
-          {items.map((a) => (
-            <li
-              key={a.id}
-              className="flex max-w-64 items-center gap-2 rounded-lg border bg-card py-1 pr-1 pl-1.5 text-xs"
-              title={[a.path && !a.pasted ? a.path : a.name, a.note].filter(Boolean).join("\n")}
-            >
-              {a.kind === "image" && a.image ? (
-                <ImageThumb
-                  sessionId={sessionId}
-                  image={{ type: "image", image: a.image, mimeType: a.mimeType, size: a.size, width: a.width, height: a.height }}
-                  alt={a.name}
-                  path={a.pasted ? null : a.path}
-                  note={a.note}
-                  variant="chip"
-                />
-              ) : (
-                kindIcon(a)
-              )}
-              <span className="flex min-w-0 flex-col">
-                <span className="truncate font-medium">{a.name}</span>
-                <span className="truncate text-muted-foreground">{describeItem(a)}</span>
-              </span>
-              <Button size="icon-xs" variant="ghost" aria-label={`Remove ${a.name}`} onClick={() => state.remove(a.id)}>
-                <X />
-              </Button>
-            </li>
-          ))}
-        </ul>
+      {(items.length > 0 || children) && (
+        // Chips in a line share its height, so a reference chip stands as tall as an image beside it.
+        <div className="flex flex-wrap gap-1.5">
+          {items.length > 0 && (
+            <ul aria-label="Attachments" className="flex max-w-full min-w-0 flex-wrap gap-1.5">
+              {items.map((a) => (
+                <li
+                  key={a.id}
+                  className="flex max-w-[min(16rem,100%)] items-center gap-2 rounded-lg border bg-card py-1 pr-1 pl-1.5 text-xs"
+                  title={[a.path && !a.pasted ? a.path : a.name, a.note].filter(Boolean).join("\n")}
+                >
+                  {a.kind === "image" && a.image ? (
+                    <ImageThumb
+                      sessionId={sessionId}
+                      image={{ type: "image", image: a.image, mimeType: a.mimeType, size: a.size, width: a.width, height: a.height }}
+                      alt={a.name}
+                      path={a.pasted ? null : a.path}
+                      note={a.note}
+                      variant="chip"
+                    />
+                  ) : (
+                    kindIcon(a)
+                  )}
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate font-medium">{a.name}</span>
+                    <span className="truncate text-muted-foreground">{describeItem(a)}</span>
+                  </span>
+                  <Button size="icon-xs" variant="ghost" aria-label={`Remove ${a.name}`} onClick={() => state.remove(a.id)}>
+                    <X />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {children}
+        </div>
       )}
       {pending && (
-        <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <p className="flex items-center gap-1.5 px-1 text-xs text-muted-foreground">
           <Loader2 className="size-3 animate-spin" aria-hidden /> Attaching…
         </p>
       )}
       {refused.length > 0 && (
-        <div role="alert" className="flex items-start gap-2 text-xs text-destructive">
-          <ul className="min-w-0 flex-1">
+        // The dismiss sits right after the message, not at the far edge of the frame.
+        <div role="alert" className="flex items-start gap-1 pl-1 text-xs text-destructive">
+          <ul className="min-w-0 py-1">
             {refused.map((r, i) => (
               <li key={i}>
                 <span className="font-medium">{r.name}</span> {r.reason}
@@ -133,7 +145,7 @@ export function AttachmentChips({ sessionId, state, className }: { sessionId: st
           </Button>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

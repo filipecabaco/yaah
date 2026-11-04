@@ -109,12 +109,8 @@ Sources: [security-review.md](docs/research/security-review.md) (all 9 findings 
 
 **Permission prompts (PR #8).** Built: answered prompts fold into the tool card as a chip; "Trust read-only" (on by default; read and search requests whose paths all resolve inside the chat's folders are allowed, decided in Rust, `allow_once` only); trusted MCP servers; "don't ask again", which replays the one-off option (yaah never sends `allow_always` for you). Not built: mode switching and a shell allowlist (options B and C in permissions.md).
 
-- [ ] **Permissions in quick chats: decision pending.** MCP-server trust and "don't ask again" are saved per project, or per chat when there is no project. So every new quick chat (its folder is `~/.yaah/scratch/<id>`) asks again. The read-only setting works: none of the recent prompts were file reads; they were MCP tools, a web search and commands. Options proposed:
-  1. "Trust everywhere" for MCP servers, listed in Settings → Chat with a Remove button.
-  2. All quick chats share one scope for trust and "don't ask again".
-  3. An "Allow web searches without asking" setting, off by default (fetches keep asking).
-
-  Whichever is chosen: edits, commands and untrusted servers keep asking, and the one-off option is always there.
+- [x] **Permissions in quick chats: decided and built (2026-11-04).** All four: trust an MCP server in this chat, this project, all quick chats or everywhere (listed in Settings → Chat with Remove); quick chats share trust and "don't ask again" (migrated once, `reject_always` wins on conflict); reads in the chat's own Claude `tool-results` folder are allowed (only that folder), and shell reads there say "Claude is reading a saved tool result" but still ask; "Allow web searches without asking", off by default (WebSearch arrives as kind `fetch`, so it's matched by tool name; fetches keep asking). Sources: [permissions-tool-results.md](docs/research/permissions-tool-results.md), [permission-scopes](docs/experiments/2026-11-04-permission-scopes/).
+  - [ ] Shell read-backs of saved results still ask (no shell allowlist, by decision).
 
 ## 8. Brand and interface: needs a look in the real app
 
@@ -282,8 +278,11 @@ Gaps:
 
 **Built: markdown in the message box** (`app/src/lib/markdown-input.ts`): lists continue on Shift+Enter, Tab indents list items, a selection is wrapped by the mark typed over it or by ⌘B / ⌘I / ⌘E, a closing fence appears after ```, and a URL pasted over a selection becomes a link. ⌘Z undoes each.
 
-**Planned next:**
-- [ ] **Queued messages:** send while a turn runs. One queue per chat, kept in Rust. Edit, remove and reorder. "Send now" stops the turn. The queue pauses on errors and permission prompts, and keeps attachments, references, model and effort.
+**Built since:**
+- [x] **Queued messages:** Enter or the Queue button while a turn runs queues the message; one queue per chat in Rust, saved with the chat. Edit, Remove, Move, "Send now" (stops the turn). It pauses after an error, Stop, a waiting permission request, any stop reason other than `end_turn`, and after a restart; "Resume queue" continues. The chat's model and effort at send time apply.
+- [x] **Input box redesign:** one frame with chips on top, the text, and a toolbar (Attach, Model, Effort, the `/ @ #` hint, Send or Queue and Stop).
+- [x] **Diff pane** (all, staged, unstaged, against a branch; read-only) and an **Open panes** sidebar group for terminals and diffs.
+- [x] **⌘K palette:** chats, then projects, then commands; `@` and `#` scopes.
 
 ## 17. Other research: open decisions
 

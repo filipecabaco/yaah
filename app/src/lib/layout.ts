@@ -14,7 +14,14 @@ export type Selection =
   | { kind: "components" }
   | { kind: "picker" }
   | { kind: "terminal"; cwd?: string; id?: string }
+  | { kind: "diff"; cwd?: string; mode?: DiffMode; base?: string }
   | null;
+
+/**
+ * What a diff pane compares: the working tree against HEAD (`all`), the staged changes, the unstaged ones,
+ * or the working tree against its merge base with a branch (`base`). Rust reads it (sources/git.rs `working_view`).
+ */
+export type DiffMode = "all" | "staged" | "unstaged" | "branch";
 
 export type Pane = { type: "pane"; id: string; content: Selection };
 /** `row`: `a` left of `b`; `column`: `a` above `b`. `ratio` is `a`'s share. */
@@ -161,6 +168,7 @@ export function sameContent(a: Selection, b: Selection): boolean {
   if (a === b) return true;
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === "terminal") return b.kind === "terminal" && a.id === b.id && a.cwd === b.cwd;
+  if (a.kind === "diff") return b.kind === "diff" && a.cwd === b.cwd && a.mode === b.mode && a.base === b.base;
   return !("id" in a) || a.id === (b as { id: string }).id;
 }
 

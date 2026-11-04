@@ -649,6 +649,16 @@ impl Staging {
             items.remove(id);
         }
     }
+
+    /// Back in the chat's composer (Edit on a queued message, `session/queue.rs`), within a message's limits.
+    pub fn restage(&self, session_id: &str, items: Vec<Attachment>) -> Staged {
+        self.add(session_id, items.into_iter().map(Ok).collect())
+    }
+
+    /// Whether the chat's composer holds the image `image` (a store id).
+    pub fn holds_image(&self, session_id: &str, image: &str) -> bool {
+        self.items.lock().unwrap().values().any(|(s, a)| s == session_id && a.image.as_deref() == Some(image))
+    }
 }
 
 // ---------------------------------------------------------------------------

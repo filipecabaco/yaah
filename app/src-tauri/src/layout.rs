@@ -45,6 +45,16 @@ pub enum Content {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+    /// A diff pane: the working-tree changes of the repository `cwd` is in (the pane's own
+    /// folder choice), in `mode` (`all`, `staged`, `unstaged` or `branch`) against `base`.
+    Diff {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+    },
 }
 
 /// A folder path or terminal id longer than this isn't one the UI made.
@@ -55,6 +65,11 @@ impl Content {
         match self {
             Self::Terminal { cwd, id } => {
                 cwd.as_ref().is_none_or(|c| c.len() <= MAX_FIELD && !c.contains('\0')) && id.as_ref().is_none_or(|i| i.len() <= MAX_ID)
+            }
+            Self::Diff { cwd, mode, base } => {
+                cwd.as_ref().is_none_or(|c| c.len() <= MAX_FIELD && !c.contains('\0'))
+                    && mode.as_ref().is_none_or(|m| m.len() <= MAX_ID)
+                    && base.as_ref().is_none_or(|b| b.len() <= MAX_FIELD && !b.contains('\0'))
             }
             _ => true,
         }
@@ -365,6 +380,26 @@ mod tests {
         let pruned = l.pruned(|_| false, |_| false);
         assert_eq!(pruned.pane_ids(), ["p2", "p3"]);
         let long = json!({ "root": pane("p1", json!({ "kind": "terminal", "cwd": "x".repeat(5000) })), "focused": "p1" });
+        assert!(from_saved(Some(&long)).is_none());
+    }
+
+    #[test]
+    fn diff_panes_round_trip_and_are_never_pruned() {
+        let saved = json!({
+            "root": split(
+                "s1",
+                "row",
+                0.5,
+                pane("p1", json!({ "kind": "chat", "id": "c1" })),
+                split("s2", "column", 0.5, pane("p2", json!({ "kind": "diff", "cwd": "/work/repo", "mode": "branch", "base": "main" })), pane("p3", json!({ "kind": "diff" }))),
+            ),
+            "focused": "p2",
+        });
+        let l = from_saved(Some(&saved)).expect("valid");
+        assert_eq!(serde_json::to_value(&l).unwrap(), saved, "saved as the UI sent it, an empty diff pane too");
+        let pruned = l.pruned(|_| false, |_| false);
+        assert_eq!(pruned.pane_ids(), ["p2", "p3"]);
+        let long = json!({ "root": pane("p1", json!({ "kind": "diff", "base": "x".repeat(5000) })), "focused": "p1" });
         assert!(from_saved(Some(&long)).is_none());
     }
 

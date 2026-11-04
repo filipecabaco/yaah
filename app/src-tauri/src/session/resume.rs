@@ -135,6 +135,7 @@ impl Hub {
             remembered: std::collections::BTreeMap::new(),
             trusted_mcp_servers: vec![],
             config: super::ChatConfig::default(),
+            queue: super::Queue::default(),
         };
         let token = random_token();
         let mut session = Session::new(info, vec![], self.store.as_ref().map(|d| d.join(file_name(acp_id))));

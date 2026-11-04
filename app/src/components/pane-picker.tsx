@@ -1,7 +1,7 @@
 // What a new split pane opens on: start a chat (with an agent) or a project, or
 // open any chat or project, through one search ranked like the ⌘K palette's.
 import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
-import { FolderGit2, FolderOpen, FolderPlus, History, Loader2, MessageSquare, MessageSquarePlus, SquareTerminal, X } from "lucide-react";
+import { FolderGit2, FolderOpen, FolderPlus, GitCompare, History, Loader2, MessageSquare, MessageSquarePlus, SquareTerminal, X } from "lucide-react";
 import { TerminalFolders } from "@/components/terminal/terminal-folders";
 import { AgentSelect } from "@/components/agent-choice";
 import { ResumeSession } from "@/components/resume-session";
@@ -35,6 +35,7 @@ export function PanePicker({
   onClose,
   onResume,
   onNewTerminal,
+  onNewDiff,
 }: {
   agents: AgentProfile[];
   /** The agent a new chat starts with until another is picked here (the sidebar's). */
@@ -53,7 +54,11 @@ export function PanePicker({
   onResume?: (accountId: string, session: AgentSession) => Promise<unknown>;
   /** "New terminal…": a shell in this pane, in the folder picked (`undefined`: the default one). */
   onNewTerminal?: (cwd: string | undefined) => void;
+  /** "Open diff…": the changes of the repository in the folder picked, in this pane. */
+  onNewDiff?: (cwd: string) => void;
 }) {
+  // Showing the "Open diff…" folder step.
+  const [diffFolder, setDiffFolder] = useState(false);
   // Showing the "New terminal…" folder step instead of the picker's own list.
   const [terminalFolder, setTerminalFolder] = useState(false);
   const [search, setSearch] = useState("");
@@ -90,6 +95,9 @@ export function PanePicker({
     { id: "new-project", icon: <FolderPlus />, label: "New project…", keys: formatKeys(SHORTCUTS.newProject.keys), run: onNewProject },
     ...(onNewTerminal
       ? [{ id: "new-terminal", icon: <SquareTerminal />, label: "New terminal…", detail: "pick a folder", run: () => setTerminalFolder(true) }]
+      : []),
+    ...(onNewDiff
+      ? [{ id: "new-diff", icon: <GitCompare />, label: "Open diff…", detail: "changes of a git repository", run: () => setDiffFolder(true) }]
       : []),
     ...(onResume && agents.some(mayListSessions)
       ? [{ id: "resume", icon: <History />, label: "Resume a session…", detail: "started in an agent's CLI", run: () => setResuming(true) }]
@@ -140,6 +148,26 @@ export function PanePicker({
             <p className="text-xs text-muted-foreground">A shell in this pane. Where should it start?</p>
           </div>
           <TerminalFolders chats={chats} projects={projects} onPick={onNewTerminal} onBack={() => setTerminalFolder(false)} />
+        </div>
+      </div>
+    );
+  }
+
+  if (diffFolder && onNewDiff) {
+    return (
+      <div className="[container-type:size] flex min-w-0 flex-1 justify-center overflow-y-auto px-4 py-8">
+        <div className="mt-[max(0px,calc(12cqh-2rem))] flex h-fit w-full max-w-md flex-col gap-3">
+          <div className="flex flex-col gap-1 px-1">
+            <h2 className="text-sm font-medium">Open a diff</h2>
+            <p className="text-xs text-muted-foreground">The changes of a git repository, in this pane. Which folder?</p>
+          </div>
+          <TerminalFolders
+            purpose="diff"
+            chats={chats}
+            projects={projects}
+            onPick={(dir) => dir && onNewDiff(dir)}
+            onBack={() => setDiffFolder(false)}
+          />
         </div>
       </div>
     );

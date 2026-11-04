@@ -2,8 +2,9 @@
 // and a trusted MCP server's tools allowed without asking (marked), everything else asked.
 // `triage ENG-142` plays a chat with each case; `trust_mcp_server` trusts a request's server.
 import type { Entry, PermissionOption, Project, SessionInfo } from "@/lib/api";
-import { ws } from "./context";
+import { home, ws } from "./context";
 import type { Recording } from "./fixtures";
+import { SCOPE_WORDS, type TrustScope, type TrustView } from "@/lib/trust-api";
 
 type Permission = Extract<Entry, { type: "permission" }>;
 
@@ -112,16 +113,113 @@ export const permissionsReply: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
-/** The trusted servers that apply to chat `s`: its project's, or its own. */
-export function trustedFor(s: SessionInfo, projects: Project[]): string[] {
-  const project = s.projectId ? projects.find((p) => p.id === s.projectId) : undefined;
-  return project ? (project.trustedMcpServers ?? []) : (s.trustedMcpServers ?? []);
+/** What the mock keeps beside the chats and projects for trust.rs: all chats' and quick chats' servers. */
+export type TrustState = { projects: Project[]; trustedEverywhere: string[]; quickTrusted: string[] };
+
+/** trust.rs `scope_of`: the project's, quick chats' (no project, in a scratch folder), or the chat's own. */
+export function scopeOf(s: SessionInfo): TrustScope {
+  if (s.projectId) return "project";
+  return /\/\.yaah\/scratch\/[^/]/.test(s.cwd) ? "quickChats" : "chat";
+}
+
+const OFFERED: Record<TrustScope, TrustScope[]> = {
+  project: ["chat", "project", "everywhere"],
+  quickChats: ["quickChats", "everywhere"],
+  chat: ["chat", "everywhere"],
+  everywhere: ["chat", "everywhere"],
+};
+
+/** trust.rs `trusted_for`: the servers trusted for chat `s`, by scope, narrowest first. */
+export function trustedFor(s: SessionInfo, t: TrustState): [TrustScope, string[]][] {
+  const here = scopeOf(s);
+  const project = s.projectId ? t.projects.find((p) => p.id === s.projectId) : undefined;
+  const scoped: [TrustScope, string[]][] =
+    here === "quickChats"
+      ? [["quickChats", t.quickTrusted]]
+      : [
+          ["chat", s.trustedMcpServers ?? []],
+          ...(here === "project" ? [["project", project?.trustedMcpServers ?? []] as [TrustScope, string[]]] : []),
+        ];
+  return [...scoped, ["everywhere", t.trustedEverywhere]];
+}
+
+/** trust.rs `TrustView` for chat `s`. */
+export function trustView(s: SessionInfo, t: TrustState): TrustView {
+  const here = scopeOf(s);
+  const label = (id: string) => id.replace(/^claude_ai_(?=.)/, "");
+  const servers = trustedFor(s, t).flatMap(([scope, ids]) => ids.map((id) => ({ id, label: label(id), scope })));
+  return { here, offered: OFFERED[here], servers };
 }
 
 /** A waiting request for a trusted server's tool, answered as session.rs would (allow_once, marked); else null. */
-export function trustedAnswer(entry: Permission, trusted: string[]): Permission | null {
+export function trustedAnswer(entry: Permission, trusted: [TrustScope, string[]][]): Permission | null {
   const server = entry.mcpServer;
   const once = entry.options.find((o) => o.kind === "allow_once");
-  if (entry.chosen != null || !server || !once || !trusted.includes(server.id)) return null;
-  return { ...entry, chosen: once.name, answer: "allow_once", auto: { reason: "trustedServer", why: `trusted server: ${server.label}` } };
+  const scope = server && trusted.find(([, ids]) => ids.includes(server.id))?.[0];
+  if (entry.chosen != null || !server || !once || !scope) return null;
+  const reason = scope === "everywhere" ? "trustedEverywhere" : "trustedServer";
+  return { ...entry, chosen: once.name, answer: "allow_once", auto: { reason, why: `trusted ${SCOPE_WORDS[scope]}: ${server.label}` } };
 }
+
+const results = `${home}/.claude-personal/projects/-Users-dev--yaah-scratch-3f9c2a7e41d0/5d1e9a40-7c2b-4f1e-9a3d-2b6c8e1f0a77/tool-results`;
+const saved = `${results}/mcp-fetch-fetch-1.txt`;
+const grep = `F=${saved}; grep -n "Wisconsin" $F | cut -c1-160`;
+
+/**
+ * A web search (auto-allowed when Settings allows web searches), a Read of Claude's saved tool result
+ * (auto-allowed: its own folder for this chat), and a Bash read-back of the same file, which still asks
+ * but says what it is (session/permissions.rs `command_note`).
+ */
+export const savedResultsReply: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  { event: "session-entry", index: 1, entry: { type: "agent", text: "I'll search first, then read the saved page.", messageId: null } },
+  {
+    event: "session-entry",
+    index: 2,
+    entry: tool("w1", 'Search "Wisconsin county population 2020"', "fetch", "completed", {
+      rawInput: { query: "Wisconsin county population 2020" },
+      content: text("Wisconsin counties by population (en.wikipedia.org)"),
+    }),
+  },
+  {
+    event: "session-entry",
+    index: 3,
+    entry: ask(6, "w1", 'Search "Wisconsin county population 2020"', {
+      chosen: "Yes",
+      answer: "allow_once",
+      auto: { reason: "webSearch", why: "web search allowed in Settings" },
+    }),
+  },
+  {
+    event: "session-entry",
+    index: 4,
+    entry: tool("r1", `Read ${saved}`, "read", "completed", {
+      locations: [{ path: saved }],
+      rawInput: { file_path: saved, offset: 1, limit: 200 },
+      content: text("Output too large; first 200 lines of the saved page"),
+    }),
+  },
+  {
+    event: "session-entry",
+    index: 5,
+    entry: ask(7, "r1", `Read ${saved}`, {
+      chosen: "Yes",
+      answer: "allow_once",
+      auto: { reason: "toolResults", why: "Claude's saved tool result from this chat" },
+    }),
+  },
+  {
+    event: "session-entry",
+    index: 6,
+    entry: tool("b1", grep, "execute", "pending", { rawInput: { command: grep, description: "Find Wisconsin rows" } }),
+  },
+  { event: "session-entry", index: 7, entry: ask(8, "b1", grep, { note: "Claude is reading a saved tool result" }) },
+  {
+    event: "session-entry",
+    index: 6,
+    entry: tool("b1", grep, "execute", "completed", { rawInput: { command: grep }, content: text("412:| Milwaukee | 939,489 |") }),
+  },
+  { event: "session-entry", index: 8, entry: { type: "agent", text: "Milwaukee County had 939,489 people in 2020.", messageId: null } },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];

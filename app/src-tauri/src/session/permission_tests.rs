@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::acp::Responder;
+use permissions::Scope;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 const GEN: u64 = 1;
@@ -33,6 +34,7 @@ fn fetch_request(id: i64, title: &str) -> Entry {
         answer: None,
         auto: None,
         mcp_server: None,
+        note: None,
     }
 }
 
@@ -232,7 +234,7 @@ fn trusting_reads_can_be_turned_off() {
 }
 
 #[test]
-fn a_trusted_server_in_a_quick_chat_answers_its_waiting_and_later_requests() {
+fn a_server_trusted_in_a_chat_answers_its_waiting_and_later_requests() {
     let hub = Hub::new(quiet());
     let (responder, mut rx) = Responder::for_test();
     attach(&hub, "p", "/tmp", None, None);
@@ -250,7 +252,7 @@ fn a_trusted_server_in_a_quick_chat_answers_its_waiting_and_later_requests() {
     );
     assert!(matches!(&other, Entry::Permission { mcp_server: Some(m), .. } if m.id == "github"));
 
-    hub.trust_server("p", i, |_, _| unreachable!("a quick chat keeps it itself")).unwrap();
+    hub.trust_server("p", i, Scope::Chat, |_, _| unreachable!("a chat keeps it itself")).unwrap();
     assert_eq!(answers(&mut rx), [(1, "o".to_owned()), (2, "o".to_owned())], "both of Linear's, with allow_once");
     let t = hub.transcript("p").unwrap();
     assert_eq!(t.info.trusted_mcp_servers, ["claude_ai_Linear"]);
@@ -259,7 +261,7 @@ fn a_trusted_server_in_a_quick_chat_answers_its_waiting_and_later_requests() {
 
     // Later requests, a tool that changes things too.
     let (_, e) = ask(&hub, &responder, "p", 4, linear("d", "update_issue"), options());
-    assert!(matches!(&e, Entry::Permission { auto: Some(a), .. } if a.why == "trusted server: Linear"));
+    assert!(matches!(&e, Entry::Permission { auto: Some(a), .. } if a.why == "trusted in this chat: Linear"));
     assert_eq!(answers(&mut rx), [(4, "o".to_owned())]);
     // A lookalike server, or a shell command named like the tool, isn't covered.
     let (_, e) = ask(
@@ -275,7 +277,7 @@ fn a_trusted_server_in_a_quick_chat_answers_its_waiting_and_later_requests() {
     let (bash_at, e) = ask(&hub, &responder, "p", 6, bash, options());
     assert!(matches!(&e, Entry::Permission { mcp_server: None, chosen: None, .. }));
     assert_eq!(answers(&mut rx), []);
-    assert!(hub.trust_server("p", bash_at, |_, _| unreachable!()).unwrap_err().contains("can't tell which MCP server"));
+    assert!(hub.trust_server("p", bash_at, Scope::Chat, |_, _| unreachable!()).unwrap_err().contains("can't tell which MCP server"));
 
     // Untrusted again: it asks.
     assert_eq!(hub.untrust_chat_server("p", "claude_ai_Linear").unwrap().trusted_mcp_servers, Vec::<String>::new());
@@ -299,7 +301,7 @@ fn a_trusted_server_in_a_project_covers_its_chats() {
     }
     let index = hub.transcript("a").unwrap().entries.iter().position(|e| matches!(e, Entry::Permission { .. })).unwrap();
     let mut stored = None;
-    hub.trust_server("a", index, |project, server| {
+    hub.trust_server("a", index, Scope::Project, |project, server| {
         stored = Some((project.to_owned(), server.to_owned()));
         Ok(Project { trusted_mcp_servers: vec![server.to_owned()], ..test_project(project) })
     })
@@ -351,7 +353,7 @@ fn always_and_trusted_servers_survive_a_restart() {
             json!({ "toolCallId": "m", "title": "mcp__fetch__fetch", "name": "mcp__fetch__fetch", "kind": "other" }),
             options(),
         );
-        hub.trust_server("p", i, |_, _| unreachable!()).unwrap();
+        hub.trust_server("p", i, Scope::Chat, |_, _| unreachable!()).unwrap();
         hub.flush();
     }
     let saved: Value = serde_json::from_slice(&std::fs::read(dir.join("p.json")).unwrap()).unwrap();
@@ -427,4 +429,323 @@ fn old_transcripts_get_their_answers_when_read() {
     );
     drop(hub);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ── scopes: quick chats, all chats ──────────────────────────────────────────
+
+/// A home with a scratch folder for quick chats, a folder elsewhere, and a `settings.json` path.
+struct Home {
+    base: PathBuf,
+}
+
+impl Home {
+    fn new() -> Self {
+        let base = std::env::temp_dir().join(format!("yaah-perm-scopes-{}", random_token()));
+        for d in [".yaah/scratch/q1", ".yaah/scratch/q2", "work/repo", "sessions", ".config/yaah"] {
+            std::fs::create_dir_all(base.join(d)).unwrap();
+        }
+        Self { base: base.canonicalize().unwrap() }
+    }
+    fn p(&self, rel: &str) -> String {
+        self.base.join(rel).to_string_lossy().into_owned()
+    }
+    fn settings(&self) -> PathBuf {
+        self.base.join(".config/yaah/settings.json")
+    }
+    fn saved(&self) -> Value {
+        serde_json::from_slice(&std::fs::read(self.settings()).unwrap()).unwrap()
+    }
+    /// A hub over `sessions/`, with quick chats in `.yaah/scratch` and settings in `.config/yaah`.
+    fn hub(&self) -> Hub {
+        let hub = Hub::open(quiet(), Some(self.base.join("sessions")), Store::user());
+        hub.set_scratch_root(self.base.join(".yaah/scratch"));
+        hub.use_permission_file_at(self.settings());
+        hub
+    }
+}
+
+impl Drop for Home {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
+fn linear(id: &str, tool: &str) -> Value {
+    json!({ "toolCallId": id, "title": format!("mcp__claude_ai_Linear__{tool}"), "kind": "other", "name": format!("mcp__claude_ai_Linear__{tool}") })
+}
+
+fn auto_why(e: &Entry) -> Option<(String, String)> {
+    match e {
+        Entry::Permission { auto: Some(a), .. } => Some((a.reason.clone(), a.why.clone())),
+        _ => None,
+    }
+}
+
+/// Trusting a server in one quick chat covers every quick chat (waiting and later
+/// requests), not a chat in a folder of its own, and is kept in `settings.json`.
+#[test]
+fn quick_chats_share_one_trust_scope() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, mut rx) = Responder::for_test();
+    attach(&hub, "q1", &h.p(".yaah/scratch/q1"), None, None);
+    attach(&hub, "q2", &h.p(".yaah/scratch/q2"), None, None);
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    let view = hub.trust_scope("q1").unwrap();
+    assert_eq!((view.here, view.offered.clone()), (Scope::QuickChats, vec![Scope::QuickChats, Scope::Everywhere]));
+    assert_eq!(hub.trust_scope("c").unwrap().offered, [Scope::Chat, Scope::Everywhere]);
+
+    let (i, _) = ask(&hub, &responder, "q1", 1, linear("a", "get_issue"), options());
+    ask(&hub, &responder, "q2", 2, linear("b", "get_issue"), options());
+    ask(&hub, &responder, "c", 3, linear("c", "get_issue"), options());
+    // "This chat" isn't a scope of its own for a quick chat.
+    assert!(hub.trust_server("q1", i, Scope::Chat, |_, _| unreachable!()).unwrap_err().contains("in this chat"));
+    assert!(hub.trust_server("q1", i, Scope::Project, |_, _| unreachable!()).is_err());
+    hub.trust_server("q1", i, Scope::QuickChats, |_, _| unreachable!()).unwrap();
+    let mut got = answers(&mut rx);
+    got.sort();
+    assert_eq!(got, [(1, "o".to_owned()), (2, "o".to_owned())], "both quick chats, allow_once; not the other chat");
+    assert!(waiting(&hub.transcript("c").unwrap().entries.last().cloned().unwrap()));
+    assert_eq!(h.saved()["quickChats"]["trustedMcpServers"], json!(["claude_ai_Linear"]));
+    assert_eq!(hub.transcript("q1").unwrap().info.trusted_mcp_servers, Vec::<String>::new(), "kept with quick chats, not the chat");
+
+    // A later request in the other quick chat, and in a quick chat started since.
+    attach(&hub, "q3", &h.p(".yaah/scratch/q3"), None, None);
+    for (sid, n) in [("q2", 4), ("q3", 5)] {
+        let (_, e) = ask(&hub, &responder, sid, n, linear(&format!("{sid}d"), "update_issue"), options());
+        assert_eq!(auto_why(&e), Some((permissions::TRUSTED_SERVER.into(), "trusted in quick chats: Linear".into())));
+    }
+    assert_eq!(answers(&mut rx), [(4, "o".to_owned()), (5, "o".to_owned())]);
+    let view = hub.trust_scope("q3").unwrap();
+    assert_eq!(view.servers, [trust::TrustedServer { id: "claude_ai_Linear".into(), label: "Linear".into(), scope: Scope::QuickChats }]);
+
+    // Removed from one quick chat's header: gone from all of them.
+    hub.untrust_chat_server("q2", "claude_ai_Linear").unwrap();
+    let (_, e) = ask(&hub, &responder, "q1", 6, linear("e", "get_issue"), options());
+    assert!(waiting(&e));
+    assert_eq!(h.saved()["quickChats"]["trustedMcpServers"], json!([]));
+}
+
+/// "Don't ask again" in a quick chat answers the same request in every quick chat.
+#[test]
+fn quick_chats_share_dont_ask_again() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, mut rx) = Responder::for_test();
+    attach(&hub, "q1", &h.p(".yaah/scratch/q1"), None, None);
+    attach(&hub, "q2", &h.p(".yaah/scratch/q2"), None, None);
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    let npm = || json!({ "toolCallId": "n", "title": "npm test", "kind": "execute", "rawInput": { "command": "npm test" } });
+    let (i, _) = ask(&hub, &responder, "q1", 1, npm(), options());
+    ask(&hub, &responder, "q2", 2, npm(), options());
+    ask(&hub, &responder, "c", 3, npm(), options());
+    hub.respond_permission("q1", i, Some("a")).unwrap();
+    let mut got = answers(&mut rx);
+    got.sort();
+    assert_eq!(got, [(1, "a".to_owned()), (2, "o".to_owned())], "the user's own pick, then the one-off option in the other quick chat");
+    let q2 = hub.transcript("q2").unwrap().entries;
+    assert_eq!(auto_why(q2.last().unwrap()), Some((permissions::REMEMBERED.into(), "you said don't ask again in quick chats".into())));
+    assert!(waiting(hub.transcript("c").unwrap().entries.last().unwrap()), "not a chat of its own");
+    assert_eq!(h.saved()["quickChats"]["remembered"], json!({ "npm test": "allow_always" }));
+    assert!(hub.transcript("q1").unwrap().info.remembered.is_empty());
+
+    // Later, and after a restart.
+    drop(hub);
+    let hub = h.hub();
+    attach(&hub, "q4", &h.p(".yaah/scratch/q4"), None, None);
+    let (_, e) = ask(&hub, &responder, "q4", 4, npm(), options());
+    assert_eq!(auto_reason(&e), Some(permissions::REMEMBERED));
+    assert_eq!(answers(&mut rx), [(4, "o".to_owned())]);
+}
+
+/// A quick chat's own trusted servers and choices (from before quick chats shared a
+/// scope) move into the shared scope once: a union, a "don't ask" winning.
+#[test]
+fn quick_chats_own_choices_move_into_the_shared_scope_once() {
+    let h = Home::new();
+    let saved = |id: &str, cwd: &str, servers: &[&str], remembered: &[(&str, &str)]| {
+        let mut info = test_info(id);
+        info.cwd = h.p(cwd);
+        info.running = false;
+        info.trusted_mcp_servers = servers.iter().map(|s| (*s).to_owned()).collect();
+        info.remembered = remembered.iter().map(|(t, k)| ((*t).to_owned(), (*k).to_owned())).collect();
+        let entries = vec![json!({ "type": "agent", "text": "kept", "messageId": null })];
+        std::fs::write(h.base.join(format!("sessions/{id}.json")), json!({ "info": info, "entries": entries }).to_string()).unwrap();
+    };
+    saved("q1", ".yaah/scratch/q1", &["fetch", "claude_ai_Linear"], &[("npm test", "allow_always"), ("rm -rf build", "allow_always")]);
+    saved("q2", ".yaah/scratch/q2", &["fetch", "github"], &[("rm -rf build", "reject_always")]);
+    saved("c", "work/repo", &["slack"], &[("ls", "allow_always")]);
+    std::fs::write(h.settings(), json!({ "theme": { "light": "yaah" }, "quickChats": { "trustedMcpServers": ["sentry"] } }).to_string()).unwrap();
+
+    let hub = h.hub();
+    let quick = &h.saved()["quickChats"];
+    let mut servers: Vec<&str> = quick["trustedMcpServers"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert_eq!(servers.remove(0), "sentry", "what was there stays first");
+    servers.sort_unstable();
+    assert_eq!(servers, ["claude_ai_Linear", "fetch", "github"], "a union, each once");
+    assert_eq!(quick["remembered"], json!({ "npm test": "allow_always", "rm -rf build": "reject_always" }), "a \"don't ask\" wins");
+    assert_eq!(h.saved()["theme"], json!({ "light": "yaah" }), "other settings are kept");
+    for id in ["q1", "q2"] {
+        let info = hub.shared.with_info(id, Clone::clone).unwrap();
+        assert!(info.trusted_mcp_servers.is_empty() && info.remembered.is_empty(), "{id} moved");
+    }
+    let c = hub.shared.with_info("c", Clone::clone).unwrap();
+    assert_eq!((c.trusted_mcp_servers.len(), c.remembered.len()), (1, 1), "a chat of its own keeps its own");
+    hub.flush();
+    let q1: Value = serde_json::from_slice(&std::fs::read(h.base.join("sessions/q1.json")).unwrap()).unwrap();
+    assert_eq!((q1["info"].get("trustedMcpServers"), q1["info"].get("remembered")), (None, None), "written without them");
+    assert_eq!(q1["entries"][0]["text"], "kept", "and with its entries");
+    assert_eq!(hub.migrate_quick_chats(), 0, "once");
+
+    // The moved choices answer in a quick chat.
+    let (responder, mut rx) = Responder::for_test();
+    hub.shared.with("q2", |s| s.attached = Some(GEN)).unwrap();
+    let (_, e) = ask(&hub, &responder, "q2", 1, linear("x", "get_issue"), options());
+    assert_eq!(auto_why(&e), Some((permissions::TRUSTED_SERVER.into(), "trusted in quick chats: Linear".into())));
+    let (_, e) = ask(&hub, &responder, "q2", 2, json!({ "toolCallId": "rm", "title": "rm -rf build", "kind": "execute" }), options());
+    assert_eq!(auto_reason(&e), Some(permissions::REMEMBERED));
+    assert_eq!(answers(&mut rx), [(1, "o".to_owned()), (2, "r".to_owned())], "the one-off reject");
+    drop(hub);
+    // Restarted: nothing moves twice, and the shared scope is as it was.
+    let hub = h.hub();
+    assert_eq!(hub.trust_scope("q1").unwrap().servers.len(), 4);
+}
+
+/// Trusted in all chats: every chat follows, it is kept in `settings.json` across a
+/// restart, the narrowest scope that trusts a server names it, and a lookalike asks.
+#[test]
+fn a_server_trusted_everywhere_covers_every_chat() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, mut rx) = Responder::for_test();
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    attach(&hub, "q", &h.p(".yaah/scratch/q1"), None, None);
+    attach(&hub, "p", &h.p("work/repo"), Some("proj"), None);
+    let (i, _) = ask(&hub, &responder, "c", 1, linear("a", "get_issue"), options());
+    ask(&hub, &responder, "q", 2, linear("b", "get_issue"), options());
+    ask(&hub, &responder, "p", 3, linear("c", "get_issue"), options());
+    hub.trust_server("c", i, Scope::Everywhere, |_, _| unreachable!()).unwrap();
+    let mut got = answers(&mut rx);
+    got.sort();
+    assert_eq!(got, [(1, "o".to_owned()), (2, "o".to_owned()), (3, "o".to_owned())]);
+    let e = hub.transcript("p").unwrap().entries.last().cloned().unwrap();
+    assert_eq!(auto_why(&e), Some((permissions::TRUSTED_EVERYWHERE.into(), "trusted in all chats: Linear".into())));
+    assert_eq!(h.saved()["trustedMcpServers"], json!(["claude_ai_Linear"]));
+    assert_eq!(hub.permission_settings().trusted_everywhere, [McpServer { id: "claude_ai_Linear".into(), label: "Linear".into() }]);
+
+    // The project trusts it too: the project names it.
+    hub.set_project_trust(&Project { trusted_mcp_servers: vec!["claude_ai_Linear".into()], ..test_project("proj") });
+    let (_, e) = ask(&hub, &responder, "p", 4, linear("d", "get_issue"), options());
+    assert_eq!(auto_why(&e), Some((permissions::TRUSTED_SERVER.into(), "trusted in this project: Linear".into())));
+    let view = hub.trust_scope("p").unwrap();
+    assert_eq!(view.servers.iter().map(|s| s.scope).collect::<Vec<_>>(), [Scope::Project, Scope::Everywhere]);
+    // A lookalike name is no one's.
+    let (_, e) = ask(
+        &hub,
+        &responder,
+        "c",
+        5,
+        json!({ "toolCallId": "e", "title": "x", "name": "mcp__claude_ai_Linear2__get_issue", "kind": "other" }),
+        options(),
+    );
+    assert!(waiting(&e));
+    let _ = answers(&mut rx);
+
+    // After a restart, then removed in Settings.
+    drop(hub);
+    let hub = h.hub();
+    attach(&hub, "c2", &h.p("work/repo"), None, None);
+    let (_, e) = ask(&hub, &responder, "c2", 6, linear("f", "get_issue"), options());
+    assert_eq!(auto_reason(&e), Some(permissions::TRUSTED_EVERYWHERE));
+    assert_eq!(hub.untrust_everywhere("claude_ai_Linear").unwrap().trusted_everywhere, Vec::<McpServer>::new());
+    let (_, e) = ask(&hub, &responder, "c2", 7, linear("g", "get_issue"), options());
+    assert!(waiting(&e));
+    assert_eq!(h.saved()["trustedMcpServers"], json!([]));
+    assert_eq!(answers(&mut rx), [(6, "o".to_owned())]);
+}
+
+/// "Allow web searches without asking": off by default; on, a web search is answered
+/// with `allow_once`; fetches keep asking.
+#[test]
+fn web_searches_are_answered_only_when_turned_on() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, mut rx) = Responder::for_test();
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    // As claude-agent-acp sends Claude Code's WebSearch: kind `fetch`, named in `name`.
+    let search = |id: &str| json!({ "toolCallId": id, "title": "Search \"acp permission modes\"", "kind": "fetch", "name": "WebSearch", "rawInput": { "query": "acp permission modes" } });
+    let (_, e) = ask(&hub, &responder, "c", 1, search("s1"), options());
+    assert!(waiting(&e), "off by default");
+    assert!(!hub.permission_settings().allow_web_search);
+    hub.set_allow_web_search(true).unwrap();
+    assert_eq!(h.saved()["allowWebSearch"], true);
+    let (_, e) = ask(&hub, &responder, "c", 2, search("s2"), options());
+    assert_eq!(auto_why(&e), Some((permissions::WEB_SEARCH.into(), "web search allowed in Settings".into())));
+    for (n, fetch) in [
+        (
+            3,
+            json!({ "toolCallId": "f1", "title": "Fetch https://example.com", "kind": "fetch", "name": "WebFetch", "rawInput": { "url": "https://example.com", "prompt": "x" } }),
+        ),
+        (
+            4,
+            json!({ "toolCallId": "f2", "title": "mcp__fetch__fetch", "kind": "other", "name": "mcp__fetch__fetch", "rawInput": { "url": "https://example.com" } }),
+        ),
+    ] {
+        let (_, e) = ask(&hub, &responder, "c", n, fetch, options());
+        assert!(waiting(&e), "{n}: a fetch asks");
+    }
+    hub.set_allow_web_search(false).unwrap();
+    let (_, e) = ask(&hub, &responder, "c", 5, search("s3"), options());
+    assert!(waiting(&e));
+    assert_eq!(answers(&mut rx), [(2, "o".to_owned())], "allow_once only");
+    // Read back after a restart.
+    hub.set_allow_web_search(true).unwrap();
+    drop(hub);
+    assert!(h.hub().permission_settings().allow_web_search);
+}
+
+/// A Claude chat's own saved tool results are a read root, through the handler and
+/// the profile's config dir; a sibling session's asks; a command there says so and asks.
+#[test]
+fn a_claude_chats_saved_tool_results_are_read_without_asking() {
+    let h = Home::new();
+    let cfg = h.base.join(".claude-personal");
+    let cwd = h.p(".yaah/scratch/q1");
+    let project = cfg.join("projects").join(permissions::claude_slug(&cwd));
+    for session in ["acp-1", "acp-2"] {
+        std::fs::create_dir_all(project.join(session).join("tool-results")).unwrap();
+        std::fs::write(project.join(session).join("tool-results/mcp-fetch-fetch-1.txt"), "saved").unwrap();
+    }
+    let agents = h.base.join(".config/yaah/agents.json");
+    let profile =
+        json!({ "id": "claude-personal", "label": "Claude (personal)", "preset": "claude", "command": "claude-agent-acp", "configDir": cfg });
+    std::fs::write(&agents, json!({ "profiles": [profile] }).to_string()).unwrap();
+    let store: &'static Store = Box::leak(Box::new(Store::at(agents)));
+    let hub = Hub::open(quiet(), None, store);
+    let (responder, mut rx) = Responder::for_test();
+    let mut info = test_info("chat-1");
+    info.cwd = cwd;
+    info.account_id = "claude-personal".into();
+    info.agent_session_id = Some("acp-1".into());
+    let mut s = Session::new(info, vec![], None);
+    s.attached = Some(GEN);
+    hub.shared.insert(s);
+
+    let read = |id: &str, session: &str| {
+        let file = project.join(session).join("tool-results/mcp-fetch-fetch-1.txt").to_string_lossy().into_owned();
+        json!({ "toolCallId": id, "title": "Read", "kind": "read", "name": "Read", "rawInput": { "file_path": file }, "locations": [{ "path": file }] })
+    };
+    let (_, e) = ask(&hub, &responder, "chat-1", 1, read("r1", "acp-1"), options());
+    assert_eq!(auto_why(&e), Some((permissions::TOOL_RESULTS.into(), "Claude's saved tool result from this chat".into())));
+    let (_, e) = ask(&hub, &responder, "chat-1", 2, read("r2", "acp-2"), options());
+    assert!(waiting(&e), "another session's results ask");
+    let dir = project.join("acp-1/tool-results").to_string_lossy().into_owned();
+    let bash = json!({ "toolCallId": "b", "title": format!("grep -n x {dir}/mcp-fetch-fetch-1.txt"), "kind": "execute", "name": "Bash", "rawInput": { "command": format!("grep -n x {dir}/mcp-fetch-fetch-1.txt") } });
+    let (_, e) = ask(&hub, &responder, "chat-1", 3, bash, options());
+    assert!(matches!(&e, Entry::Permission { chosen: None, note: Some(n), .. } if n == "Claude is reading a saved tool result"), "{e:?}");
+    assert_eq!(answers(&mut rx), [(1, "o".to_owned())]);
+    // Reads off: it asks there too.
+    hub.set_trust_read_only(false);
+    let (_, e) = ask(&hub, &responder, "chat-1", 4, read("r3", "acp-1"), options());
+    assert!(waiting(&e));
 }

@@ -44,6 +44,7 @@ import { api, type Entry, type ToolContent } from "@/lib/api";
 import { openSettings } from "@/lib/app-events";
 import { focusAfterPermission } from "@/lib/pane-focus";
 import { permissionAnswer, permissionChip, type PermissionEntry } from "@/lib/permissions";
+import { SCOPE_WORDS, trustApi, useTrustView, type TrustScope } from "@/lib/trust-api";
 import { baseName, compactPath, elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
 import { readToolText, toolTextLayout } from "@/lib/tool-output";
@@ -464,22 +465,23 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
       .catch(setError)
       .finally(() => setSending(null));
   };
-  const trust = () => {
+  // Trusting answers with the one-off option, so it is offered only when there is one.
+  const server = pending && entry.options.some((o) => o.kind === "allow_once") ? entry.mcpServer : undefined;
+  // Where this chat can trust it (session/trust.rs): this chat, its project, quick chats, all chats.
+  const view = useTrustView(server ? chat?.sessionId : undefined);
+  const trust = (scope: TrustScope) => {
     if (!chat) return;
-    setSending("trust");
+    setSending(`trust:${scope}`);
     setError(null);
     const moveOn = focusAfterPermission(card.current);
-    api
-      .trustMcpServer(chat.sessionId, index)
+    trustApi
+      .trustMcpServer(chat.sessionId, index, scope)
       .then(moveOn)
       .catch(setError)
       .finally(() => setSending(null));
   };
   const request = () => (toolInput == null ? entry.title : `${entry.title}\n\n${JSON.stringify(toolInput, null, 2)}`);
   if (!pending) return <AnsweredPermission entry={entry} request={request} />;
-  // Trusting answers with the one-off option, so it is offered only when there is one.
-  const server = entry.options.some((o) => o.kind === "allow_once") ? entry.mcpServer : undefined;
-  const scope = chat?.inProject ? "project" : "chat";
   return (
     <CopyMenu actions={[{ label: "Copy request", text: request }]}>
       <div ref={card} role="group" aria-label="Permission requested" className="rounded-lg border border-amber-500/60 bg-amber-500/5 px-3 py-2">
@@ -487,6 +489,8 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
           <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600" />
           <div className="min-w-0 flex-1">
             <div className="font-medium">Permission requested</div>
+            {/* Rust's words for what the request is (permissions.rs `command_note`); it still asks. */}
+            {entry.note && <div className="text-xs text-muted-foreground">{entry.note}</div>}
             {/* Said at once, not only when the polite log gets to it (SR-2); the answers are a Shift+Tab from the message box. */}
             <span role="alert" className="sr-only">
               Permission requested: {entry.title}
@@ -510,12 +514,24 @@ function Permission({ entry, index, toolInput }: { entry: Of<"permission">; inde
             </Button>
           ))}
         </div>
-        {server && (
-          <div className="mt-2 flex flex-col items-start gap-0.5 border-t pt-2">
-            <Button size="sm" variant="ghost" className="-ml-2" disabled={!chat || sending != null} onClick={trust}>
-              {sending === "trust" ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
-              Always allow tools from {server.label} in this {scope}
-            </Button>
+        {server && view && view.offered.length > 0 && (
+          <div className="mt-2 flex flex-col items-start gap-1 border-t pt-2">
+            <div className="text-xs font-medium">Always allow tools from {server.label}</div>
+            <div role="group" aria-label={`Always allow tools from ${server.label}`} className="-ml-2 flex flex-wrap gap-1">
+              {view.offered.map((scope) => (
+                <Button
+                  key={scope}
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`Always allow tools from ${server.label} ${SCOPE_WORDS[scope]}`}
+                  disabled={!chat || sending != null}
+                  onClick={() => trust(scope)}
+                >
+                  {sending === `trust:${scope}` ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                  {SCOPE_WORDS[scope].replace(/^in/, "In")}
+                </Button>
+              ))}
+            </div>
             <p className="text-xs text-muted-foreground">
               Covers every {server.label} tool, including ones that change things: yaah can&apos;t tell which only read.
             </p>

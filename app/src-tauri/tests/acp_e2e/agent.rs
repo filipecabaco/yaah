@@ -221,6 +221,7 @@ impl Agent {
         }
     }
 
+    #[allow(clippy::too_many_lines, reason = "one scripted reply per test prompt")]
     fn prompt(&mut self, id: &Value, params: &Value) {
         let sid = params["sessionId"].as_str().unwrap_or_default().to_owned();
         let text = params["prompt"].as_array().and_then(|b| b.iter().rev().find_map(|b| b["text"].as_str())).unwrap_or_default().to_owned();
@@ -296,6 +297,12 @@ impl Agent {
                 stop = "cancelled";
             }
             "config" => chunk(&sid, &crate::agent_config::describe(&sid)),
+            // `slow <ms> <word>`: a turn that takes a while (messages queue meanwhile), then says the word.
+            "slow" => {
+                let mut words = text.split_whitespace().skip(1);
+                std::thread::sleep(std::time::Duration::from_millis(words.next().and_then(|n| n.parse().ok()).unwrap_or(500)));
+                chunk(&sid, &format!("slow: {}", words.next().unwrap_or_default()));
+            }
             "crash" => {
                 chunk(&sid, "bye");
                 eprintln!("scripted agent: crashing on purpose");

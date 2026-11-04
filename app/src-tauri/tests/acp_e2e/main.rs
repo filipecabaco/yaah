@@ -8,6 +8,7 @@
 mod agent;
 mod agent_config;
 mod config_tests;
+mod queue_tests;
 
 use serde_json::{Value, json};
 use std::path::PathBuf;
@@ -95,6 +96,9 @@ fn main() {
         ),
         ("the_older_models_field_goes_through_set_model", config_tests::the_older_models_field_goes_through_set_model),
         ("new_chats_start_with_the_profiles_defaults", config_tests::new_chats_start_with_the_profiles_defaults),
+        ("queued_messages_go_in_order_as_turns_end", queue_tests::queued_messages_go_in_order_as_turns_end),
+        ("a_stopped_turn_pauses_the_queue_and_send_now_jumps_it", queue_tests::a_stopped_turn_pauses_the_queue_and_send_now_jumps_it),
+        ("a_queue_waits_after_a_restart_until_resumed", queue_tests::a_queue_waits_after_a_restart_until_resumed),
     ];
     let filters: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).collect();
     let chosen: Vec<_> = tests.iter().filter(|(name, _)| filters.is_empty() || filters.iter().any(|f| name.contains(f.as_str()))).collect();
@@ -132,6 +136,7 @@ impl Fixture {
         let profiles: &'static Store = Box::leak(Box::new(Store::at(dir.join("agents.json"))));
         let events = Arc::default();
         let hub = Arc::new(Hub::open(emitter(&events), Some(dir.join("sessions")), profiles));
+        hub.start_queues();
         let f = Self { dir, profiles, hub, events };
         assert_eq!(f.add_profile("Scripted", env), ACCOUNT);
         f
@@ -198,6 +203,7 @@ impl Fixture {
     fn restart(&mut self) {
         self.hub.flush();
         self.hub = Arc::new(Hub::open(emitter(&self.events), Some(self.dir.join("sessions")), self.profiles));
+        self.hub.start_queues();
     }
 
     fn chat(&self) -> String {
@@ -570,7 +576,7 @@ fn trusted_mcp_servers_and_always_survive_a_restart() {
     );
 
     // "Always allow tools from linear in this chat" on the first: Claude's and Codex's linear requests are answered.
-    f.hub.trust_server(&sid, waiting[0], |_, _| unreachable!("a quick chat keeps it itself")).unwrap();
+    f.hub.trust_server(&sid, waiting[0], yaah_lib::session::permissions::Scope::Chat, |_, _| unreachable!("a chat keeps it itself")).unwrap();
     let left = f.until(&sid, "the lookalikes still wait", |t| Some(waiting_permissions(t)).filter(|w| w.len() == 2));
     for w in left {
         f.hub.respond_permission(&sid, w, Some("no")).unwrap();
@@ -588,7 +594,7 @@ fn trusted_mcp_servers_and_always_survive_a_restart() {
     f.restart();
     let t = f.turn(&sid, "mcp-again");
     assert_eq!(last_agent_text(&t), "mcp-again: once");
-    assert!(t.entries.iter().any(|e| matches!(e, Entry::Permission { auto: Some(a), .. } if a.why == "trusted server: linear")));
+    assert!(t.entries.iter().any(|e| matches!(e, Entry::Permission { auto: Some(a), .. } if a.why == "trusted in this chat: linear")));
     let t = f.turn(&sid, "ask-again");
     assert_eq!(last_agent_text(&t), "outcomes: once", "never `always` on the user's behalf");
     assert_eq!(sent_always(&f), 1, "only the user's own click sent `always`");

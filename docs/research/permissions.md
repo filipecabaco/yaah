@@ -204,3 +204,32 @@ mode switching (B, C) and no shell allowlist.
   transcripts), `tests/acp_e2e` (`reads_inside_the_chats_folders_are_allowed_and_everything_else_asks`,
   `trusted_mcp_servers_and_always_survive_a_restart`), and `permissions.test.tsx`, `tool-groups.test.tsx` in the UI.
   Screenshots: `docs/experiments/2026-11-03-permissions/`.
+
+## Since (4 November 2026)
+
+On `feat/composer-drop-model-refs`; `session/trust.rs` holds the state, `permissions.rs` the rule. Still `allow_once` only,
+still no mode switching and no shell allowlist.
+
+- **Scopes.** A permission card's "Always allow tools from <server>" offers this chat, this project (in a project chat)
+  and all chats; a quick chat offers quick chats and all chats. All-chats trust is `trustedMcpServers` in yaah's
+  `settings.json`, listed in Settings → Chat with Remove. The narrowest scope that trusts a server names it on the chip
+  (`trustedServer` "trusted in this project: Linear", `trustedEverywhere` "trusted in all chats: Linear"). Lookalike
+  names still don't match: the id comes from `mcp_server` as before.
+- **Quick chats share one scope** (no project, cwd under `~/.yaah/scratch/`): `quickChats { trustedMcpServers,
+  remembered }` in `settings.json`, for trust and "don't ask again" alike; a "don't ask again" in one answers the same
+  request waiting in the others. Per-chat values from before are migrated once at start (a union; for the same title
+  `reject_always` wins), then the chats are written without them. A no-project chat in a folder of its own keeps its
+  own scope.
+- **Saved tool results** (`permissions-tool-results.md` options (a) and (d)): for Claude Code chats,
+  `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/<slug>/<ACP session id>/tool-results` is a read root for `read` and
+  `search`, under the "Allow reads" switch (`toolResults`, "Claude's saved tool result from this chat"). The slug is
+  Claude Code's `sanitizePath`, read from the binary claude-agent-acp 0.100.0 bundles: every UTF-16 unit outside `[a-zA-Z0-9]` becomes `-`, and
+  past 200 units the path is cut and `-<base-36 hash>` added; it is taken from the real cwd (the profile folders show
+  `-private-tmp-…`, never `-tmp-…`). The folder must resolve to exactly that place. `execute` requests whose absolute
+  paths are all inside it still ask, with "Claude is reading a saved tool result" on the card.
+- **Web searches.** Claude Code's WebSearch does not arrive as kind `search`: claude-agent-acp 0.99.1 and 0.100.0 send it
+  as kind `fetch`, title `Search "<query>"`, `name: "WebSearch"`, `rawInput { query, allowed_domains?, blocked_domains? }`.
+  So the rule is the tool name `WebSearch` when the agent names its tool, else kind `search` with a `query`, no `url`
+  and no paths. Settings → Chat, "Allow web searches without asking" (`allowWebSearch`, off by default); `webSearch`
+  "web search allowed in Settings". WebFetch and `mcp__fetch__fetch` keep asking.
+- Screenshots: `docs/experiments/2026-11-04-permission-scopes/`.

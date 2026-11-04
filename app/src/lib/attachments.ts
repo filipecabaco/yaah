@@ -217,7 +217,12 @@ export function addDropZone(zone: Zone): () => void {
 // pane, by chat and pane, the way drafts reach it.
 
 /** Paths (a drop from the OS), files from a browser drop (their bytes; only images are taken), or text. */
-export type Incoming = { paths: string[] } | { blobs: File[] } | { text: string };
+export type Incoming =
+  | { paths: string[] }
+  | { blobs: File[] }
+  | { text: string }
+  /** Already staged in Rust (Edit on a queued message hands its attachments back, session/queue.rs). */
+  | { staged: Attachment[]; refused: Refused[] };
 type Inbox = { sessionId: string; pane?: string; cb: (i: Incoming) => void };
 const inboxes = new Set<Inbox>();
 

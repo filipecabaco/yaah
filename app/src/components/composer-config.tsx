@@ -1,15 +1,14 @@
-// The composer's Model and Effort pickers: shown only for what the chat's agent
+// The composer's Model and Effort pickers, in its toolbar: shown only for what the chat's agent
 // offers (ACP session config options, or the older `models`), as Rust marks them
 // (`role` in session/config.rs). A pick goes to Rust, which checks it, sends it to
 // the agent and emits what the agent answers; this only renders that. Disabled
 // while a turn runs: a change applies to the next message.
 import { useEffect, useId, useRef, useState } from "react";
-import { ChevronDown, Cpu, Gauge, Loader2 } from "lucide-react";
+import { ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { isFocusedPane } from "@/components/chat-context";
-import { ErrorText } from "@/components/error-text";
 import { api, type ConfigChoice, type ConfigOption, type SessionInfo } from "@/lib/api";
 import { onOpenComposerConfig, type ConfigRole } from "@/lib/app-events";
 import { choiceName, configOption } from "@/lib/composer-config";
@@ -17,14 +16,14 @@ import { choiceName, configOption } from "@/lib/composer-config";
 /** Past this many values the list gets a search box. */
 const SEARCH_FROM = 8;
 
-const LABELS: Record<ConfigRole, { label: string; icon: typeof Cpu }> = {
-  model: { label: "Model", icon: Cpu },
-  effort: { label: "Effort", icon: Gauge },
+const LABELS: Record<ConfigRole, { label: string }> = {
+  model: { label: "Model" },
+  effort: { label: "Effort" },
 };
 
-export function ComposerConfig({ session, pane }: { session: SessionInfo; pane?: string }) {
+/** In the composer's toolbar; a failed pick goes to `onError`, which the composer shows under its frame. */
+export function ComposerConfig({ session, pane, onError }: { session: SessionInfo; pane?: string; onError: (e: unknown) => void }) {
   const [open, setOpen] = useState<ConfigRole | null>(null);
-  const [error, setError] = useState<unknown>(null);
   const roles = (["model", "effort"] as const).filter((r) => configOption(session, r));
 
   // ⌘K "Change model…" / "Change effort…" open a picker in the pane they came from.
@@ -38,21 +37,19 @@ export function ComposerConfig({ session, pane }: { session: SessionInfo; pane?:
 
   if (roles.length === 0) return null;
   return (
-    <div className="chat-column mt-1.5">
-      <div role="group" aria-label="Model and effort for the next message" className="-ml-2 flex flex-wrap items-center gap-1">
-        {roles.map((role) => (
-          <ConfigPicker
-            key={role}
-            role={role}
-            session={session}
-            option={configOption(session, role)!}
-            open={open === role}
-            onOpenChange={(o) => setOpen(o ? role : null)}
-            onError={setError}
-          />
-        ))}
-      </div>
-      <ErrorText error={error} className="mt-1" />
+    // Shrinks before the toolbar wraps: the values truncate (the full one is in the label and tooltip).
+    <div role="group" aria-label="Model and effort for the next message" className="flex min-w-0 items-center gap-0.5">
+      {roles.map((role) => (
+        <ConfigPicker
+          key={role}
+          role={role}
+          session={session}
+          option={configOption(session, role)!}
+          open={open === role}
+          onOpenChange={(o) => setOpen(o ? role : null)}
+          onError={onError}
+        />
+      ))}
     </div>
   );
 }
@@ -72,7 +69,7 @@ function ConfigPicker({
   onOpenChange: (open: boolean) => void;
   onError: (e: unknown) => void;
 }) {
-  const { label, icon: Icon } = LABELS[role];
+  const { label } = LABELS[role];
   const [saving, setSaving] = useState<string | null>(null);
   const listId = useId();
   const list = useRef<HTMLDivElement>(null);
@@ -109,11 +106,16 @@ function ConfigPicker({
           aria-label={`${label}: ${name}`}
           title={title}
           data-config={role}
-          className="max-w-[16rem] text-muted-foreground"
+          // In a narrow pane the model's long name gives way; effort levels are a word, kept whole.
+          className={role === "model" ? "max-w-[16rem] min-w-0 shrink text-muted-foreground" : "max-w-[16rem] shrink-0 text-muted-foreground"}
         >
-          {saving != null ? <Loader2 className="animate-spin" aria-hidden /> : <Icon aria-hidden />}
+          {/* "Model" and "Effort" in words, at every width: icons alone didn't say which was which. */}
+          {saving != null && <Loader2 className="animate-spin" aria-hidden />}
+          <span className="shrink-0" aria-hidden>
+            {label}
+          </span>
           <span className="truncate text-foreground">{saving != null ? (option.choices.find((c) => c.value === saving)?.name ?? saving) : name}</span>
-          <ChevronDown aria-hidden />
+          <ChevronDown aria-hidden className="hidden @sm:block" />
         </Button>
       </PopoverTrigger>
       <PopoverContent

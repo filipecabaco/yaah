@@ -8,6 +8,7 @@ import {
   FileText,
   FolderGit2,
   FolderPlus,
+  ListPlus,
   Plug,
   Repeat,
   RotateCw,
@@ -19,6 +20,8 @@ import {
 } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { ComposerConfig } from "@/components/composer-config";
+import { COMPOSER_INPUT, ComposerShell, TRIGGER_HELP, TriggerHint } from "@/components/composer-shell";
+import { ComposerQueue } from "@/components/composer-queue";
 import { Mark } from "@/components/brand/mark";
 import { Hint } from "@/components/shortcuts";
 import { ErrorText } from "@/components/error-text";
@@ -37,6 +40,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
 import { api, type AgentProfile, type Entry, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
 import { openInTerminalApp } from "@/lib/terminal-api";
+import { SCOPE_WORDS, trustApi, useTrustView, type TrustScope, type TrustView } from "@/lib/trust-api";
 import { onOpenAddRepos, openAddRepos, openAgentSwitch } from "@/lib/app-events";
 import { baseName, compactPath, elapsedText, plural, startingText } from "@/lib/format";
 import { errorMessage } from "@/lib/narrow";
@@ -47,7 +51,7 @@ import { isMac } from "@/lib/shortcuts";
 import { ChatContext, isFocusedPane, onDraft } from "@/components/chat-context";
 import { TranscriptEntry } from "@/components/entries";
 import { ToolGroup } from "@/components/tool-group";
-import { foldedPermissions } from "@/lib/permissions";
+import { foldedPermissions, isAutoAllowed } from "@/lib/permissions";
 import { isRunning, transcriptRows, useGroupToolCalls } from "@/lib/tool-groups";
 import { FolderMenu } from "@/components/menus";
 import { useTranscript, useTranscripts } from "@/hooks/use-transcript";
@@ -81,8 +85,8 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
     () => ({ sessionId: session.sessionId, cwd: session.cwd, busy: session.running, pane, inProject }),
     [session.sessionId, session.cwd, session.running, pane, inProject],
   );
-  // MCP servers whose tools run without asking here: the project's, or a quick chat's own.
-  const trusted = project ? (project.trustedMcpServers ?? []) : (session.trustedMcpServers ?? []);
+  // MCP servers whose tools run without asking here: every server trusted here, with the scope that trusts it (session/trust.rs); re-read on a move to a project.
+  const trustView = useTrustView(session.sessionId, `${session.projectId ?? ""}|${session.cwd}`);
   // "Add repositories…" (⌘K, `/repos`, the folder menu) opens the picker in the pane it came from.
   const [addingRepos, setAddingRepos] = useState(false);
   useEffect(
@@ -150,11 +154,18 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
           </span>
         </FolderMenu>
         <ChatFolders roots={roots} pending={!!session.dirsChanged} inProject={!!project} onAdd={() => openAddRepos(session.sessionId, pane)} />
-        {trusted.length > 0 && (
+        {trustView && trustView.servers.length > 0 && (
           <TrustedServers
-            servers={trusted}
-            inProject={!!project}
-            onRemove={(server) => (project ? api.untrustProjectMcpServer(project.id, server) : api.untrustChatMcpServer(session.sessionId, server))}
+            view={trustView}
+            onRemove={(server, scope) =>
+              scope === "everywhere"
+                ? trustApi.untrustEverywhere(server)
+                : scope === "quickChats"
+                  ? trustApi.untrustQuickChats(server)
+                  : scope === "project" && project
+                    ? api.untrustProjectMcpServer(project.id, server)
+                    : api.untrustChatMcpServer(session.sessionId, server)
+            }
             onManage={project ? () => onOpenProject(project.id) : undefined}
           />
         )}
@@ -175,31 +186,34 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
         {/* One per chat: whether it follows the stream, and how far back it shows, are the chat's own. */}
         <Transcript key={session.sessionId} sessionId={session.sessionId} running={session.running} onLogin={onLogin} />
       </ChatContext.Provider>
+      <ComposerQueue session={session} pane={pane} />
       <Composer key={session.sessionId} session={session} agentLabel={agent?.label} pane={pane} />
       <DropOverlay drag={drag} agent={agent?.label ?? "This agent"} report={agent?.report} />
     </div>
   );
 }
 
-/** The MCP servers trusted here (the project's, or a quick chat's), each with a way to stop trusting it. */
+/**
+ * The MCP servers trusted here (this chat's, its project's or quick chats', and all chats'), each with
+ * the scope that trusts it and a way to stop trusting it there.
+ */
 function TrustedServers({
-  servers,
-  inProject,
+  view,
   onRemove,
   onManage,
 }: {
-  servers: string[];
-  inProject: boolean;
-  onRemove: (server: string) => Promise<unknown>;
+  view: TrustView;
+  onRemove: (server: string, scope: TrustScope) => Promise<unknown>;
   onManage?: () => void;
 }) {
+  const { servers, here } = view;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="flex min-h-[24px] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-          aria-label={`${plural(servers.length, "trusted MCP server")} in this ${inProject ? "project" : "chat"}`}
+          aria-label={`${plural(servers.length, "trusted MCP server")} ${SCOPE_WORDS[here]}`}
         >
           <ShieldCheck className="size-3.5" aria-hidden />
           <span className="tabular-nums">{servers.length}</span>
@@ -207,15 +221,16 @@ function TrustedServers({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-w-96 min-w-64">
         <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-          All tools of these MCP servers run without asking in this {inProject ? "project" : "chat"}, including ones that change things
+          All tools of these MCP servers run without asking {SCOPE_WORDS[here]}, including ones that change things
         </DropdownMenuLabel>
         {servers.map((s) => (
           <DropdownMenuItem
-            key={s}
-            onSelect={() => void onRemove(s).catch((e: unknown) => console.error("could not stop trusting", s, e))}
-            aria-label={`Stop trusting ${s}`}
+            key={`${s.scope}:${s.id}`}
+            onSelect={() => void onRemove(s.id, s.scope).catch((e: unknown) => console.error("could not stop trusting", s.id, e))}
+            aria-label={`Stop trusting ${s.id} ${SCOPE_WORDS[s.scope]}`}
           >
-            <span className="min-w-0 flex-1 truncate font-mono text-xs">{s}</span>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs">{s.id}</span>
+            {s.scope !== here && <span className="shrink-0 text-2xs text-muted-foreground">{SCOPE_WORDS[s.scope]}</span>}
             <X className="text-muted-foreground" aria-hidden />
           </DropdownMenuItem>
         ))}
@@ -449,7 +464,7 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
                   id={`${sessionId}:${i}`}
                   tools={tools}
                   running={row.indices.map((j, k) => isRunning(tools[k], inTurnAt(j)))}
-                  autoAllowed={tools.filter((t) => ["readOnly", "trustedServer"].includes(folded.get(t.toolCallId)?.auto?.reason ?? "")).length}
+                  autoAllowed={tools.filter((t) => isAutoAllowed(folded.get(t.toolCallId))).length}
                   card={(k) => entryAt(row.indices[k])}
                 />
               </div>
@@ -532,6 +547,8 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
   const [error, setError] = useState<unknown>(null);
+  /** A model or effort pick the agent refused (shown under the frame, with the send error). */
+  const [configError, setConfigError] = useState<unknown>(null);
   /** Files picked from the @ list: label → absolute path. */
   const [mentions, setMentions] = useState<Record<string, string>>({});
   /** Tracker items picked from the # list, by token (Rust reads every token in the text on send). */
@@ -560,12 +577,13 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   useEffect(
     () =>
       onDraft(
-        ({ text: add, mention }) => {
+        ({ text: add, mention, mentions: more = [] }) => {
           const next = text.trim() ? `${text.replace(/\s*$/, "")}\n${add}` : add;
           moveCaret.current = next.length;
           setText(next);
           setCaret(next.length);
-          if (mention) setMentions((m) => ({ ...m, [mention.label]: mention.path }));
+          const all = mention ? [mention, ...more] : more;
+          if (all.length) setMentions((m) => ({ ...m, ...Object.fromEntries(all.map((x) => [x.label, x.path])) }));
           setTimeout(() => input.current?.focus());
         },
         session.sessionId,
@@ -690,7 +708,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
       own.local?.();
       return;
     }
-    if (session.running) return;
+    // While a turn runs Rust queues the message instead (session/queue.rs); the composer clears either way.
     setError(null);
     const paths = Object.entries(mentions)
       .filter(([label]) => mentioned(prompt, label))
@@ -772,153 +790,195 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
         : [{ heading: "Files in this chat's folders", list: items }]
   ).filter((g) => g.list.length > 0);
   const attaches = Object.values(picked).filter((r) => standing(text, r.token));
+  const carrying = attached.items.length > 0 || attached.refused.length > 0 || attached.pending || attaches.length > 0;
+  const hintId = `${listId}-hint`;
   return (
     // The composer lines up with the transcript's column: the same edges as the cards and UI above it.
-    <div className="@container border-t py-3">
-      <AttachmentChips sessionId={session.sessionId} state={attached} className="chat-column mb-2" />
-      <div className="chat-column relative flex items-end gap-2">
-        {showList && (
-          <Command
-            ref={list}
-            shouldFilter={false}
-            vimBindings={false}
-            value={items[active]?.id ?? ""}
-            onValueChange={(v) =>
-              setActive(
-                Math.max(
-                  0,
-                  items.findIndex((s) => s.id === v),
-                ),
-              )
-            }
-            // Keep focus in the textarea when an item is clicked.
-            onMouseDown={(e) => e.preventDefault()}
-            className="absolute bottom-full left-(--chat-gutter) z-10 mb-2 h-auto w-[min(42rem,calc(100%-2*var(--chat-gutter)))] shadow-md ring-1 ring-foreground/10"
-          >
-            {/* The textarea is the combobox: it names the highlighted option. */}
-            <ActiveDescendant target={input} list={list} />
-            <CommandList id={listId}>
-              {items.length === 0 ? (
-                <p className="py-6 text-center text-sm text-muted-foreground">
-                  {open.kind === "command"
-                    ? session.commands.length
-                      ? "No command matches."
-                      : "This chat has no slash commands yet."
-                    : open.kind === "reference"
-                      ? refs.items == null
-                        ? "Searching…"
-                        : open.query
-                          ? "Nothing matches. Keep typing to search, or paste a link."
-                          : "Nothing recent here."
-                      : files == null
-                        ? "Searching…"
-                        : "No file matches."}
-                </p>
-              ) : (
-                <>
-                  {groups.map((g) => (
-                    <CommandGroup key={g.heading} heading={g.heading}>
-                      {g.list.map((s) => (
-                        <CommandItem key={s.id} value={s.id} onSelect={() => accept(s)}>
-                          {s.reference ? (
-                            <ReferenceRow reference={s.reference} />
-                          ) : (
-                            (s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : s.action ? <Plug /> : <FileText />))
-                          )}
-                          {s.reference ? null : s.path ? (
-                            <FileLabel label={s.label} />
-                          ) : (
-                            <span className={s.action ? "shrink-0" : "shrink-0 font-mono"}>{s.label}</span>
-                          )}
-                          {s.local && (
-                            <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs" title="yaah's own command, not sent to the agent">
-                              yaah
-                            </Badge>
-                          )}
-                          {s.detail && <span className="truncate text-muted-foreground">{s.detail}</span>}
-                          {s.hint && <CommandShortcut className="shrink-0 tracking-normal italic">‹{s.hint}›</CommandShortcut>}
-                        </CommandItem>
-                      ))}
-                    </CommandGroup>
-                  ))}
-                </>
-              )}
-              {open.kind === "reference" &&
-                refs.errors.map((e) => (
-                  <p key={e.service} className="px-3 py-1.5 text-xs [overflow-wrap:anywhere] text-destructive" role="status">
-                    {e.message}
+    // One frame (components/composer-shell.tsx) holds the chips, the message box and the toolbar.
+    <div className="@container pt-2 pb-3">
+      <div className="chat-column">
+        {/* The suggestion list anchors just above the frame. */}
+        <div className="relative">
+          {showList && (
+            <Command
+              ref={list}
+              shouldFilter={false}
+              vimBindings={false}
+              value={items[active]?.id ?? ""}
+              onValueChange={(v) =>
+                setActive(
+                  Math.max(
+                    0,
+                    items.findIndex((s) => s.id === v),
+                  ),
+                )
+              }
+              // Keep focus in the textarea when an item is clicked.
+              onMouseDown={(e) => e.preventDefault()}
+              className="absolute bottom-full left-0 z-10 mb-2 h-auto w-[min(42rem,100%)] shadow-md ring-1 ring-foreground/10"
+            >
+              {/* The textarea is the combobox: it names the highlighted option. */}
+              <ActiveDescendant target={input} list={list} />
+              <CommandList id={listId}>
+                {items.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-muted-foreground">
+                    {open.kind === "command"
+                      ? session.commands.length
+                        ? "No command matches."
+                        : "This chat has no slash commands yet."
+                      : open.kind === "reference"
+                        ? refs.items == null
+                          ? "Searching…"
+                          : open.query
+                            ? "Nothing matches. Keep typing to search, or paste a link."
+                            : "Nothing recent here."
+                        : files == null
+                          ? "Searching…"
+                          : "No file matches."}
                   </p>
-                ))}
-            </CommandList>
-            <footer className="flex items-center gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
-              <span>
-                <Kbd>↑</Kbd> <Kbd>↓</Kbd> move
-              </span>
-              <span>
-                <Kbd>↵</Kbd> or <Kbd>Tab</Kbd> accept
-              </span>
-              <span className="ml-auto">
-                <Kbd>Esc</Kbd> close
-              </span>
-            </footer>
-          </Command>
-        )}
-        <AttachButton onPick={attached.pick} />
-        <Textarea
-          data-composer
-          ref={input}
-          // Only the pane the user is in takes the focus (a restored layout opens several chats at once).
-          autoFocus={isFocusedPane(pane)}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setCaret(e.target.selectionStart);
-          }}
-          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-          onKeyDown={onKeyDown}
-          onPaste={(e) => {
-            // A URL pasted over selected text becomes a link; files and images go to the attachments.
-            const el = e.currentTarget;
-            const link = e.clipboardData.files.length
-              ? null
-              : pasteLink({ text: el.value, start: el.selectionStart, end: el.selectionEnd }, e.clipboardData.getData("text/plain"));
-            if (link) {
-              e.preventDefault();
-              applyEdit(el, link);
-              return;
+                ) : (
+                  <>
+                    {groups.map((g) => (
+                      <CommandGroup key={g.heading} heading={g.heading}>
+                        {g.list.map((s) => (
+                          <CommandItem key={s.id} value={s.id} onSelect={() => accept(s)}>
+                            {s.reference ? (
+                              <ReferenceRow reference={s.reference} />
+                            ) : (
+                              (s.icon ?? (s.local ? <Repeat /> : open.kind === "command" ? <SquareSlash /> : s.action ? <Plug /> : <FileText />))
+                            )}
+                            {s.reference ? null : s.path ? (
+                              <FileLabel label={s.label} />
+                            ) : (
+                              <span className={s.action ? "shrink-0" : "shrink-0 font-mono"}>{s.label}</span>
+                            )}
+                            {s.local && (
+                              <Badge variant="secondary" className="h-4 shrink-0 px-1 text-2xs" title="yaah's own command, not sent to the agent">
+                                yaah
+                              </Badge>
+                            )}
+                            {s.detail && <span className="truncate text-muted-foreground">{s.detail}</span>}
+                            {s.hint && <CommandShortcut className="shrink-0 tracking-normal italic">‹{s.hint}›</CommandShortcut>}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    ))}
+                  </>
+                )}
+                {open.kind === "reference" &&
+                  refs.errors.map((e) => (
+                    <p key={e.service} className="px-3 py-1.5 text-xs [overflow-wrap:anywhere] text-destructive" role="status">
+                      {e.message}
+                    </p>
+                  ))}
+              </CommandList>
+              <footer className="flex items-center gap-3 border-t px-3 py-1.5 text-xs text-muted-foreground">
+                <span>
+                  <Kbd>↑</Kbd> <Kbd>↓</Kbd> move
+                </span>
+                <span>
+                  <Kbd>↵</Kbd> or <Kbd>Tab</Kbd> accept
+                </span>
+                <span className="ml-auto">
+                  <Kbd>Esc</Kbd> close
+                </span>
+              </footer>
+            </Command>
+          )}
+          <ComposerShell
+            input={input}
+            carrying={carrying}
+            carries={
+              // The tokens stay plain text (robust to edit, undo, copy); what they'll attach shows beside the files.
+              <AttachmentChips sessionId={session.sessionId} state={attached}>
+                {attaches.length > 0 && <ReferenceChips references={attaches} sending={sending} />}
+              </AttachmentChips>
             }
-            attached.onPaste(e);
-          }}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          placeholder={`Message ${agentLabel ?? "the agent"}…  / for commands, @ to mention a file, # for an issue or PR`}
-          aria-label="Message"
-          className="max-h-48 min-h-10 resize-none"
-          rows={1}
-          role="combobox"
-          aria-expanded={showList}
-          aria-controls={showList ? listId : undefined}
-          aria-autocomplete="list"
-        />
-        {session.running ? (
-          <Hint label="Stop" shortcut="stop">
-            <Button size="icon" variant="secondary" onClick={stop} aria-label="Stop">
-              <Square />
-            </Button>
-          </Hint>
-        ) : (
-          <Hint label="Send ↵">
-            <Button size="icon" onClick={() => void send()} disabled={(!text.trim() && !attached.items.length) || attached.pending} aria-label="Send">
-              <ArrowUp />
-            </Button>
-          </Hint>
-        )}
+            toolbar={
+              <>
+                <AttachButton onPick={attached.pick} />
+                {/* Model and effort, when the agent offers them (components/composer-config.tsx). */}
+                <ComposerConfig session={session} pane={pane} onError={setConfigError} />
+                <div className="ml-auto flex shrink-0 items-center gap-2 pl-1">
+                  <TriggerHint />
+                  {session.running ? (
+                    <>
+                      {/* While a turn runs, a message waits in the chat's queue (Enter does the same). */}
+                      {(text.trim() || attached.items.length > 0) && (
+                        <Hint label="Queue ↵">
+                          <Button size="icon-sm" variant="outline" onClick={() => void send()} disabled={attached.pending} aria-label="Queue message">
+                            <ListPlus />
+                          </Button>
+                        </Hint>
+                      )}
+                      <Hint label="Stop" shortcut="stop">
+                        <Button size="icon-sm" variant="secondary" onClick={stop} aria-label="Stop">
+                          <Square />
+                        </Button>
+                      </Hint>
+                    </>
+                  ) : (
+                    <Hint label="Send ↵">
+                      <Button
+                        size="icon-sm"
+                        onClick={() => void send()}
+                        disabled={(!text.trim() && !attached.items.length) || attached.pending}
+                        aria-label="Send"
+                      >
+                        <ArrowUp />
+                      </Button>
+                    </Hint>
+                  )}
+                </div>
+              </>
+            }
+          >
+            <Textarea
+              data-composer
+              ref={input}
+              // Only the pane the user is in takes the focus (a restored layout opens several chats at once).
+              autoFocus={isFocusedPane(pane)}
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                setCaret(e.target.selectionStart);
+              }}
+              onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+              onKeyDown={onKeyDown}
+              onPaste={(e) => {
+                // A URL pasted over selected text becomes a link; files and images go to the attachments.
+                const el = e.currentTarget;
+                const link = e.clipboardData.files.length
+                  ? null
+                  : pasteLink({ text: el.value, start: el.selectionStart, end: el.selectionEnd }, e.clipboardData.getData("text/plain"));
+                if (link) {
+                  e.preventDefault();
+                  applyEdit(el, link);
+                  return;
+                }
+                attached.onPaste(e);
+              }}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+              // Short, so it fits a narrow pane; the triggers are in the toolbar and the description.
+              placeholder={`Message ${agentLabel ?? "the agent"}…`}
+              aria-label="Message"
+              aria-describedby={hintId}
+              className={COMPOSER_INPUT}
+              rows={1}
+              role="combobox"
+              aria-expanded={showList}
+              aria-controls={showList ? listId : undefined}
+              aria-autocomplete="list"
+            />
+          </ComposerShell>
+        </div>
+        <p id={hintId} className="sr-only">
+          {TRIGGER_HELP}
+        </p>
+        <ErrorText error={error} className="mt-1.5" />
+        <ErrorText error={configError} className="mt-1.5" />
       </div>
-      {/* The tokens stay plain text (robust to edit, undo, copy); what they'll attach shows here. */}
-      <ReferenceChips references={attaches} sending={sending} className="chat-column mt-1.5" />
-      <ErrorText error={error} className="chat-column mt-1" />
-      {/* Model and effort, when the agent offers them (components/composer-config.tsx). */}
-      <ComposerConfig session={session} pane={pane} />
     </div>
   );
 }
@@ -1005,18 +1065,24 @@ export function StartingChat({ start, agents, onDismiss }: { start: Starting; ag
           </div>
         )}
       </div>
-      <div className="@container border-t py-3">
-        <div className="chat-column flex items-end gap-2">
-          <Textarea
-            disabled
-            placeholder={failed ? `${label} didn't start` : `${label} is starting…`}
-            aria-label="Message"
-            className="max-h-48 min-h-10 resize-none"
-            rows={1}
-          />
-          <Button size="icon" disabled aria-label="Send">
-            <ArrowUp />
-          </Button>
+      {/* The same frame as the chat's composer, so nothing jumps when the chat opens. */}
+      <div className="@container pt-2 pb-3">
+        <div className="chat-column">
+          <ComposerShell
+            toolbar={
+              <Button size="icon-sm" disabled aria-label="Send" className="ml-auto">
+                <ArrowUp />
+              </Button>
+            }
+          >
+            <Textarea
+              disabled
+              placeholder={failed ? `${label} didn't start` : `${label} is starting…`}
+              aria-label="Message"
+              className={COMPOSER_INPUT}
+              rows={1}
+            />
+          </ComposerShell>
         </div>
       </div>
     </div>

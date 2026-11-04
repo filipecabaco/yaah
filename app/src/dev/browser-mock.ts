@@ -8,6 +8,7 @@ import { agentReplies } from "./mock/agents";
 import { attachmentReplies, installDragBridge, pickAttachments } from "./mock/attachments";
 import { chatReplies, stopTurn } from "./mock/chats";
 import { configReplies } from "./mock/config";
+import { diffReplies } from "./mock/diff";
 import type { Mock, Replies } from "./mock/context";
 import { integrationReplies } from "./mock/integrations";
 import { libraryReplies, pickFolder } from "./mock/library";
@@ -48,7 +49,8 @@ export function disposeBrowserMock() {
  */
 export function installBrowserMock(options: BrowserMockOptions = {}) {
   disposePrevious?.();
-  const delay = options.delay ?? 1;
+  // `?mock-delay=4` in the URL slows every replay down (time to queue messages while a turn runs).
+  const delay = options.delay ?? (Number(new URLSearchParams(location.search).get("mock-delay")) || 1);
   const state = createState({ firstRun: options.firstRun ?? new URLSearchParams(location.search).has("first-run") });
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const m: Mock = {
@@ -85,6 +87,7 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     ...workItemReplies(m),
     ...referenceReplies(m),
     ...terminalReplies(m),
+    ...diffReplies(),
     ...resumeReplies(m),
     ...attachmentReplies(m),
     // Plugins: a folder picker (a sample folder on the library screens, cancelled elsewhere), and links and folders that open nowhere.

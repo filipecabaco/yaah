@@ -13,6 +13,7 @@ import type { NewProjectMode } from "@/components/new-project-dialog";
 import { preloadSettings } from "@/components/settings/tab-code";
 import { PanePicker } from "@/components/pane-picker";
 import { PaneGrid } from "@/components/panes";
+import { DiffPane } from "@/components/diff/diff-pane";
 import { TerminalPane } from "@/components/terminal/terminal-pane";
 import { useTerminals } from "@/components/terminal/use-terminals";
 import { focusMain, focusPaneDom } from "@/lib/pane-focus";
@@ -25,6 +26,7 @@ import { contentKey, useYaah, type Selection } from "@/hooks/use-yaah";
 import { TranscriptsContext } from "@/hooks/use-transcript";
 import { api, canChat, mayListSessions, type AgentProfile, type SessionInfo } from "@/lib/api";
 import { onOpenAgentSwitch, onOpenComponent, onOpenSettings } from "@/lib/app-events";
+import { baseName } from "@/lib/format";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
 import { stepFontSize } from "@/lib/fonts";
 import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
@@ -89,11 +91,13 @@ export default function App() {
   // Terminal panes: ⌘T, the home screen, the picker, ⌘K and tool cards' "Open as pane" open them.
   const terminals = useTerminals(y);
   const select = y.setSelection;
+  // Terminal and diff panes, listed in the sidebar beside the chats (stable while the tree is).
+  const openPanes = useMemo(() => panes.panes.filter((p) => p.content?.kind === "terminal" || p.content?.kind === "diff"), [panes.panes]);
   const openChat = (id: string) => select({ kind: "chat", id });
   const selection = y.selection;
   // The Component library takes a pane; closing it goes back to what that pane showed before (use-layout.ts).
   const openLibrary = useCallback(() => select({ kind: "components" }), [select]);
-  const { closeLibrary, focusedId, setPaneContent } = panes;
+  const { closeLibrary, focusedId, setPaneContent, close: closePane, focus: focusPane } = panes;
   /** The sidebar's selection, into the focused pane; its "Component library" entry toggles the library there. */
   const focusedKind = selection?.kind;
   const selectFromSidebar = useCallback(
@@ -136,6 +140,23 @@ export default function App() {
       [select],
     ),
   };
+
+  /** Close pane `id` (the last one goes home instead); the keyboard stays in the pane that remains. */
+  const closePaneById = useCallback(
+    (id: string) => {
+      if (closePane(id)) focusPaneDom(focusedId());
+      else setPaneContent(id, null);
+    },
+    [closePane, focusedId, setPaneContent],
+  );
+  /** The sidebar's open terminal and diff panes: focus one, or close it. */
+  const focusOpenPane = useCallback(
+    (id: string) => {
+      focusPane(id);
+      focusPaneDom(id);
+    },
+    [focusPane],
+  );
 
   /** Previous/next chat in sidebar order; from a project page, start in that project. */
   function stepChat(d: 1 | -1) {
@@ -368,6 +389,18 @@ export default function App() {
           }}
         />
       );
+    } else if (c?.kind === "diff") {
+      labels[p.id] = `Diff: ${c.cwd ? baseName(c.cwd) : "pick a folder"}`;
+      contents[p.id] = (
+        <DiffPane
+          pane={p.id}
+          content={c}
+          chats={y.chatOrder}
+          projects={y.orderedProjects}
+          onContent={(next) => setPaneContent(p.id, next)}
+          onClose={() => closePaneById(p.id)}
+        />
+      );
     } else if (c?.kind === "picker") {
       labels[p.id] = "Open in this pane";
       contents[p.id] = (
@@ -381,6 +414,7 @@ export default function App() {
           onNewProject={() => setCreatingProject("name")}
           onOpen={(s) => setPaneContent(p.id, s)}
           onNewTerminal={(cwd) => setPaneContent(p.id, { kind: "terminal", cwd })}
+          onNewDiff={(cwd) => setPaneContent(p.id, { kind: "diff", cwd })}
           onResume={(accountId, s) => y.resumeSession(accountId, s, p.id)}
           // Esc on an empty search: the pane goes (the last one goes home instead).
           onClose={() => {
@@ -453,6 +487,10 @@ export default function App() {
                 width={panes.sidebar.width}
                 onToggle={panes.toggleSidebar}
                 onWidth={panes.setSidebarWidth}
+                openPanes={openPanes}
+                focusedPaneId={panes.layout.focused}
+                onFocusPane={focusOpenPane}
+                onClosePane={closePaneById}
                 {...sidebar}
               />
 
