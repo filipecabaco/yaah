@@ -118,7 +118,7 @@ fn check_ref(r: &Value, path: &str, errs: &mut Vec<String>) {
     }
 }
 
-fn check_scale(scale: &Value, path: &str, errs: &mut Vec<String>) {
+pub(crate) fn check_scale(scale: &Value, path: &str, errs: &mut Vec<String>) {
     let Some(s) = scale.as_object() else {
         errs.push(format!("{path}: {{ \"type\", \"domain\"?, \"midpoint\"?, \"bins\"?, \"unit\"? }}, got {}", shown(scale)));
         return;

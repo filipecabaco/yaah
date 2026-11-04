@@ -28,7 +28,6 @@ import {
   type LabelProps,
 } from "recharts";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent, type ChartConfig } from "@/components/ui/chart";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ErrorText } from "@/components/error-text";
 import { Dumbbell } from "@/components/ui-blocks/dumbbell";
 import {
@@ -54,10 +53,10 @@ import {
 import { readScale } from "@/components/ui-blocks/scale";
 import { dodge, fitText, needsLegend, textWidth, type LabelItem } from "@/components/ui-blocks/chart-layout";
 import { useChartFont } from "@/components/ui-blocks/chart-font";
-import { cn } from "@/lib/utils";
 import { show } from "@/lib/narrow";
-import { inlineMax, useUiView } from "@/components/ui-view";
+import { ViewToggle, VizTable } from "@/components/ui-blocks/viz";
 
+const VIEWS = ["chart", "table"] as const;
 /** Stacked bars: the stack's total, for the label at its end. */
 const TOTAL = "total";
 /** Stacked bands: a fill strong enough to tell neighbours apart (index.css tunes it per mode). */
@@ -331,7 +330,6 @@ export default function UiChart(props: {
   const horizontal = orientation === "horizontal";
   const scale = useMemo(() => readScale(props.scale), [props.scale]);
   const height = props.height || 240;
-  const { expanded } = useUiView();
   const gapFmt = useMemo(() => signed(fmt), [fmt]);
   const zero = props.zero === true;
   const domain = useMemo(() => readDomain(props.domain), [props.domain]);
@@ -521,21 +519,7 @@ export default function UiChart(props: {
 
   return (
     <div className="ui-chart flex flex-col gap-1" data-chart-kind={kind} data-orientation={orientation}>
-      <div className="flex justify-end">
-        <div className="inline-flex rounded-md border p-0.5 text-xs" role="group" aria-label="View">
-          {(["chart", "table"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              aria-pressed={view === v}
-              onClick={() => setView(v)}
-              className={cn("rounded px-2 py-0.5 capitalize", view === v ? "bg-muted font-medium" : "text-muted-foreground")}
-            >
-              {v}
-            </button>
-          ))}
-        </div>
-      </div>
+      <ViewToggle value={view} onChange={setView} views={VIEWS} />
       {view === "chart" ? (
         kind === "dumbbell" ? (
           <Dumbbell
@@ -555,34 +539,18 @@ export default function UiChart(props: {
           </ChartContainer>
         )
       ) : (
-        <div className={cn("overflow-auto rounded-md border", inlineMax(expanded, "max-h-80"))}>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>{props.x}</TableHead>
-                {series.map((s) => (
-                  <TableHead key={s.key} className="text-right">
-                    {s.label}
-                  </TableHead>
-                ))}
-                {kind === "dumbbell" && <TableHead className="text-right">Gap</TableHead>}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {data.map((row, i) => (
-                <TableRow key={i}>
-                  <TableCell>{row[X]}</TableCell>
-                  {series.map((s) => (
-                    <TableCell key={s.key} className="text-right tabular-nums">
-                      {fmt(row[s.key])}
-                    </TableCell>
-                  ))}
-                  {kind === "dumbbell" && <TableCell className="text-right tabular-nums">{gap(row) == null ? "–" : gapFmt(gap(row)!)}</TableCell>}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <VizTable
+          columns={[
+            { key: X, label: props.x },
+            ...series.map((s) => ({ key: s.key, label: s.label, numeric: true })),
+            ...(kind === "dumbbell" ? [{ key: "gap", label: "Gap", numeric: true }] : []),
+          ]}
+          rows={data.map((row) => ({
+            [X]: row[X],
+            ...Object.fromEntries(series.map((s) => [s.key, fmt(row[s.key])])),
+            gap: gap(row) == null ? "–" : gapFmt(gap(row)!),
+          }))}
+        />
       )}
     </div>
   );

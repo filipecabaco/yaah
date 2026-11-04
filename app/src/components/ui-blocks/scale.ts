@@ -97,3 +97,50 @@ export function colorOf(s: Scale, domain: [number, number], value: number, marks
 
 /** The scale as small marks can carry it: at most 5 bins. */
 export const forMarks = (s: Scale): Scale => ({ ...s, bins: Math.min(s.bins, MARK_BINS) });
+
+/** The `p`-quantile of sorted values (linear between neighbours, as d3.quantile). */
+export function quantile(sorted: number[], p: number): number {
+  if (!sorted.length) return NaN;
+  const i = (sorted.length - 1) * p;
+  const lo = Math.floor(i);
+  return lo + 1 < sorted.length ? sorted[lo] + (sorted[lo + 1] - sorted[lo]) * (i - lo) : sorted[lo];
+}
+
+/** Values from which an unset domain is fenced (Tukey), below that it is the extent. */
+export const FENCE_MIN = 8;
+
+/**
+ * The domain a map bins over, so one extreme value can't wash out the rest. The agent's
+ * `domain` when given; else, from 8 values up, Tukey's fences (Q1 − 1.5 IQR, Q3 + 1.5 IQR) cut to
+ * the data, else the extent (domainOf). Values past it are clamped into the end bins, which the
+ * legend then labels open-ended. `clipped` says the fences cut the extent; `below`/`above` say
+ * values lie past either end.
+ */
+export function fencedDomain(s: Scale, values: number[]): { domain: [number, number]; clipped: boolean; below: boolean; above: boolean } {
+  const past = (d: [number, number]) => ({ below: values.some((v) => v < d[0]), above: values.some((v) => v > d[1]) });
+  if (s.domain || values.length < FENCE_MIN || s.type === "categorical") {
+    const domain = domainOf(s, values);
+    return { domain, clipped: false, ...past(domain) };
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const q1 = quantile(sorted, 0.25);
+  const q3 = quantile(sorted, 0.75);
+  const iqr = q3 - q1;
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+  let lo = Math.max(min, q1 - 1.5 * iqr);
+  let hi = Math.min(max, q3 + 1.5 * iqr);
+  if (!(hi > lo)) [lo, hi] = [min, max];
+  // Round ends, so the legend reads 40–100 rather than 42.3–99; a diverging one stays even about its midpoint.
+  let domain = scaleLinear()
+    .domain(lo === hi ? [lo, lo + 1] : [lo, hi])
+    .nice(s.bins)
+    .domain() as [number, number];
+  if (s.type === "diverging") {
+    const m = s.midpoint ?? 0;
+    const r = Math.max(Math.abs(domain[0] - m), Math.abs(domain[1] - m)) || 1;
+    domain = [m - r, m + r];
+  }
+  const flags = past(domain);
+  return { domain, clipped: flags.below || flags.above, ...flags };
+}

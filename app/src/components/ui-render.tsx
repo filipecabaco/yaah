@@ -32,6 +32,9 @@ import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
 // block whose code is in draws at once instead of flashing a placeholder.
 const UiChart = preloadable(() => import("@/components/ui-blocks/chart").then((m) => m.default));
 const UiMap = preloadable(() => import("@/components/ui-blocks/map").then((m) => m.default));
+// Region maps (outline, choropleth, bubble) and flow graphs are SVG over d3 modules: no Leaflet, no tiles.
+const UiGeoMap = preloadable(() => import("@/components/ui-blocks/map/geo-map").then((m) => m.default));
+const UiFlow = preloadable(() => import("@/components/ui-blocks/flow/flow").then((m) => m.default));
 const UiDataTable = preloadable(() => import("@/components/ui-blocks/data-table").then((m) => m.default));
 const UiDiagram = preloadable(() => import("@/components/ui-blocks/diagram").then((m) => m.default));
 const UiSql = preloadable(() => import("@/components/ui-blocks/sql").then((m) => m.default));
@@ -50,7 +53,7 @@ const DiffStatView = preloadable(() => cliViews().then((m) => m.DiffStatView));
 const diffBlocks = () => import("@/components/ui-blocks/diff-blocks");
 const TextDiffBlock = preloadable(() => diffBlocks().then((m) => m.TextDiffBlock));
 const PatchBlock = preloadable(() => diffBlocks().then((m) => m.PatchBlock));
-const BLOCKS = [UiChart, UiMap, UiDataTable, UiDiagram, UiSql, TestsView, TextDiffBlock, UiDiffReview];
+const BLOCKS = [UiChart, UiMap, UiGeoMap, UiFlow, UiDataTable, UiDiagram, UiSql, TestsView, TextDiffBlock, UiDiffReview];
 
 let preloading = false;
 /** After the first agent UI: fetch every block's code while the app is idle. */
@@ -362,9 +365,19 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
         </Lazy>
       );
     case "map":
-      return (
+      return p.kind === "outline" || p.kind === "choropleth" || p.kind === "bubble" ? (
+        <Lazy height={positive(p.height) ?? 360}>
+          <UiGeoMap props={p} />
+        </Lazy>
+      ) : (
         <Lazy height={positive(p.height) ?? 320}>
           <UiMap markers={p.markers} center={p.center} zoom={p.zoom} height={positive(p.height)} />
+        </Lazy>
+      );
+    case "flow":
+      return (
+        <Lazy height={positive(p.height) ?? 320}>
+          <UiFlow props={p} />
         </Lazy>
       );
     case "diagram":

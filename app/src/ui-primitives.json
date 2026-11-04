@@ -346,28 +346,156 @@
       }
     },
     "map": {
-      "description": "An interactive map (OpenStreetMap tiles) with labelled markers. Fits all markers unless center/zoom are given.",
+      "description": "A map. `kind` picks the form: \"markers\" (the default) is a street map (OpenStreetMap tiles) with labelled markers, for \"where on the streets\"; \"choropleth\" colours regions by one value each (a value per country or state); \"bubble\" sizes a circle at each place by its value (a value at a point: revenue by city); \"outline\" is a plain map with highlighted regions and marked places. The region kinds draw bundled geometry (`region`: world, europe, us-states), work offline, follow the theme, label small sets directly, and flip to a table. Region ids are what you'd write: ISO alpha-3 (\"PRT\"), alpha-2 (\"PT\") or an English name for countries; postal code (\"PA\"), FIPS or name for US states. An unknown id is refused with the nearest names. Colours come from the theme; you can't set them.",
       "uses": [
         "leaflet",
-        "react-leaflet"
+        "react-leaflet",
+        "d3-geo",
+        "topojson-client",
+        "d3-scale"
       ],
       "children": false,
       "props": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "markers",
+            "outline",
+            "choropleth",
+            "bubble"
+          ],
+          "description": "Default \"markers\"."
+        },
         "markers": {
           "type": "array",
-          "required": true,
-          "description": "[{ lat, lng, label, detail?, tone?: 'default'|'success'|'warning'|'danger' }]"
+          "description": "markers only, required there: [{ lat, lng, label, detail?, tone?: 'default'|'success'|'warning'|'danger' }], at most 2,000."
         },
         "center": {
           "type": "array",
-          "description": "[lat, lng]"
+          "description": "markers only: [lat, lng]. Default: fit all markers."
         },
         "zoom": {
-          "type": "number"
+          "type": "number",
+          "description": "markers only."
+        },
+        "region": {
+          "type": "string",
+          "enum": [
+            "world",
+            "europe",
+            "us-states"
+          ],
+          "description": "Region kinds: the bundled geometry. Default \"world\". \"europe\" is the countries of Europe (with Türkiye, Cyprus and the Caucasus), at a scale where Malta and Luxembourg show."
+        },
+        "data": {
+          "type": "array",
+          "description": "choropleth, required: [{ id, value, label?, detail? }], one row per region, at most 3,000. `value` is a number, or null for \"no data\" (hatched, never the lowest class)."
+        },
+        "highlight": {
+          "type": "array",
+          "description": "outline: [{ id, label?, detail?, tone? }], at most 100 regions to mark; `tone` 'default'|'success'|'warning'|'danger' is also said in words."
+        },
+        "points": {
+          "type": "array",
+          "description": "bubble, required: [{ lon, lat, value (0 or more), label, detail?, shade? }], at most 500, area proportional to value, the biggest few labelled. outline: [{ lon, lat, label, detail?, tone? }], at most 200."
+        },
+        "scale": {
+          "type": "object",
+          "description": "choropleth (and bubble `shade`): { type: \"sequential\" | \"diverging\" | \"categorical\", domain?: [low, high], midpoint?, bins?: 2-7, unit? }. Default sequential, 5 classes. Values past the domain go in the end classes (labelled \"< low\", \"> high\"); without a domain, outliers are fenced off the same way."
+        },
+        "view": {
+          "type": "any",
+          "description": "Region kinds: \"auto\" (default: the region set, or for bubbles the places, ignoring the outer 2% from 20 places, with \"N outside view\") or [west, south, east, north] in degrees."
+        },
+        "title": {
+          "type": "string",
+          "description": "Region kinds: what the map shows, at most 120 characters; its accessible name and the table's caption."
+        },
+        "legend": {
+          "type": "any",
+          "description": "Region kinds: true (default) or { title } (at most 80 characters), e.g. { title: \"Margin (R + / D -)\" }."
+        },
+        "labels": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "all",
+            "none"
+          ],
+          "description": "Region kinds. \"auto\" (default): every label for 12 or fewer items, else the regions whose label fits and the 5 biggest bubbles; \"all\" up to 24."
+        },
+        "noDataLabel": {
+          "type": "string",
+          "description": "choropleth: the legend's word for missing data. Default \"No data\"."
+        },
+        "maxRadius": {
+          "type": "number",
+          "description": "bubble: the largest bubble's radius, 6 to 48 px. Default about a twelfth of the map's short side."
+        },
+        "unit": {
+          "type": "string",
+          "description": "bubble: suffix for values, as on charts (\"M EUR\", \"%\", \" stations\")."
+        },
+        "borders": {
+          "type": "string",
+          "enum": [
+            "countries",
+            "none"
+          ],
+          "description": "outline: draw borders between regions (default) or not."
         },
         "height": {
           "type": "number",
-          "description": "Pixels. Default 320."
+          "description": "Pixels, 160 to 900. Default 320 for markers, 360 for region kinds. Expanded, the map fills the dialog."
+        }
+      }
+    },
+    "flow": {
+      "description": "A flow graph. \"sankey\": quantities flowing from stage to stage (CI jobs through lint, test and build to passed or failed; requests through services; cost by step), bands as wide as their values, flowing one way (a cycle is refused). \"network\": things and the links between them (service calls, package dependencies), laid out by force, up to a few hundred nodes. Both label small graphs directly, take arrows node to node (Enter steps along a node's links), and flip to a table (sankey: source, target, value; network: each node's neighbours). Ids and labels are text. Colours come from the theme.",
+      "uses": [
+        "d3-sankey",
+        "d3-force"
+      ],
+      "children": false,
+      "props": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "sankey",
+            "network"
+          ],
+          "required": true
+        },
+        "nodes": {
+          "type": "array",
+          "required": true,
+          "description": "[{ id, label? }] (ids unique, at most 60 characters). sankey also takes tone?: 'default'|'success'|'warning'|'danger' (e.g. a failed stage), at most 200 nodes. network takes group? (at most 3 groups, coloured) and size? (node weight), at most 500 nodes."
+        },
+        "links": {
+          "type": "array",
+          "required": true,
+          "description": "[{ source, target, value, label? }] between node ids. sankey: value above 0, at most 1,000 links, no cycles. network: value optional (line weight), at most 2,000 links."
+        },
+        "unit": {
+          "type": "string",
+          "description": "Suffix for values, as on charts (\" jobs\", \"ms\", \"$\")."
+        },
+        "title": {
+          "type": "string",
+          "description": "What the graph shows, at most 120 characters: its accessible name and the table's caption."
+        },
+        "labels": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "all",
+            "none"
+          ],
+          "description": "Node labels. \"auto\" (default): every sankey node; network: all up to 40 nodes, else the 12 most connected."
+        },
+        "height": {
+          "type": "number",
+          "description": "Pixels, 160 to 900. Default 320 (sankey), 360 (network). Expanded, it fills the dialog."
         }
       }
     },

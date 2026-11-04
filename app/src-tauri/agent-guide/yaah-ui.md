@@ -90,6 +90,11 @@ Pick the form from what the reader must do, before anything else:
 | A trend over time | `chart` `line`; `area` with `stacked` for parts of a total |
 | Amounts to compare | `chart` `bar`, `sort: "value"` unless the order means something |
 | Two values per item: before → after, poll → result, target → actual | `chart` `dumbbell` |
+| A value per country or US state (geography) | `map` `choropleth` |
+| A value at a place: revenue by city, load by data centre (geography) | `map` `bubble` |
+| Where something is, or which regions are in a state | `map` `outline`; `markers` (the default) only for streets |
+| Quantities flowing through stages: CI runs, requests, cost by step | `flow` `sankey` |
+| Relationships: who calls whom, what depends on what | `flow` `network` (a layered architecture: `diagram`) |
 | More than about 7 classes that all matter | `table` |
 
 No pie or donut: ranked bars compare parts better. No dual axes: two charts, or index both series to 100.
@@ -107,6 +112,48 @@ Bars and stacks start at 0. Lines and unstacked areas fit their data (with any r
   "series": [{ "key": "poll", "label": "Poll average" }, { "key": "result", "label": "Result" }],
   "refs": [{ "axis": "y", "value": 0, "label": "Tie" }],
   "scale": { "type": "diverging", "midpoint": 0, "bins": 5 } } }
+```
+
+## Maps
+
+`map` `kind` picks the form. Region kinds draw bundled geometry (`region`: `world`, `europe`, `us-states`), work offline, follow the theme, label small sets on the map and flip to a table; `markers` (the default) is a street map with tiles, for "where on the streets" only.
+
+- `choropleth`: `data: [{ id, value, detail? }]`, one row per region (`value: null` is "no data", hatched, never the lowest class). Prefer it when regions are comparable in size. The shared `scale` colours it: `sequential` (default, 5 classes) for magnitude, `diverging` with a `midpoint` for signed values such as margins. Values past `domain` sit in the end classes, labelled "< low" and "> high"; without a `domain`, outliers are fenced off the same way.
+- `bubble`: `points: [{ lon, lat, value, label }]`; area is proportional to value (0 is no bubble), the biggest few are labelled. Prefer it when the value belongs to a place, or when a big empty region would dominate a choropleth. Above about 150 points, aggregate.
+- `outline`: `highlight: [{ id, tone?, detail? }]` and `points: [{ lon, lat, label, tone? }]`; `tone` is said in words too.
+
+Ids are what you'd write: ISO alpha-3 (`"PRT"`), alpha-2 (`"PT"`) or an English name for countries; postal code (`"PA"`), FIPS or name for states. An unknown id is refused with the nearest names. `view: [west, south, east, north]` overrides the fit; by default bubbles fit most places and show "N outside view" for the far-off ones. No URLs, no colours, no formatters.
+
+```json
+{ "type": "map", "props": {
+  "kind": "choropleth", "region": "us-states", "title": "2024 margin by state",
+  "data": [{ "id": "PA", "value": 1.7, "detail": "R +1.7" }, { "id": "MI", "value": 1.4, "detail": "R +1.4" }, { "id": "VA", "value": -5.8, "detail": "D +5.8" }, { "id": "WY", "value": 46.1, "detail": "R +46.1" }],
+  "scale": { "type": "diverging", "domain": [-20, 20], "midpoint": 0, "bins": 7, "unit": " pts" },
+  "legend": { "title": "Margin (R + / D −)" } } }
+```
+
+```json
+{ "type": "map", "props": {
+  "kind": "bubble", "region": "europe", "title": "Store revenue by city", "unit": "M EUR",
+  "points": [{ "lon": -9.14, "lat": 38.72, "label": "Lisbon", "value": 4.2 }, { "lon": 2.35, "lat": 48.86, "label": "Paris", "value": 7.9 }, { "lon": 13.4, "lat": 52.52, "label": "Berlin", "value": 3.1 }] } }
+```
+
+## Flow graphs
+
+`flow` `kind: "sankey"`: nodes and links with values, bands as wide as their values, flowing one way: a cycle is refused (split the stage that repeats, e.g. `test` and `retest`). Node `tone` marks an outcome (`success`, `danger`). At most 200 nodes and 1,000 links. `kind: "network"`: things and their links, laid out by force; `group` colours nodes (at most 3 groups), `size` weights them, link `value` thickens lines. At most 500 nodes and 2,000 links; past a few hundred, aggregate. Both take arrows node to node and Enter along a node's links, and flip to a table.
+
+```json
+{ "type": "flow", "props": {
+  "kind": "sankey", "unit": " jobs", "title": "CI runs by stage",
+  "nodes": [{ "id": "push", "label": "Push" }, { "id": "lint", "label": "Lint" }, { "id": "test", "label": "Test" }, { "id": "build", "label": "Build" }, { "id": "pass", "label": "Passed", "tone": "success" }, { "id": "fail", "label": "Failed", "tone": "danger" }],
+  "links": [{ "source": "push", "target": "lint", "value": 120 }, { "source": "push", "target": "test", "value": 120 }, { "source": "lint", "target": "pass", "value": 112 }, { "source": "lint", "target": "fail", "value": 8 }, { "source": "test", "target": "build", "value": 101 }, { "source": "test", "target": "fail", "value": 19 }, { "source": "build", "target": "pass", "value": 101 }] } }
+```
+
+```json
+{ "type": "flow", "props": {
+  "kind": "network", "title": "Service calls", "unit": " req/s",
+  "nodes": [{ "id": "web", "group": "edge", "size": 3 }, { "id": "api", "group": "core", "size": 5 }, { "id": "auth", "group": "core", "size": 2 }, { "id": "db", "label": "postgres", "group": "data", "size": 4 }],
+  "links": [{ "source": "web", "target": "api", "value": 900 }, { "source": "api", "target": "auth", "value": 700 }, { "source": "api", "target": "db", "value": 1500 }, { "source": "auth", "target": "db", "value": 300 }] } }
 ```
 
 ## Reference data, don't paste it

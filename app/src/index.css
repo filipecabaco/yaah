@@ -289,6 +289,41 @@
 [data-slot="card"] .ui-chart {
   --chart-surface: var(--card);
 }
+/* Region maps (ui-blocks/map/geo-map.tsx) and flow graphs, in tokens derived from each theme's own
+   surface and text, so every built-in and VS Code theme gets them with nothing to tune: water is the
+   surface; land one step off it toward the text; the coast, borders and the no-data hatch from the
+   muted text (itself floored at 4.5:1), so they hold 3:1 on water and land (theme-contrast.test.ts,
+   "map tokens"). */
+.ui-map,
+.ui-flow {
+  --chart-surface: var(--background);
+  --map-water: var(--chart-surface);
+  --map-land: color-mix(in oklab, var(--foreground) 10%, var(--chart-surface));
+  --map-stroke: color-mix(in oklab, var(--muted-foreground) 90%, var(--chart-surface));
+  --map-hatch: color-mix(in oklab, var(--muted-foreground) 90%, var(--chart-surface));
+}
+[data-slot="card"] .ui-map,
+[data-slot="card"] .ui-flow {
+  --chart-surface: var(--card);
+}
+/* Near black, a step needs more of the text colour to be seen. */
+.dark .ui-map,
+.dark .ui-flow {
+  --map-land: color-mix(in oklab, var(--foreground) 14%, var(--chart-surface));
+}
+/* The no-data swatch in a legend, as the map's hatch pattern draws it. */
+.ui-hatch {
+  background: repeating-linear-gradient(-45deg, var(--map-land) 0 2px, var(--map-hatch) 2px 3.5px);
+}
+/* OpenStreetMap tiles in a dark theme: inverted and turned back to their hues, a little dimmed, so a
+   street map isn't a bright block in a dark chat. Only the tile pane: markers, tooltips and the
+   attribution sit in other panes and keep their own colours. */
+.dark .ui-map-tiles .leaflet-tile-pane {
+  filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.88) saturate(0.7);
+}
+.dark .ui-map-tiles .leaflet-container {
+  background: var(--muted);
+}
 /* A chat's column: the transcript and the composer share it, so their edges line up. It scales
    with its pane (each split pane is its own `@container`): gutters from 1rem in a narrow pane to
    3rem in a wide one, and up to 2048px wide, so a full-screen window isn't mostly margin. Inside,

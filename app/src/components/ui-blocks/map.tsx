@@ -1,6 +1,10 @@
-// `map` primitive — Leaflet via react-leaflet, OpenStreetMap tiles. Loaded on demand.
-// Marker labels and details are React children (portalled into Leaflet's
-// tooltip/popup), so agent text is shown as text, never parsed as HTML.
+// `map` primitive, kind `markers` (the default) — Leaflet via react-leaflet, OpenStreetMap tiles.
+// Loaded on demand; the region kinds (outline, choropleth, bubble) are map/geo-map.tsx and never
+// load Leaflet. Marker labels and details are React children (portalled into Leaflet's
+// tooltip/popup), so agent text is shown as text, never parsed as HTML. In a dark theme the tiles
+// are inverted by a CSS filter (index.css, `.ui-map-tiles`): no second tile host, and the markers
+// and labels, in other panes, keep their colours. Expanded, the map takes the dialog's height and
+// refits once the dialog has settled at its final size.
 import { useEffect, useMemo, useRef } from "react";
 import { CircleMarker, MapContainer, Popup, TileLayer, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
@@ -9,6 +13,8 @@ import { keepLinksOutside } from "@/components/ui-blocks/links";
 import { makeMarkerAccessible, markerName } from "@/components/ui-blocks/map-a11y";
 import { fitController } from "@/components/ui-blocks/map-fit";
 import { asArray, asNumber, asObj, optText } from "@/lib/narrow";
+import { growAttr, growClass, useUiView } from "@/components/ui-view";
+import { cn } from "@/lib/utils";
 
 type Tone = "default" | "success" | "warning" | "danger";
 type Marker = { lat: number; lng: number; label?: string; detail?: string; tone: Tone };
@@ -49,10 +55,22 @@ function FitBounds({ markers }: { markers: Marker[] }) {
     const f = fitController(map);
     fit.current = f;
     const el = map.getContainer();
-    const ro = new ResizeObserver(([e]) => f.resized(e.contentRect.width, e.contentRect.height));
+    // A size is fitted once it has held for a frame: moving into the Expand dialog and its opening
+    // animation pass through sizes that would otherwise leave the map zoomed for one of them.
+    let frame = 0;
+    const settle = () => {
+      cancelAnimationFrame(frame);
+      const seen = { w: el.clientWidth, h: el.clientHeight };
+      frame = requestAnimationFrame(() => {
+        if (el.clientWidth === seen.w && el.clientHeight === seen.h) f.resized(seen.w, seen.h);
+        else settle();
+      });
+    };
+    const ro = new ResizeObserver(settle);
     ro.observe(el);
     f.resized(el.clientWidth, el.clientHeight);
     return () => {
+      cancelAnimationFrame(frame);
       ro.disconnect();
       f.dispose();
       fit.current = null;
@@ -83,13 +101,18 @@ export default function UiMap({
   const markers = useMemo(() => toMarkers(rawMarkers), [rawMarkers]);
   const center = toCenter(rawCenter);
   const fit = !center && markers.length > 0;
+  const { expanded } = useUiView();
+  const h = height || 320;
   return (
     <div
       // `isolate`: Leaflet's panes use z-index 400–1000; keep them inside the map, under dialogs and menus.
-      className="isolate overflow-hidden rounded-lg border"
+      // `shrink-0` inline: `overflow-hidden` would let a flex column squash it; expanded it grows instead,
+      // never under its inline height.
+      {...growAttr(expanded)}
+      className={cn("ui-map-tiles isolate rounded-lg border", expanded ? growClass(true, "") : "shrink-0", "overflow-hidden")}
       role="region"
       aria-label={markers.length ? `Map, ${markers.length === 1 ? "1 place" : `${markers.length} places`}` : "Map"}
-      style={{ height: height || 320 }}
+      style={expanded ? { minHeight: h } : { height: h }}
       onClickCapture={keepLinksOutside}
       onAuxClickCapture={keepLinksOutside}
     >

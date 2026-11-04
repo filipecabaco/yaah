@@ -7,6 +7,8 @@ import { baseName, home, need, now, type Mock, type Replies } from "./context";
 import { bundledComponents, recordings, type Recording } from "./fixtures";
 import { chartGallery } from "./chart-gallery";
 import { mapGallery } from "./map-gallery";
+import { mapTypes } from "./map-types";
+import { flowGraphs } from "./flow-graphs";
 import { addProject } from "./projects";
 import { permissionsReply, trustedAnswer, trustedFor } from "./permissions";
 
@@ -612,8 +614,14 @@ const electionTree = {
             {
               type: "map",
               props: {
-                // Plain markers: status tones mean good/bad, not a party. A filled state map comes later.
-                markers: ELECTION.map(([state, , result, lat, lng]) => ({ lat, lng, label: `${state} · ${margin(result)}` })),
+                // States filled by their result on the same diverging scale as the dumbbell; the rest weren't in this set.
+                kind: "choropleth",
+                region: "us-states",
+                title: "Result margin in the 14 states",
+                data: ELECTION.map(([state, , result]) => ({ id: state, value: result, detail: margin(result) })),
+                scale: { type: "diverging", domain: [-24, 24], midpoint: 0, bins: 7, unit: " pts" },
+                legend: { title: "Result margin (R + / D −)" },
+                noDataLabel: "Not in this set",
               },
             },
           ],
@@ -703,12 +711,49 @@ const mapGalleryRecording: Recording = [
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
+/** A short message, then one rendered card per entry (the map types and flow graphs mocks). */
+function cardsRecording(text: string, prefix: string, entries: [string, Record<string, unknown>][]): Recording {
+  return [
+    { event: "session-info", running: true, stopReason: null },
+    { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+    { event: "session-entry", index: 1, entry: { type: "agent", text, messageId: null } },
+    ...entries.flatMap(([title, tree], i): Recording => {
+      const input = { title, tree };
+      const id = `${prefix}-${i}`;
+      return [
+        { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "in_progress", input) },
+        {
+          event: "session-entry",
+          index: 3 + i * 2,
+          entry: { type: "ui", askId: null, answer: null, title, component: null, version: null, tree, props: {} },
+        },
+        { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "completed", input, "Rendered.") },
+      ];
+    }),
+    { event: "session-info", running: false, stopReason: "end_turn" },
+  ];
+}
+/** "map types": the region map kinds (map-types.ts). */
+const mapTypesRecording = cardsRecording(
+  "Four region maps: a world choropleth, US states by 2024 margin, European store revenue as bubbles, and edge locations as an outline. Numbers are illustrative.",
+  "map-types",
+  mapTypes,
+);
+/** "flow graphs": a CI sankey and a service network (flow-graphs.ts). */
+const flowGraphsRecording = cardsRecording(
+  "Three flow graphs: last week's CI runs as a sankey, the service call graph as a network, and the monorepo's package imports. Numbers are made up.",
+  "flow-graphs",
+  flowGraphs,
+);
+
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
 const routes: [RegExp, Recording][] = [
   [/command output|tool cards/i, commandOutput],
   [/election (dashboard|night)/i, election],
   [/chart gallery/i, gallery],
   [/map gallery/i, mapGalleryRecording],
+  [/map types/i, mapTypesRecording],
+  [/flow graphs?/i, flowGraphsRecording],
   [/diff of my project|workspace of yaah|request folders/i, folderRequest],
   [/big diff/i, bigDiff],
   [/expand fill/i, expandFill],

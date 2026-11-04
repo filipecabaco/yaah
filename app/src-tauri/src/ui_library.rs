@@ -39,6 +39,9 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock, PoisonError, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod chart;
+mod flow;
+mod map;
+mod regions;
 
 const PRIMITIVES_JSON: &str = include_str!("../../src/ui-primitives.json");
 const MAX_DEPTH: usize = 30;
@@ -861,6 +864,12 @@ impl<'a> Expansion<'a> {
         }
         let Some(t) = obj.get("type").and_then(Value::as_str) else { return Value::Object(out) };
         if is_primitive(t) {
+            // A region map's ids, as its geometry names them (map.rs), so React needs no alias table.
+            if t == "map"
+                && let Some(Value::Object(props)) = out.get_mut("props")
+            {
+                map::normalize(props);
+            }
             return Value::Object(out);
         }
         if stack.iter().any(|s| s == t) {
@@ -1011,8 +1020,11 @@ fn validate(node: &Value, path: &str, lib: &dyn Resolve, ctx: &mut Ctx, depth: u
             if obj.contains_key("children") && p["children"] != true {
                 errs.push(format!("{path}: `{t}` takes no children; use its props"));
             }
-            if t == "chart" {
-                chart::check(props, path, errs);
+            match t {
+                "chart" => chart::check(props, path, errs),
+                "map" => map::check(props, path, errs),
+                "flow" => flow::check(props, path, errs),
+                _ => {}
             }
             walk("children", ctx, errs);
         } else {
