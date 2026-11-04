@@ -83,7 +83,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
       {/* Drags the window (its buttons stay buttons): there's no title bar on macOS. */}
-      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm">
+      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
         {project && (
           <>
             <button type="button" className="shrink-0 text-muted-foreground hover:text-foreground" onClick={() => onOpenProject(project.id)}>
@@ -769,7 +769,7 @@ export function StartingChat({ start, agents, onDismiss }: { start: Starting; ag
   const others = agents.filter((a) => a.id !== start.agentId);
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
-      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm">
+      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
         <h1 className="min-w-0 truncate font-medium">New chat</h1>
         <Badge variant="outline">{label}</Badge>
       </header>

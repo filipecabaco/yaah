@@ -3,6 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRightLeft,
+  Equal,
   CircleDot,
   Columns2,
   PanelLeft,
@@ -495,6 +496,14 @@ function PaletteBody({
             y.panes.close();
             focusPaneDom(y.panes.focusedId());
           }),
+      },
+      manyPanes && {
+        id: "balance-panes",
+        icon: <Equal />,
+        label: "Balance panes",
+        detail: "every pane the same size",
+        shortcut: "balancePanes",
+        onSelect: () => run(() => y.panes.balance()),
       },
       manyPanes && { id: "next-pane", icon: <ArrowRightLeft />, label: "Focus next pane", onSelect: () => close(() => focusPaneDom(y.panes.next())) },
       {

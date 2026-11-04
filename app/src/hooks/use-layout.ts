@@ -5,6 +5,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { setFocusedPane } from "@/components/chat-context";
 import { api, SIDEBAR, type SidebarState } from "@/lib/api";
 import {
+  balance,
   closePane,
   findPane,
   focusPane,
@@ -150,6 +151,8 @@ export function useLayout() {
         return to;
       },
       resize: (splitId: string, ratio: number) => void apply((l) => setRatio(l, splitId, ratio)),
+      /** Every pane the same size along its row or column (Ghostty's "equalize splits"). */
+      balance: () => void apply(balance),
       mapContents: (f: (c: Selection) => Selection) => void apply((l) => mapContents(l, f)),
       toggleSidebar: () => putSidebar({ ...sidebarNow.current, collapsed: !sidebarNow.current.collapsed }),
       /** Its width in CSS pixels, kept within 220–480. */

@@ -3,11 +3,13 @@
 // comes back after a restart names a shell that's gone, so it opens a new one in the
 // same folder and says so; processes don't outlive the app.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLink, RotateCcw, SquareTerminal, X } from "lucide-react";
+import { ExternalLink, Maximize2, Minimize2, RotateCcw, SquareTerminal, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { compactPath } from "@/lib/format";
 import type { Selection } from "@/lib/layout";
+import { formatKeys, isMac, MOD, SHIFT } from "@/lib/shortcuts";
 import { openInTerminalApp, terminalApi, type TerminalExit } from "@/lib/terminal-api";
 import { TerminalView } from "./terminal-view";
 
@@ -42,6 +44,10 @@ function openShell(pane: string, cwd: string | undefined, size: { cols: number; 
 /** A shell that ends sooner than this after its pane attached failed to start: its pane stays open. */
 export const QUICK_EXIT_MS = 1000;
 
+/** ⌘⇧Enter (Ctrl+Shift+Enter on Linux), Ghostty's "zoom split": the terminal in a large dialog and back. */
+const EXPAND_KEYS = [MOD, SHIFT, "Enter"];
+const isExpandKey = (e: KeyboardEvent) => e.key === "Enter" && e.shiftKey && !e.altKey && (isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey);
+
 export function TerminalPane({
   pane,
   content,
@@ -60,6 +66,7 @@ export function TerminalPane({
   const [error, setError] = useState<string | null>(null);
   const [exit, setExit] = useState<TerminalExit | null>(null);
   const [title, setTitle] = useState("shell");
+  const [expanded, setExpanded] = useState(false);
   const latest = useRef({ content, onContent, onClose });
   // When this pane's view attached to its shell: an exit soon after is a failed start, not the user's `exit`.
   const attachedAt = useRef<number | null>(null);
@@ -92,9 +99,52 @@ export function TerminalPane({
     latest.current.onContent({ kind: "terminal", cwd: content.cwd });
   };
 
+  // A new shell starts its own clock (the quick-exit rule).
+  useEffect(() => {
+    attachedAt.current = null;
+  }, [content.id]);
+
+  /** The same shell, interactive, in the pane or in the expanded dialog (one view at a time). */
+  const shellView = (id: string, autoFocus: boolean, className: string) => (
+    <TerminalView
+      key={id}
+      terminalId={id}
+      interactive
+      autoFocus={autoFocus}
+      className={className}
+      onAttached={(info) => {
+        setTitle(info.title);
+        // The first view's attach starts the clock; moving to the dialog and back doesn't.
+        attachedAt.current ??= Date.now();
+        // Already over when this view attached (e.g. after a restart): say so rather than vanish.
+        if (info.exit) setExit(info.exit);
+      }}
+      onExit={(e) => {
+        // The shell ended while it was being shown (`exit`, Ctrl-D, a killed shell): close the pane,
+        // as terminal apps do. One that died right after starting keeps the bar, so its error stays readable.
+        const ranFor = attachedAt.current === null ? 0 : Date.now() - attachedAt.current;
+        if (ranFor >= QUICK_EXIT_MS) {
+          setExpanded(false);
+          latest.current.onClose();
+        } else setExit(e);
+      }}
+      onGone={() => start(RESTARTED_NOTE)}
+    />
+  );
+
   const cwd = content.cwd ?? "";
   return (
-    <div ref={box} className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--terminal-background)]">
+    <div
+      ref={box}
+      className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--terminal-background)]"
+      // ⌘⇧Enter (Ctrl+Shift+Enter on Linux), Ghostty's "zoom split" keys: before the shell sees them.
+      onKeyDownCapture={(e) => {
+        if (!isExpandKey(e.nativeEvent) || !content.id) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setExpanded((x) => !x);
+      }}
+    >
       <header data-tauri-drag-region="deep" className="flex shrink-0 items-center gap-2 border-b bg-background px-4 py-2.5 text-sm">
         <SquareTerminal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
         <span className="shrink-0 font-medium">{title}</span>
@@ -117,6 +167,18 @@ export function TerminalPane({
             <ExternalLink />
           </Button>
         )}
+        {content.id && !error && (
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            title={`Expand (${formatKeys(EXPAND_KEYS)})`}
+            aria-label="Expand terminal"
+            aria-pressed={expanded}
+            onClick={() => setExpanded(true)}
+          >
+            <Maximize2 />
+          </Button>
+        )}
         <Button size="icon-xs" variant="ghost" title="Close the pane" aria-label="Close terminal pane" onClick={onClose}>
           <X />
         </Button>
@@ -136,28 +198,16 @@ export function TerminalPane({
             <RotateCcw /> Try again
           </Button>
         </div>
+      ) : content.id && expanded ? (
+        // The dialog has the shell (its own view, sized to it); this pane gets it back on close.
+        <div className="flex flex-1 items-center justify-center gap-3 text-sm text-muted-foreground">
+          Shown expanded
+          <Button size="xs" variant="outline" onClick={() => setExpanded(false)}>
+            <Minimize2 /> Back to the pane
+          </Button>
+        </div>
       ) : content.id ? (
-        <TerminalView
-          key={content.id}
-          terminalId={content.id}
-          interactive
-          autoFocus={focused}
-          className="flex-1"
-          onAttached={(info) => {
-            setTitle(info.title);
-            attachedAt.current = Date.now();
-            // Already over when this view attached (e.g. after a restart): say so rather than vanish.
-            if (info.exit) setExit(info.exit);
-          }}
-          onExit={(e) => {
-            // The shell ended while it was being shown (`exit`, Ctrl-D, a killed shell): close the pane,
-            // as terminal apps do. One that died right after starting keeps the bar, so its error stays readable.
-            const ranFor = attachedAt.current === null ? 0 : Date.now() - attachedAt.current;
-            if (ranFor >= QUICK_EXIT_MS) latest.current.onClose();
-            else setExit(e);
-          }}
-          onGone={() => start(RESTARTED_NOTE)}
-        />
+        shellView(content.id, focused, "flex-1")
       ) : (
         <div className="flex-1" aria-busy="true" />
       )}
@@ -172,6 +222,29 @@ export function TerminalPane({
           </Button>
         </div>
       )}
+      <Dialog open={expanded && !!content.id} onOpenChange={setExpanded}>
+        <DialogContent
+          className="flex h-[92vh] w-[96vw] max-w-none flex-col gap-0 bg-[var(--terminal-background)] p-0 sm:max-w-none"
+          // Esc belongs to the shell (vim, less, fzf): the X or ⌘⇧Enter closes this.
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onKeyDownCapture={(e) => {
+            if (!isExpandKey(e.nativeEvent)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            setExpanded(false);
+          }}
+        >
+          <div className="flex items-center gap-2 border-b bg-background px-4 py-2.5 pr-12 text-sm">
+            <SquareTerminal className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+            <DialogTitle className="shrink-0 text-sm font-medium">{title}</DialogTitle>
+            <DialogDescription className="ml-auto min-w-0 truncate font-mono text-xs text-muted-foreground" title={cwd}>
+              {cwd ? compactPath(cwd) : "Terminal"} · {formatKeys(EXPAND_KEYS)} to go back
+            </DialogDescription>
+          </div>
+          {content.id && expanded && shellView(content.id, true, "min-h-0 flex-1")}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -127,6 +127,28 @@ export function setRatio(layout: Layout, splitId: string, ratio: number): Layout
   return { ...layout, root: mapTree(layout.root, (n) => (n.type === "split" && n.id === splitId && n.ratio !== r ? { ...n, ratio: r } : n)) };
 }
 
+/** How many panes sit side by side (`row`) or stacked (`column`) along `dir`: a split the other way counts once. */
+function panesAlong(node: LayoutNode, dir: Split["dir"]): number {
+  return node.type === "split" && node.dir === dir ? panesAlong(node.a, dir) + panesAlong(node.b, dir) : 1;
+}
+
+/**
+ * Every pane the same share of its row or column, as Ghostty's "equalize splits" does: each
+ * divider moves to the share of panes on its side, so three side by side get a third each.
+ */
+export function balance(layout: Layout): Layout {
+  const even = (n: LayoutNode): LayoutNode => {
+    if (n.type !== "split") return n;
+    const a = even(n.a);
+    const b = even(n.b);
+    const before = panesAlong(n.a, n.dir);
+    const ratio = clamp(before / (before + panesAlong(n.b, n.dir)), RATIO_MIN, 1 - RATIO_MIN);
+    return a === n.a && b === n.b && ratio === n.ratio ? n : { ...n, ratio, a, b };
+  };
+  const root = even(layout.root);
+  return root === layout.root ? layout : { ...layout, root };
+}
+
 export const focusPane = (layout: Layout, id: string): Layout =>
   layout.focused === id || !findPane(layout, id) ? layout : { ...layout, focused: id };
 

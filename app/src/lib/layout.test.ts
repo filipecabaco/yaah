@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  balance,
   clampRatio,
   closePane,
   focusPane,
@@ -135,6 +136,37 @@ describe("contents and sizes", () => {
     expect(clampRatio(s, 0.01, 300)).toBe(0.05);
     expect(clampRatio(s, 0.99, 0)).toBe(0.95);
     expect((setRatio(threePanes(), "s1", 2).root as Split).ratio).toBe(0.95);
+  });
+});
+
+describe("balancing", () => {
+  const widths = (l: Layout) => [...paneRects(l.root).values()].map((r) => +r.w.toFixed(4));
+
+  it("gives three panes side by side a third each, however they were split", () => {
+    // p1 | (p2 | p3), dragged lopsided: the outer divider counts the two panes on its right.
+    let l = splitPane(singlePane(chat("a")), "p1", "row").layout;
+    l = splitPane(l, "p2", "row").layout;
+    l = setRatio(setRatio(l, "s1", 0.8), "s2", 0.3);
+    const even = balance(l);
+    expect(widths(even)).toEqual([0.3333, 0.3333, 0.3333]);
+    expect((even.root as Split).ratio).toBeCloseTo(1 / 3);
+  });
+
+  it("evens a column inside a row on its own axis: p1 | (p2 / p3)", () => {
+    const l = setRatio(setRatio(threePanes(), "s1", 0.7), "s2", 0.2);
+    const rects = [...paneRects(balance(l).root).values()];
+    expect(rects.map((r) => +r.w.toFixed(4))).toEqual([0.5, 0.5, 0.5]);
+    expect(rects.slice(1).map((r) => +r.h.toFixed(4))).toEqual([0.5, 0.5]);
+  });
+
+  it("keeps the panes, contents and focus, and returns the same layout when already even", () => {
+    const l = setRatio(threePanes(), "s1", 0.7);
+    const even = balance(l);
+    expect(panesOf(even.root)).toEqual(panesOf(l.root));
+    expect(even.focused).toBe(l.focused);
+    expect(balance(even)).toBe(even);
+    const one = singlePane(chat("a"));
+    expect(balance(one)).toBe(one);
   });
 });
 

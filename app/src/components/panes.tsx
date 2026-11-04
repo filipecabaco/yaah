@@ -3,6 +3,9 @@
 // resizing never remount what a pane shows: its chat keeps its scroll position,
 // its composer its draft. Dividers sit over the seams and resize by drag or keys.
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from "react";
+import { X } from "lucide-react";
+import { Hint } from "@/components/shortcuts";
+import { Button } from "@/components/ui/button";
 import { clampRatio, paneRects, panesOf, setRatio, splitRects, type Layout, type Rect, type Split } from "@/lib/layout";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +21,7 @@ export function PaneGrid({
   labels,
   onFocus,
   onResize,
+  onClose,
 }: {
   layout: Layout;
   /** What each pane shows, built by the app; the same elements while only a divider moves, so nothing inside re-renders. */
@@ -27,6 +31,8 @@ export function PaneGrid({
   onFocus: (id: string) => void;
   /** A divider's new ratio, once the drag ends (or per key). */
   onResize: (splitId: string, ratio: number) => void;
+  /** The close button on a pane (there are several, and it isn't a terminal, which has its own). */
+  onClose: (id: string) => void;
 }) {
   const grid = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -55,14 +61,33 @@ export function PaneGrid({
             key={p.id}
             data-pane-id={p.id}
             data-focused={focused || undefined}
+            data-many={many || undefined}
             aria-label={many ? labels[p.id] : undefined}
             tabIndex={-1}
-            className="absolute flex overflow-hidden outline-none"
+            className="group/pane absolute flex overflow-hidden outline-none"
             style={box(rects.get(p.id)!)}
-            onPointerDownCapture={() => onFocus(p.id)}
+            // The close button acts on its own pane without first making it the focused one.
+            onPointerDownCapture={(e) => {
+              if (!(e.target instanceof Element && e.target.closest("[data-pane-close]"))) onFocus(p.id);
+            }}
             onFocusCapture={() => onFocus(p.id)}
           >
             {contents[p.id]}
+            {/* Top-right of the pane, over its header row (chats leave room for it). Terminals carry their own. */}
+            {many && p.content?.kind !== "terminal" && (
+              <Hint label="Close this pane" shortcut="closePane">
+                <Button
+                  data-pane-close
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label="Close this pane"
+                  className="absolute top-2 right-2 z-30 text-muted-foreground opacity-60 group-focus-within/pane:opacity-100 group-hover/pane:opacity-100 focus-visible:opacity-100"
+                  onClick={() => onClose(p.id)}
+                >
+                  <X />
+                </Button>
+              </Hint>
+            )}
             {/* Which pane the keyboard and the sidebar act on, once there are several. */}
             {many && focused && <div aria-hidden className="pointer-events-none absolute inset-0 z-20 ring-2 ring-ring/45 ring-inset" />}
           </section>

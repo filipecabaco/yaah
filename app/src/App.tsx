@@ -190,6 +190,7 @@ export default function App() {
     // Split panes: a new pane opens on the picker, with the keyboard in it.
     splitRight: () => focusPaneDom(panes.split("row")),
     splitDown: () => focusPaneDom(panes.split("column")),
+    balancePanes: panes.balance,
     // The last pane stays; there ⌘W closes the library, as Esc does.
     closePane: () => {
       if (panes.close()) focusPaneDom(panes.focusedId());
@@ -442,7 +443,16 @@ export default function App() {
 
               <div className="flex min-w-0 flex-1 flex-col">
                 <CollapsedTitleBar shown={panes.sidebar.collapsed} onToggle={panes.toggleSidebar} onPalette={sidebar.onPalette} />
-                <PaneGrid layout={panes.layout} contents={contents} labels={labels} onFocus={panes.focus} onResize={panes.resize} />
+                <PaneGrid
+                  layout={panes.layout}
+                  contents={contents}
+                  labels={labels}
+                  onFocus={panes.focus}
+                  onResize={panes.resize}
+                  onClose={(id) => {
+                    if (panes.close(id)) focusPaneDom(panes.focusedId());
+                  }}
+                />
               </div>
 
               <CommandPalette

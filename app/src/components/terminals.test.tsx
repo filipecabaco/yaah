@@ -277,3 +277,58 @@ describe("a shell that exits", () => {
     await waitFor(() => expect(within(pane).queryByText("The shell has exited.")).not.toBeInTheDocument());
   });
 });
+
+describe("an expanded terminal", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  async function shellPane() {
+    const r = await started();
+    await r.user.click(screen.getByRole("button", { name: /new terminal/i }));
+    await waitFor(() => expect(terminalPanes()).toHaveLength(1));
+    const pane = terminalPanes()[0];
+    await waitFor(() => expect(textIn(pane)).toContain("dev@yaah %"));
+    return { ...r, pane };
+  }
+  const expandKey = () =>
+    fireEvent.keyDown(document.activeElement ?? window, {
+      key: "Enter",
+      code: "Enter",
+      metaKey: isMac,
+      ctrlKey: !isMac,
+      shiftKey: true,
+      bubbles: true,
+    });
+
+  it("opens the same shell in a large dialog, keeps Esc for the shell, and goes back", async () => {
+    const { user, pane, mock } = await shellPane();
+    await user.click(within(pane).getByRole("button", { name: "Expand terminal" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(pane).getByText("Shown expanded")).toBeInTheDocument();
+    // The dialog's own view of the shell, with its scrollback, taking keys.
+    await waitFor(() => expect(textIn(dialog)).toContain("dev@yaah %"));
+    const input = within(dialog).getByRole("textbox", { name: "Terminal input" });
+    await user.type(input, "echo big{Enter}");
+    await waitFor(() => expect(textIn(dialog)).toContain("big\ndev@yaah %"));
+    expect(Object.values(mock.terminals).filter((t) => !t.agent)).toHaveLength(1);
+    // Esc is the shell's: the dialog stays.
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // ⌘⇧Enter goes back to the pane, which shows the shell again.
+    expandKey();
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(textIn(terminalPanes()[0])).toContain("big\ndev@yaah %"));
+  });
+
+  it("opens with ⌘⇧Enter from the pane, and closes with the pane when the shell exits", async () => {
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    const { user, pane } = await shellPane();
+    within(pane).getByRole("textbox", { name: "Terminal input" }).focus();
+    expandKey();
+    const dialog = await screen.findByRole("dialog");
+    now += 5_000;
+    await user.type(within(dialog).getByRole("textbox", { name: "Terminal input" }), "exit{Enter}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(terminalPanes()).toHaveLength(0));
+  });
+});

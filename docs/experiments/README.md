@@ -20,3 +20,4 @@ README saying what was tried and what each image shows.
 - [2026-11-03-performance](2026-11-03-performance/): measured performance review, Rust side and interface (numbers, benchmark code, screenshots)
 - [2026-11-03-website](2026-11-03-website/): screenshots of the app (browser mock, 2×, light and dark) used by the website in `site/`, and full-page checks of the site at 1440, 1024 and 375 px
 - [earlier-ui-checks](earlier-ui-checks/): visual checks from earlier builds (command palette, diffs, quick chats, showcase)
+- [2026-11-04-pane-close](2026-11-04-pane-close/): quick close button on every split pane (two and three panes, light and dark, sidebar hidden)
