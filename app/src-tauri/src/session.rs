@@ -1426,6 +1426,15 @@ impl Hub {
             s.attached = res.is_ok().then_some(agent.generation);
             self.shared.save(s);
         });
+        // The agent no longer has this session (its files were moved or deleted, or they live under
+        // another profile's config dir): a fresh session, handed the conversation as a switch would,
+        // instead of a chat that can't go on.
+        if res.as_ref().is_err_and(|e| e.code == acp::RESOURCE_NOT_FOUND) {
+            self.shared.with(session_id, |s| {
+                s.info.handoff_from.get_or_insert_with(|| account.label.clone());
+            })?;
+            return self.hand_off(session_id, agent, account).await;
+        }
         let loaded = res.map_err(|e| self.shared.rpc_error(&account.id, &e, "Couldn't reopen this chat"))?;
         // The agent may not have kept the chat's model and effort: they're sent again.
         self.settle_config(session_id, agent, Some(config::offered(&loaded)), false).await.map(|_| ())

@@ -22,6 +22,9 @@ pub const PROTOCOL_VERSION: u64 = 1;
 
 /// JSON-RPC error code ACP uses for "authentication required".
 pub const AUTH_REQUIRED: i64 = -32000;
+/// The agent doesn't know the resource asked for: for `session/load`, a session it no longer has
+/// (claude-agent-acp: a session stored under another profile's config dir, or deleted).
+pub const RESOURCE_NOT_FOUND: i64 = -32002;
 const METHOD_NOT_FOUND: i64 = -32601;
 const STDERR_TAIL_LINES: usize = 40;
 /// The longest message read from an agent's stdout; longer ones are skipped.

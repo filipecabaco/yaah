@@ -217,6 +217,8 @@ export default function App() {
     closePane: () => {
       if (panes.close()) focusPaneDom(panes.focusedId());
       else if (selection?.kind === "components") closeLibrary(panes.focusedId());
+      // The last pane goes back to the home screen, as its close button and an exiting shell do.
+      else if (selection) setPaneContent(panes.focusedId(), null);
     },
     focusPane: ({ dir }) => {
       const to = dir && panes.move(dir);

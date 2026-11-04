@@ -198,6 +198,10 @@ impl Agent {
             "session/list" => Self::respond(id, &list_sessions(params)),
             "session/load" => {
                 let sid = params["sessionId"].as_str().unwrap_or_default();
+                // An agent that has lost every session it started (moved or deleted files).
+                if std::env::var_os("YAAH_AGENT_LOSES_SESSIONS").is_some() {
+                    return send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32002, "message": "Resource not found" } }));
+                }
                 match stored_sessions().into_iter().find(|s| s["sessionId"] == sid) {
                     Some(s) if s["broken"] == true => {
                         return send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32002, "message": "Resource not found" } }));

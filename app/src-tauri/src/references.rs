@@ -24,6 +24,8 @@ use std::time::{Duration, Instant};
 
 /// References read per message; later ones go as a note.
 pub const MAX_REFERENCES: usize = 10;
+/// How long the `#` list waits for one service before showing the others without it.
+pub const SUGGEST_TIMEOUT: Duration = Duration::from_secs(6);
 /// Characters of reference text per message, all references together.
 pub const TOTAL_CHARS: usize = 60_000;
 const BODY_CHARS: usize = 6_000;
@@ -1066,7 +1068,18 @@ pub async fn suggest(i: &'static Integrations, scope: &Scope, only: Option<WorkS
     let read = |s: WorkService| {
         let on = connected.contains(&s);
         let q = &q;
-        async move { if on { from_service(i, s, scope, q, cache).await } else { (vec![], vec![]) } }
+        async move {
+            if !on {
+                return (vec![], vec![]);
+            }
+            // A slow service doesn't hold the list: the others show, and it says it didn't answer.
+            if let Ok(found) = tokio::time::timeout(SUGGEST_TIMEOUT, from_service(i, s, scope, q, cache)).await {
+                found
+            } else {
+                let message = format!("{}: no answer in {} s", service_label(s), SUGGEST_TIMEOUT.as_secs());
+                (vec![], vec![work_items::QueueError { service: s, kind: work_items::ErrorKind::Other, message }])
+            }
+        }
     };
     let (gh, gl, lin) = tokio::join!(read(WorkService::Github), read(WorkService::Gitlab), read(WorkService::Linear));
     let mut all = vec![];

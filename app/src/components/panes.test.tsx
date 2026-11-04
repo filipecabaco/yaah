@@ -206,6 +206,15 @@ describe("moving and closing", () => {
     expect(screen.getByRole("button", { name: /^quick chat\b(?!s)/i })).toBeInTheDocument();
   });
 
+  it("⌘W on the last pane showing a chat goes back to the home screen", async () => {
+    const { user } = await started();
+    await quickChatIn(user, "p1");
+    act(closePane);
+    expect(paneEls()).toHaveLength(1);
+    expect(await screen.findByRole("button", { name: /^quick chat\b(?!s)/i })).toBeInTheDocument();
+    expect(screen.queryByRole("combobox", { name: "Message" })).toBeNull();
+  });
+
   it("⌘W on the last pane closes the library, as Esc does", async () => {
     const { user } = await started();
     await quickChatIn(user, "p1");
