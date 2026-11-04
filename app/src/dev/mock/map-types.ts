@@ -1,6 +1,8 @@
-// The region map kinds, one card each: a world choropleth, a US election choropleth, a bubble map
-// of European store revenue and an outline with highlighted regions. All numbers are made up or
-// rounded for illustration. `map-types.test.tsx` renders every entry, so they stay valid as the
+// The map kinds, one card each: a world choropleth (most countries without a row, so plain land),
+// a US election choropleth, a bubble map of European store revenue, an outline with highlighted
+// regions, flights and data-centre traffic as connections, weather stations as a hexbin, a world
+// map zoomed to Iberia (the 1:50m coast), and two street maps: a delivery round as routes and bike
+// docks in clusters. All numbers are made up or rounded for illustration. `map-types.test.tsx` renders every entry, so they stay valid as the
 // map code changes; routed by "map types" in chats.ts.
 type Tree = Record<string, unknown>;
 const card = (title: string, description: string, ...children: Tree[]): Tree => ({ type: "card", props: { title, description }, children });
@@ -108,9 +110,165 @@ const outline = card(
   }),
 );
 
+// Daily departures between hubs (made up).
+const HUBS: [string, string, number, number][] = [
+  ["LIS", "Lisbon", -9.14, 38.77], ["MAD", "Madrid", -3.57, 40.49], ["LHR", "London", -0.45, 51.47], ["FRA", "Frankfurt", 8.57, 50.03],
+  ["JFK", "New York", -73.78, 40.64], ["GRU", "Sao Paulo", -46.47, -23.43], ["DXB", "Dubai", 55.36, 25.25], ["SIN", "Singapore", 103.99, 1.36],
+  ["NRT", "Tokyo", 140.39, 35.77], ["SFO", "San Francisco", -122.38, 37.62], ["JNB", "Johannesburg", 28.24, -26.13], ["SYD", "Sydney", 151.18, -33.95],
+]; // prettier-ignore
+const ROUTES: [string, string, number][] = [
+  ["LIS", "GRU", 6], ["LIS", "JFK", 4], ["LIS", "LHR", 9], ["MAD", "GRU", 3], ["LHR", "JFK", 14], ["FRA", "JFK", 8],
+  ["LHR", "DXB", 10], ["FRA", "SIN", 4], ["DXB", "SIN", 7], ["DXB", "SYD", 3], ["SIN", "SYD", 6], ["NRT", "SFO", 5],
+  ["SFO", "JFK", 12], ["JNB", "LHR", 4], ["DXB", "JNB", 3], ["NRT", "SIN", 6],
+]; // prettier-ignore
+const name = (id: string) => HUBS.find(([h]) => h === id)![1];
+
+const flights = card(
+  "Flights: daily departures between hubs",
+  "Each arc is the great circle between two hubs, as wide as its daily departures (made up).",
+  map({
+    kind: "connection",
+    region: "world",
+    title: "Daily departures between hubs",
+    hubs: HUBS.map(([id, label, lon, lat]) => ({ id, label, lon, lat })),
+    links: ROUTES.map(([from, to, value]) => ({ from, to, value, ...(value >= 10 ? { detail: `${name(from)}–${name(to)} is a trunk route` } : {}) })),
+    directed: true,
+    unit: " flights",
+    height: 400,
+  }),
+);
+
+const traffic = card(
+  "Data centres: replication traffic",
+  "Links between European regions, as wide as their traffic in Gbit/s (made up); no direction.",
+  map({
+    kind: "connection",
+    region: "europe",
+    title: "Replication traffic between regions",
+    hubs: [
+      { id: "dub", label: "Dublin", lon: -6.26, lat: 53.35 },
+      { id: "lon", label: "London", lon: -0.13, lat: 51.51 },
+      { id: "fra", label: "Frankfurt", lon: 8.68, lat: 50.11 },
+      { id: "par", label: "Paris", lon: 2.35, lat: 48.86 },
+      { id: "mad", label: "Madrid", lon: -3.7, lat: 40.42 },
+      { id: "mil", label: "Milan", lon: 9.19, lat: 45.46 },
+      { id: "sto", label: "Stockholm", lon: 18.07, lat: 59.33 },
+      { id: "war", label: "Warsaw", lon: 21.01, lat: 52.23 },
+    ],
+    links: [
+      { from: "fra", to: "lon", value: 40 },
+      { from: "fra", to: "par", value: 32 },
+      { from: "dub", to: "lon", value: 18 },
+      { from: "fra", to: "sto", value: 12, label: "backup" },
+      { from: "fra", to: "war", value: 9 },
+      { from: "par", to: "mad", value: 14 },
+      { from: "fra", to: "mil", value: 11 },
+      { from: "mil", to: "mad", value: 4 },
+    ],
+    unit: " Gbit/s",
+    height: 400,
+  }),
+);
+
+// Weather stations: a few dense clusters and a thin spread, from a fixed seed so the mock is stable.
+function stations(): { lon: number; lat: number }[] {
+  let seed = 7;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  const around = (lon: number, lat: number, n: number, spread: number) =>
+    Array.from({ length: n }, () => {
+      // Sum of three uniforms: roughly normal, so a cluster thins out towards its edge.
+      const g = () => (rand() + rand() + rand() - 1.5) * spread;
+      return { lon: Math.round((lon + g() * 1.5) * 100) / 100, lat: Math.round((lat + g()) * 100) / 100 };
+    });
+  return [
+    ...around(4.9, 52.1, 160, 2), // the Low Countries
+    ...around(8.7, 50.1, 140, 3), // Germany
+    ...around(2.35, 48.86, 110, 2.5), // Paris basin
+    ...around(-3.7, 40.4, 60, 3), // Spain
+    ...around(12.5, 42.5, 70, 3), // Italy
+    ...around(18, 59.3, 40, 3), // Sweden
+    ...around(10, 50, 200, 9), // everywhere else, thinly
+  ];
+}
+
+const hexbin = card(
+  "Weather stations: density",
+  "About 780 stations binned into hexagons; each cell's colour is how many stations it holds (made up).",
+  map({
+    kind: "hexbin",
+    region: "europe",
+    title: "Weather stations per cell",
+    points: stations(),
+    radius: 14,
+    unit: " stations",
+    view: [-11, 35, 30, 63],
+    height: 420,
+  }),
+);
+
+const iberia = card(
+  "Iberia and the Maghreb: renewables share",
+  "Share of electricity from renewables, by country (illustrative). Zoomed in, the world map draws its detailed coast.",
+  map({
+    kind: "choropleth",
+    region: "world",
+    title: "Renewables, % of electricity",
+    view: [-10.5, 33.5, 5, 44.5],
+    data: [
+      { id: "PT", value: 61 },
+      { id: "ES", value: 50 },
+      { id: "FR", value: 27 },
+      { id: "MA", value: 21 },
+      { id: "DZ", value: 1 },
+    ],
+    scale: { type: "sequential", bins: 5, domain: [0, 70], unit: "%" },
+    legend: { title: "Renewables, % of electricity" },
+    height: 380,
+  }),
+);
+
+// A delivery round in Lisbon: the stops are markers, the round is a route through their ids.
+const STOPS: [string, string, number, number][] = [
+  ["depot", "Depot · Alcântara", 38.7046, -9.1771], ["s1", "Stop 1 · Estrela", 38.7139, -9.1597], ["s2", "Stop 2 · Rato", 38.7202, -9.1546],
+  ["s3", "Stop 3 · Marquês", 38.7253, -9.1500], ["s4", "Stop 4 · Saldanha", 38.7349, -9.1450], ["s5", "Stop 5 · Arroios", 38.7330, -9.1347],
+  ["s6", "Stop 6 · Graça", 38.7172, -9.1310], ["s7", "Stop 7 · Baixa", 38.7110, -9.1368],
+]; // prettier-ignore
+const round = card(
+  "Delivery round: Lisbon, morning",
+  "Eight stops on the street map, joined by the round's route in order.",
+  map({
+    markers: STOPS.map(([id, label, lat, lng], i) => ({ id, label, lat, lng, tone: i === 0 ? "success" : "default" })),
+    lines: [{ points: [...STOPS.map(([id]) => id), "depot"], label: "Morning round · 14 km" }],
+    height: 360,
+  }),
+);
+
+// 160 bike docks round central Paris, from a fixed seed; three are out of service.
+function docks() {
+  let seed = 11;
+  const rand = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+  return Array.from({ length: 160 }, (_, i) => ({
+    lat: Math.round((48.857 + (rand() - 0.5) * 0.09) * 10000) / 10000,
+    lng: Math.round((2.347 + (rand() - 0.5) * 0.16) * 10000) / 10000,
+    label: `Dock ${i + 1}`,
+    tone: i % 53 === 7 ? "danger" : "default",
+  }));
+}
+const bikes = card(
+  "Bike docks: central Paris",
+  "160 docks; close ones group into clusters that show their count and ring the worst status. Zoom in, or press Enter on a cluster.",
+  map({ markers: docks(), height: 380 }),
+);
+
 export const mapTypes: [string, Tree][] = [
   ["World: people online", world],
   ["US states: 2024 margin", election],
   ["Europe: store revenue", bubbles],
   ["Edge locations: status by country", outline],
+  ["Flights: daily departures between hubs", flights],
+  ["Data centres: replication traffic", traffic],
+  ["Weather stations: density", hexbin],
+  ["Iberia and the Maghreb: renewables share", iberia],
+  ["Delivery round: Lisbon, morning", round],
+  ["Bike docks: central Paris", bikes],
 ];

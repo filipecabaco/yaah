@@ -143,9 +143,10 @@ function Sankey({ flow }: { flow: Flow }) {
   const [active, setActive] = useState<{ node?: number; link?: number } | null>(null);
   const tone = new Map(flow.nodes.map((n) => [n.id, n.tone]));
   const label = new Map(flow.nodes.map((n) => [n.id, n.label]));
+  /** A band's fill and edge: a tone when it runs to or from a toned node, else the neutral pair (index.css `--flow-*`). */
   const linkColor = (s: string, t: string) => {
     const k = tone.get(t) !== "default" ? tone.get(t)! : tone.get(s)!;
-    return k === "default" ? "var(--muted-foreground)" : TONE_FILL[k];
+    return k === "default" ? { fill: "var(--muted-foreground)", edge: "var(--flow-edge)" } : { fill: TONE_FILL[k], edge: TONE_FILL[k] };
   };
   const size = useFigureSize(flow);
   const { width, height } = size;
@@ -233,21 +234,26 @@ function Sankey({ flow }: { flow: Flow }) {
             className="block tabular-nums"
             style={{ fontSize: font }}
           >
-            <g fill="none" data-part="links">
+            <g data-part="links">
               {l.links.map((b, j) => {
                 const on =
                   active?.link === j || (active?.node != null && (l.nodes[active.node].id === b.source || l.nodes[active.node].id === b.target));
                 const w = linkWords(j);
+                const c = linkColor(b.source, b.target);
+                // A quiet fill that crossings show through, edged by a 1px hairline at 3:1 on the surface, so
+                // each band's extent reads in every theme without the bands turning into slabs.
                 return (
                   <path
                     key={j}
                     ref={(el) => {
                       linkFocus.refs.current[j] = el;
                     }}
-                    d={b.path}
-                    stroke={linkColor(b.source, b.target)}
-                    strokeOpacity={on ? 0.55 : 0.2}
-                    strokeWidth={b.width}
+                    d={b.area}
+                    fill={c.fill}
+                    style={{ fillOpacity: on ? "var(--flow-band-on)" : "var(--flow-band)" }}
+                    stroke={c.edge}
+                    strokeWidth={1}
+                    data-part="band"
                     tabIndex={-1}
                     role="img"
                     aria-label={`${w.title}, ${w.lines.join(", ")}`}

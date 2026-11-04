@@ -14,7 +14,7 @@ describe("the chart gallery mock", () => {
       expect(await within(log).findByText(title, {}, { timeout: 10_000 })).toBeInTheDocument();
     }
     // One chart per subject, loaded on first use: eight `.ui-chart` wrappers, and a ninth `data-chart-kind`
-    // on the dumbbell's own <svg> (it draws itself; the others are Recharts).
+    // on the dumbbell's own <svg> (it is its own figure; bar, line and area draw inside the wrapper).
     const kinds = () => [...log.querySelectorAll(".ui-chart[data-chart-kind]")].map((c) => c.getAttribute("data-chart-kind"));
     await waitFor(() => expect(kinds()).toEqual(["line", "bar", "area", "dumbbell", "bar", "line", "bar", "area"]), { timeout: 15_000 });
     expect(log.querySelectorAll("[data-chart-kind]")).toHaveLength(9);

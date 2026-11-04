@@ -67,22 +67,55 @@ export function buildGeo(set: RegionSet, topo: Topo): RegionGeo {
   };
 }
 
-const cache = new Map<RegionSet, Promise<RegionGeo>>();
-const loaded = new Map<RegionSet, RegionGeo>();
-/** The region set's geometry, loading its chunk on first use (the same promise after that). */
-export function loadRegion(set: RegionSet): Promise<RegionGeo> {
-  let p = cache.get(set);
+/**
+ * The world at 1:50m (world-atlas countries-50m, same ids), for a world map zoomed to a country
+ * or two, where the 1:110m coast is visibly coarse. Its own chunk (about 200 KB gzip), loaded only
+ * when such a view is drawn. Countries too small for the 110m set stay unaddressed land.
+ */
+const loadDetailTopo = () => import("@/assets/geo/world-50m.topo.json?raw");
+/** A world view this narrow (degrees of longitude and latitude) or narrower draws the 50m coast. */
+export const DETAIL_SPAN: [number, number] = [50, 35];
+export const wantsDetail = (set: RegionSet, bbox: [number, number, number, number] | null) =>
+  set === "world" && !!bbox && bbox[2] - bbox[0] <= DETAIL_SPAN[0] && bbox[3] - bbox[1] <= DETAIL_SPAN[1];
+
+type Key = RegionSet | "world-50m";
+const cache = new Map<Key, Promise<RegionGeo>>();
+const loaded = new Map<Key, RegionGeo>();
+function load(key: Key): Promise<RegionGeo> {
+  let p = cache.get(key);
   if (!p) {
-    p = LOADERS[set]().then((m) => {
+    const set: RegionSet = key === "world-50m" ? "world" : key;
+    p = (key === "world-50m" ? loadDetailTopo() : LOADERS[key]()).then((m) => {
       const geo = buildGeo(set, JSON.parse(m.default) as Topo);
-      loaded.set(set, geo);
+      loaded.set(key, geo);
       return geo;
     });
     // A failed load (a chunk that didn't arrive) can be tried again on the next render.
-    p.catch(() => cache.delete(set));
-    cache.set(set, p);
+    p.catch(() => cache.delete(key));
+    cache.set(key, p);
   }
   return p;
+}
+/** The region set's geometry, loading its chunk on first use (the same promise after that). */
+export const loadRegion = (set: RegionSet): Promise<RegionGeo> => load(set);
+/** The 50m world. */
+export const loadDetail = (): Promise<RegionGeo> => load("world-50m");
+
+/** The 50m world once loaded when `want` (null meanwhile, or when it fails: the 110m one stands in). */
+export function useDetail(want: boolean): RegionGeo | null {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!want || loaded.has("world-50m")) return;
+    let live = true;
+    loadDetail().then(
+      () => live && setTick((t) => t + 1),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [want]);
+  return want ? (loaded.get("world-50m") ?? null) : null;
 }
 
 /** The set's geometry once loaded (at once when it already is), or the load error. */

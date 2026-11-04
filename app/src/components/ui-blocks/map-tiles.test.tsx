@@ -44,4 +44,35 @@ describe("the street map", () => {
     expect(box.style.minHeight).toBe("320px");
     expect(box.style.height).toBe("");
   });
+
+  it("draws routes from coordinates or marker ids, each named for the keyboard", () => {
+    const { container } = render(
+      <UiMap
+        markers={[
+          { id: "a", lat: 38.72, lng: -9.14, label: "Depot" },
+          { id: "b", lat: 38.75, lng: -9.1, label: "Stop 1" },
+        ]}
+        lines={[{ points: ["a", "b", [38.7, -9.2]], label: "Morning round" }, { points: [[38.7, -9.1]] }, { points: ["a", "nope"] }]}
+      />,
+    );
+    // One route (the others have fewer than two places): a casing and the line itself.
+    const named = container.querySelectorAll('path[aria-label="Morning round, 3 stops"]');
+    expect(named).toHaveLength(1);
+    expect(named[0]).toHaveAttribute("tabindex", "0");
+  });
+
+  it("groups 60 close markers into clusters named by their count, and leaves far-off ones out of the fit", () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      lat: 48.85 + (i % 6) * 0.001,
+      lng: 2.35 + Math.floor(i / 6) * 0.001,
+      label: `M${i}`,
+      tone: i === 3 ? "danger" : "default",
+    }));
+    const { container } = render(<UiMap markers={[...many, { lat: -33.9, lng: 151.2, label: "Sydney" }]} cluster />);
+    const clusters = [...container.querySelectorAll("[data-cluster]")];
+    expect(clusters.length).toBeGreaterThan(0);
+    expect(clusters.reduce((n, c) => n + Number(c.getAttribute("data-cluster")), 0)).toBeGreaterThanOrEqual(60);
+    expect(clusters.some((c) => /problem/.test(c.getAttribute("aria-label") ?? ""))).toBe(true);
+    expect(screen.getByRole("button", { name: /1 outside view/ })).toBeInTheDocument();
+  });
 });

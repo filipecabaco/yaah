@@ -62,7 +62,7 @@ A tree is a node: a string (text), or `{ "type", "props"?, "children"? }`. Strin
 
 **Buttons.** A `button` with `prompt` sends that text to you as the user's next message; `draft` puts text in their message box to edit first.
 
-**Expand fills the dialog.** The user can expand any UI (Expand button or F) into a large dialog. `textfile`, `filetree`, `json`, `table`, `gitgraph`, `gitstatus`, `diffstat`, `wordcount` and `diffreview`, and components built on them (`file-view`, `container-logs`, `pr-view`, …), then use all the height with no cap; forms and cards stay at their natural size. When your own tree has one main region that should take the space (a long `list`, `code`, `markdown`, a `stack` of rows), put `"grow": true` on that node (beside `type`, not in `props`); mark only one, and toolbars or headers around it keep their size.
+**Expand fills the dialog.** The user can expand any UI (Expand button or F) into a large dialog. `textfile`, `filetree`, `json`, `table`, `chart`, `map`, `gitgraph`, `gitstatus`, `diffstat`, `wordcount` and `diffreview`, and components built on them (`file-view`, `container-logs`, `pr-view`, …), then use all the height with no cap; forms and cards stay at their natural size. When your own tree has one main region that should take the space (a long `list`, `code`, `markdown`, a `stack` of rows), put `"grow": true` on that node (beside `type`, not in `props`); mark only one, and toolbars or headers around it keep their size.
 
 **Point with `find`.** `table`, `tests`, `filetree`, `json` and `textfile` take `find`: it fills their search box to show where something is (a file in a tree, a line in a file, a JSON key, some rows, a test). Re-render with the same `id` and a new `find` to point elsewhere.
 
@@ -92,6 +92,8 @@ Pick the form from what the reader must do, before anything else:
 | Two values per item: before → after, poll → result, target → actual | `chart` `dumbbell` |
 | A value per country or US state (geography) | `map` `choropleth` |
 | A value at a place: revenue by city, load by data centre (geography) | `map` `bubble` |
+| Links between places: flights between hubs, traffic between regions (geography) | `map` `connection` |
+| Many raw points where density matters: stations, incidents (geography) | `map` `hexbin` |
 | Where something is, or which regions are in a state | `map` `outline`; `markers` (the default) only for streets |
 | Quantities flowing through stages: CI runs, requests, cost by step | `flow` `sankey` |
 | Relationships: who calls whom, what depends on what | `flow` `network` (a layered architecture: `diagram`) |
@@ -116,13 +118,15 @@ Bars and stacks start at 0. Lines and unstacked areas fit their data (with any r
 
 ## Maps
 
-`map` `kind` picks the form. Region kinds draw bundled geometry (`region`: `world`, `europe`, `us-states`), work offline, follow the theme, label small sets on the map and flip to a table; `markers` (the default) is a street map with tiles, for "where on the streets" only.
+`map` `kind` picks the form. Region kinds draw bundled geometry (`region`: `world`, `europe`, `us-states`), work offline, follow the theme, label small sets on the map and flip to a table; `markers` (the default) is a street map with tiles, for "where on the streets" only: `lines: [{ points: [[lat, lng] or a marker id, …], label? }]` draws routes, and from 40 markers close ones group into numbered clusters (`cluster: false` turns that off).
 
-- `choropleth`: `data: [{ id, value, detail? }]`, one row per region (`value: null` is "no data", hatched, never the lowest class). Prefer it when regions are comparable in size. The shared `scale` colours it: `sequential` (default, 5 classes) for magnitude, `diverging` with a `midpoint` for signed values such as margins. Values past `domain` sit in the end classes, labelled "< low" and "> high"; without a `domain`, outliers are fenced off the same way.
-- `bubble`: `points: [{ lon, lat, value, label }]`; area is proportional to value (0 is no bubble), the biggest few are labelled. Prefer it when the value belongs to a place, or when a big empty region would dominate a choropleth. Above about 150 points, aggregate.
+- `choropleth`: `data: [{ id, value, detail? }]`, one row per region (`value: null` is "no data", hatched, never the lowest class). Regions without a row are hatched while most have one, else plain land (a few states of 51); `missing: "hatch"` or `"land"` decides, `noDataLabel` names them. Prefer it when regions are comparable in size. The shared `scale` colours it: `sequential` (default, 5 classes) for magnitude, `diverging` with a `midpoint` for signed values such as margins. Values past `domain` sit in the end classes, labelled "< low" and "> high"; without a `domain`, outliers are fenced off the same way.
+- `bubble`: `points: [{ lon, lat, value, label }]`; area is proportional to value (0 is no bubble), the biggest are labelled where they fit. Prefer it when the value belongs to a place, or when a big empty region would dominate a choropleth. Above about 150 points, use `hexbin`.
+- `connection`: `hubs: [{ id, label, lon, lat }]` and `links: [{ from, to, value? }]` between hub ids (at most 100 hubs, 200 links); each link is a great-circle arc as wide as its value, `directed: true` adds arrowheads. One row per pair: sum repeats first.
+- `hexbin`: `points: [{ lon, lat, weight? }]`, up to 5,000 raw points, binned into hexagons (`radius` 8 to 40 px) coloured by count, or `aggregate: "sum"` / `"mean"` of `weight`. Send the raw points, not bins.
 - `outline`: `highlight: [{ id, tone?, detail? }]` and `points: [{ lon, lat, label, tone? }]`; `tone` is said in words too.
 
-Ids are what you'd write: ISO alpha-3 (`"PRT"`), alpha-2 (`"PT"`) or an English name for countries; postal code (`"PA"`), FIPS or name for states. An unknown id is refused with the nearest names. `view: [west, south, east, north]` overrides the fit; by default bubbles fit most places and show "N outside view" for the far-off ones. No URLs, no colours, no formatters.
+Ids are what you'd write: ISO alpha-3 (`"PRT"`), alpha-2 (`"PT"`) or an English name for countries; postal code (`"PA"`), FIPS or name for states. An unknown id is refused with the nearest names. `view: [west, south, east, north]` overrides the fit; by default bubble, connection and hexbin maps fit most places and show "N outside view" for the far-off ones, and a world map zoomed to a country draws the detailed coast. No URLs, no colours, no formatters.
 
 ```json
 { "type": "map", "props": {
@@ -136,6 +140,13 @@ Ids are what you'd write: ISO alpha-3 (`"PRT"`), alpha-2 (`"PT"`) or an English 
 { "type": "map", "props": {
   "kind": "bubble", "region": "europe", "title": "Store revenue by city", "unit": "M EUR",
   "points": [{ "lon": -9.14, "lat": 38.72, "label": "Lisbon", "value": 4.2 }, { "lon": 2.35, "lat": 48.86, "label": "Paris", "value": 7.9 }, { "lon": 13.4, "lat": 52.52, "label": "Berlin", "value": 3.1 }] } }
+```
+
+```json
+{ "type": "map", "props": {
+  "kind": "connection", "region": "world", "title": "Daily flights from Lisbon", "unit": " flights", "directed": true,
+  "hubs": [{ "id": "LIS", "label": "Lisbon", "lon": -9.14, "lat": 38.77 }, { "id": "GRU", "label": "Sao Paulo", "lon": -46.47, "lat": -23.43 }, { "id": "JFK", "label": "New York", "lon": -73.78, "lat": 40.64 }],
+  "links": [{ "from": "LIS", "to": "GRU", "value": 6 }, { "from": "LIS", "to": "JFK", "value": 9 }] } }
 ```
 
 ## Flow graphs

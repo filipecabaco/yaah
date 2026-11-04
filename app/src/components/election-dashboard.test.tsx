@@ -33,7 +33,10 @@ describe("the election dashboard mock", () => {
     const map = await within(log).findByRole("region", { name: "Map, Result margin in the 14 states" }, { timeout: 10_000 });
     expect(map.querySelector('path[data-region="LA"]')).toHaveAttribute("fill", "var(--scale-div-pos-3)");
     expect(map.querySelector('path[data-region="MN"]')).toHaveAttribute("fill", "var(--scale-div-neg-1)");
-    expect(map.querySelector('path[data-region="CA"]')!.getAttribute("fill")).toMatch(/hatch/);
+    // 37 of 51 states have no row: not hatched but outlined on the surface (a gray fill would pass for the
+    // diverging scale's middle class), said in the legend.
+    expect(map.querySelector('path[data-region="CA"]')).toHaveAttribute("fill", "var(--chart-surface)");
+    expect(map.querySelector('path[data-region="CA"]')).toHaveAttribute("data-fill", "outline");
     expect(within(log).getByRole("img", { name: "Louisiana, 22 pts, class 7 of 7 (17 pts to 24 pts), R +22.0" })).toBeInTheDocument();
     expect(within(log).getByText("Not in this set")).toBeInTheDocument();
     expect(log.querySelector(".leaflet-container")).toBeNull();

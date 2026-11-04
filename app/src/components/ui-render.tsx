@@ -27,12 +27,12 @@ import { asArray, asNumber, asObj, isObj, optText, show, type Obj } from "@/lib/
 import { cn } from "@/lib/utils";
 import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
 
-// Library-backed blocks load on first use, so a chat without a chart never downloads Recharts.
+// Library-backed blocks load on first use, so a chat without a chart never downloads its code.
 // Once a chat shows agent UI, the rest are fetched while the app is idle (preloadUiBlocks), and a
 // block whose code is in draws at once instead of flashing a placeholder.
 const UiChart = preloadable(() => import("@/components/ui-blocks/chart").then((m) => m.default));
 const UiMap = preloadable(() => import("@/components/ui-blocks/map").then((m) => m.default));
-// Region maps (outline, choropleth, bubble) and flow graphs are SVG over d3 modules: no Leaflet, no tiles.
+// Region maps (outline, choropleth, bubble, connection, hexbin) and flow graphs are SVG over d3 modules: no Leaflet, no tiles.
 const UiGeoMap = preloadable(() => import("@/components/ui-blocks/map/geo-map").then((m) => m.default));
 const UiFlow = preloadable(() => import("@/components/ui-blocks/flow/flow").then((m) => m.default));
 const UiDataTable = preloadable(() => import("@/components/ui-blocks/data-table").then((m) => m.default));
@@ -361,17 +361,19 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
             labels={p.labels}
             sort={p.sort}
             scale={p.scale}
+            zero={p.zero}
+            domain={p.domain}
           />
         </Lazy>
       );
     case "map":
-      return p.kind === "outline" || p.kind === "choropleth" || p.kind === "bubble" ? (
+      return p.kind === "outline" || p.kind === "choropleth" || p.kind === "bubble" || p.kind === "connection" || p.kind === "hexbin" ? (
         <Lazy height={positive(p.height) ?? 360}>
           <UiGeoMap props={p} />
         </Lazy>
       ) : (
         <Lazy height={positive(p.height) ?? 320}>
-          <UiMap markers={p.markers} center={p.center} zoom={p.zoom} height={positive(p.height)} />
+          <UiMap markers={p.markers} center={p.center} zoom={p.zoom} height={positive(p.height)} lines={p.lines} cluster={p.cluster} />
         </Lazy>
       );
     case "flow":

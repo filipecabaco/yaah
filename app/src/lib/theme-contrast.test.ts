@@ -196,4 +196,71 @@ describe("map tokens", () => {
     ).toEqual([]);
     expect(THEMES.filter((t) => contrast(map(t).land, map(t).water) >= contrast(map(t).stroke, map(t).water)).map((t) => t.id)).toEqual([]);
   });
+
+  // Sankey bands (index.css `.ui-flow [data-part="links"]`): a neutral band is the muted text at
+  // `--flow-band` opacity over the surface, edged by `--flow-edge`; on the page and in a card.
+  describe("flow bands", () => {
+    const rule = (isDark: boolean) => ({
+      ...declarations(css, '.ui-flow [data-part="links"]'),
+      ...(isDark ? declarations(css, '.dark .ui-flow [data-part="links"]') : {}),
+    });
+    const bands = (t: Theme, on: "background" | "card") => {
+      const surface = surfaces(t)[on];
+      const r = rule(t.dark);
+      const m = /color-mix\(in oklab, var\(--muted-foreground\) (\d+(?:\.\d+)?)%, var\(--chart-surface\)\)/.exec(r["flow-edge"] ?? "");
+      if (!m) throw new Error(`--flow-edge isn't a muted-text/surface mix: ${r["flow-edge"]}`);
+      const muted = over(t.token("muted-foreground"), surface);
+      return {
+        surface,
+        edge: mixed(muted, surface, Number(m[1]) / 100),
+        fill: over(muted, surface, Number(r["flow-band"])),
+        active: over(muted, surface, Number(r["flow-band-on"])),
+        text: over(t.token("foreground"), surface),
+      };
+    };
+    const worstOf = (f: (b: ReturnType<typeof bands>) => number) => (t: Theme) =>
+      (["background", "card"] as const).map((on) => ({ ratio: f(bands(t, on)), on })).reduce((a, b) => (b.ratio < a.ratio ? b : a));
+
+    it("edges every neutral band at least 3:1 on the page and in a card", () => {
+      expect(
+        failures(
+          worstOf((b) => contrast(b.edge, b.surface)),
+          3,
+        ),
+      ).toEqual([]);
+    });
+
+    it("fills a band a visible step off the surface, quieter than its edges, and stronger when active", () => {
+      const step = (a: Rgb, b: Rgb) => Math.abs(toLab(a)[0] - toLab(b)[0]);
+      expect(
+        failures(
+          worstOf((b) => step(b.fill, b.surface)),
+          0.05,
+        ),
+      ).toEqual([]);
+      expect(
+        failures(
+          worstOf((b) => step(b.active, b.fill)),
+          0.05,
+        ),
+      ).toEqual([]);
+      expect(
+        failures(
+          worstOf((b) => contrast(b.edge, b.surface) - contrast(b.fill, b.surface)),
+          0.5,
+        ),
+      ).toEqual([]);
+    });
+
+    // Labels carry a halo in the surface colour (flow.tsx), so their 4.5:1 is TH-1's; the band behind
+    // the halo still leaves the text at 3:1.
+    it("leaves node labels at least 3:1 on a band, behind their halo", () => {
+      expect(
+        failures(
+          worstOf((b) => contrast(b.text, b.fill)),
+          3,
+        ),
+      ).toEqual([]);
+    });
+  });
 });

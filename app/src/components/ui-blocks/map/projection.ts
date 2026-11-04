@@ -5,13 +5,11 @@
 // 8px padding at the measured pixel size: text and strokes keep their size, nothing scales a viewBox.
 import { geoAlbersUsa, geoAzimuthalEqualArea, geoIdentity, geoNaturalEarth1, geoPath, type GeoPath, type GeoProjection } from "d3-geo";
 import type { GeoJSON, MultiPoint } from "geojson";
-import { quantile } from "@/components/ui-blocks/scale";
 import type { RegionGeo, RegionSet } from "@/components/ui-blocks/map/geo";
+import type { Bbox } from "@/components/ui-blocks/map/view-fit";
+export type { Bbox, LonLat } from "@/components/ui-blocks/map/view-fit";
 
 export const FIT_PAD = 8;
-/** [west, south, east, north] in degrees. */
-export type Bbox = [number, number, number, number];
-export type LonLat = { lon: number; lat: number };
 
 /** The part of each set a map shows by default. Europe: Iceland and Portugal to the Urals' near side. */
 export const FRAME: Record<Exclude<RegionSet, "us-states">, Bbox | "sphere"> = { world: "sphere", europe: [-11, 34.5, 35, 71] };
@@ -21,6 +19,8 @@ export type Projector = {
   path: GeoPath;
   /** A place in pixels, or null when the projection can't show it (Albers USA outside the US). */
   point: (lon: number, lat: number) => [number, number] | null;
+  /** A pixel back to a place, or null off the map. */
+  invert: (x: number, y: number) => [number, number] | null;
 };
 
 /** Points around a box's edge, so a fit on a sphere follows the curved sides. */
@@ -73,6 +73,10 @@ export function fitProjection(geo: Pick<RegionGeo, "set" | "regions">, target: F
         const p = albers([lon, lat]);
         return p ? identity(p) : null;
       },
+      invert: (x, y) => {
+        const p = identity.invert?.([x, y]);
+        return (p && albers.invert?.(p)) ?? null;
+      },
     };
   }
   const projection = base(geo.set);
@@ -80,49 +84,42 @@ export function fitProjection(geo: Pick<RegionGeo, "set" | "regions">, target: F
   const shape: GeoJSON | { type: "Sphere" } =
     target.kind === "bbox" ? bboxShape(target.bbox) : frame === "sphere" ? { type: "Sphere" } : bboxShape(frame);
   projection.fitExtent(extent, shape);
-  return { path: geoPath(projection), point: (lon, lat) => projection([lon, lat]) ?? null };
+  return {
+    path: geoPath(projection),
+    point: (lon, lat) => projection([lon, lat]) ?? null,
+    invert: (x, y) => projection.invert?.([x, y]) ?? null,
+  };
 }
 
-/** From this many points the view drops the outer 2% on each side (the Madeira and Azores problem). */
-export const PERCENTILE_MIN = 20;
-
-/**
- * The view for a set of places: their box, from 20 points up leaving out the far-off ones (the
- * Madeira and Azores problem). A place is left out when it lies outside the 2nd–98th percentile
- * of longitude or latitude and, on that same axis, past Tukey's fence (1.5 IQR beyond the
- * quartiles): the percentile alone would also drop the northernmost of an ordinary spread. The box
- * is padded by `margin` of its size and widened to at least `minSpan` degrees (one city is a city,
- * not a doorstep). `outside` lists the places left out, for the "N outside view" chip and the table.
- */
-export function percentileView(
-  points: LonLat[],
-  { margin = 0.08, minSpan = 3 }: { margin?: number; minSpan?: number } = {},
-): { bbox: Bbox; outside: number[] } | null {
-  if (!points.length) return null;
-  const far = (values: number[]) => {
-    const sorted = [...values].sort((a, b) => a - b);
-    const [p2, p98, q1, q3] = [0.02, 0.98, 0.25, 0.75].map((q) => quantile(sorted, q));
-    const fence = 1.5 * (q3 - q1);
-    return (v: number) => (v < p2 - 1e-9 && v < q1 - fence) || (v > p98 + 1e-9 && v > q3 + fence);
-  };
-  const cut = points.length >= PERCENTILE_MIN;
-  const farLon = far(points.map((p) => p.lon));
-  const farLat = far(points.map((p) => p.lat));
-  const out = (p: LonLat) => cut && (farLon(p.lon) || farLat(p.lat));
-  const outside = points.flatMap((p, i) => (out(p) ? [i] : []));
-  const kept = points.filter((p) => !out(p));
-  let [w, e] = [Math.min(...kept.map((p) => p.lon)), Math.max(...kept.map((p) => p.lon))];
-  let [s, n] = [Math.min(...kept.map((p) => p.lat)), Math.max(...kept.map((p) => p.lat))];
-  const grow = (lo: number, hi: number, min: number, max: number): [number, number] => {
-    const mid = (lo + hi) / 2;
-    const half = Math.max(minSpan / 2, ((hi - lo) / 2) * (1 + 2 * margin));
-    return [Math.max(min, mid - half), Math.min(max, mid + half)];
-  };
-  [w, e] = grow(w, e, -180, 180);
-  [s, n] = grow(s, n, -85, 85);
-  return { bbox: [w, s, e, n], outside };
-}
+export { PERCENTILE_MIN, percentileView } from "@/components/ui-blocks/map/view-fit";
 
 /** Whether a projected point lies inside the drawn box. */
 export const inBox = (p: [number, number] | null, width: number, height: number): p is [number, number] =>
   !!p && p[0] >= 0 && p[0] <= width && p[1] >= 0 && p[1] <= height;
+
+export type Ring = [number, number][];
+
+/**
+ * The pixel rings `path` draws for a geometry (after projection, clipping and resampling), so a
+ * label can be tested against the shape it sits in.
+ */
+export function projectedRings(path: GeoPath, object: Parameters<GeoPath>[0]): Ring[] {
+  const rings: Ring[] = [];
+  let ring: Ring = [];
+  const end = () => {
+    if (ring.length > 2) rings.push(ring);
+    ring = [];
+  };
+  geoPath(path.projection(), {
+    moveTo: (x: number, y: number) => {
+      end();
+      ring.push([x, y]);
+    },
+    lineTo: (x: number, y: number) => void ring.push([x, y]),
+    closePath: end,
+    beginPath: () => {},
+    arc: () => {},
+  })(object);
+  end();
+  return rings;
+}

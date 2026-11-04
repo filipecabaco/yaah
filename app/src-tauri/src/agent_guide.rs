@@ -631,8 +631,8 @@ mod tests {
         let ui = blocks(skill_text(skill("ui").unwrap(), &[]).as_str());
         assert_eq!(
             ui.len(),
-            11,
-            "three patterns, the pasted diff beside diff-review, diff-review with `repo`, the dumbbell, two maps and two flow graphs"
+            12,
+            "three patterns, the pasted diff beside diff-review, diff-review with `repo`, the dumbbell, three maps and two flow graphs"
         );
         for tree in ui {
             lib.prepare(None, json!({}), Some(tree.clone())).unwrap_or_else(|e| panic!("{tree}: {e:?}"));

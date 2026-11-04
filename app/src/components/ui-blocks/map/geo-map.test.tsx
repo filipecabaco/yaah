@@ -42,7 +42,7 @@ const margins = {
 
 describe("choropleth", () => {
   it("colours each region by its bin and hatches the ones without data", async () => {
-    const { container } = await draw(margins);
+    const { container } = await draw({ ...margins, missing: "hatch" });
     const fill = (id: string) => container.querySelector(`path[data-region="${id}"]`)!.getAttribute("fill");
     expect(container.querySelectorAll("path[data-region]")).toHaveLength(51);
     expect(fill("PA")).toBe("var(--scale-div-mid)");
@@ -51,6 +51,23 @@ describe("choropleth", () => {
     expect(fill("VT")).toMatch(/^url\(#.+-hatch\)$/); // null: no data
     expect(fill("TX")).toMatch(/^url\(#.+-hatch\)$/); // no row: no data
     expect(container.querySelector("pattern line")).toHaveAttribute("stroke", "var(--map-hatch)");
+  });
+
+  it("draws regions without a row as plain land when most of the set has none, nulls still hatched", async () => {
+    const { container } = await draw(margins);
+    const at = (id: string) => container.querySelector(`path[data-region="${id}"]`)!;
+    // A diverging scale with a gray middle class: plain land is an outline, so the two can't be confused.
+    expect(at("TX")).toHaveAttribute("fill", "var(--chart-surface)");
+    expect(at("TX")).toHaveAttribute("data-fill", "outline");
+    expect(container.querySelectorAll("[data-part=outside] path")).toHaveLength(46);
+    // A sequential scale has no gray class: land keeps its fill.
+    const seq = await draw({ ...margins, scale: { type: "sequential", bins: 5 } });
+    expect(seq.container.querySelector('path[data-region="TX"]')).toHaveAttribute("fill", "var(--map-land)");
+    seq.unmount();
+    expect(at("VT").getAttribute("fill")).toMatch(/hatch/);
+    const legend = screen.getByRole("group", { name: "Colour scale" });
+    expect(within(legend).getByText("Not in the data")).toBeInTheDocument();
+    expect(within(legend).getByText("No data")).toBeInTheDocument();
   });
 
   it("names every region with a row, and the legend says the bins, the open end and no data", async () => {
@@ -184,12 +201,133 @@ describe("outline", () => {
   });
 });
 
+const flights = {
+  kind: "connection",
+  region: "world",
+  title: "Daily flights",
+  unit: " flights",
+  hubs: [
+    { id: "LIS", label: "Lisbon", lon: -9.14, lat: 38.77 },
+    { id: "GRU", label: "Sao Paulo", lon: -46.47, lat: -23.43 },
+    { id: "JFK", label: "New York", lon: -73.78, lat: 40.64 },
+  ],
+  links: [
+    { from: "LIS", to: "GRU", value: 6 },
+    { from: "LIS", to: "JFK", value: 9, label: "TP 209" },
+    { from: "JFK", to: "GRU", value: 3 },
+  ],
+  directed: true,
+};
+
+// A tight cluster round Paris and a few points further off.
+const stations = {
+  kind: "hexbin",
+  region: "europe",
+  title: "Weather stations",
+  unit: " stations",
+  radius: 16,
+  view: [-12, 35, 30, 60],
+  points: [
+    ...Array.from({ length: 30 }, (_, i) => ({ lon: 2.3 + (i % 5) * 0.05, lat: 48.8 + Math.floor(i / 5) * 0.05 })),
+    { lon: -9.1, lat: 38.7 },
+    { lon: 13.4, lat: 52.5 },
+    { lon: 21.0, lat: 52.2 },
+  ],
+};
+
+describe("connection", () => {
+  it("draws each link as a great circle, as wide as its value, thickest first, with arrowheads", async () => {
+    const { container } = await draw(flights);
+    const lines = [...container.querySelectorAll("[data-mark=link]")];
+    expect(lines).toHaveLength(3);
+    const widths = lines.map((l) => Number(l.getAttribute("data-width")));
+    expect(widths).toEqual([...widths].sort((a, b) => b - a));
+    expect(widths[0]).toBe(8);
+    expect(container.querySelectorAll("[data-mark=arrow]")).toHaveLength(3);
+    // A great circle is a curve: many points, not one straight segment.
+    expect(lines[0].getAttribute("d")!.split("L").length).toBeGreaterThan(20);
+    expect(container.querySelectorAll("[data-mark=hub]")).toHaveLength(3);
+  });
+
+  it("names hubs and links, labels the hubs and the link that has a label, and keys the widths", async () => {
+    const { container } = await draw(flights);
+    expect(screen.getByRole("img", { name: "Lisbon to New York, 9 flights, TP 209" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Lisbon, 15 flights in all, 2 links" })).toBeInTheDocument();
+    const labels = [...container.querySelectorAll("[data-part=label]")].map((t) => t.textContent);
+    expect(labels).toEqual(expect.arrayContaining(["Lisbon", "Sao Paulo", "New York", "TP 209"]));
+    const legend = screen.getByRole("group", { name: "Line width scale" });
+    expect(legend).toHaveTextContent("Arrows point from origin to destination");
+    expect(legend.querySelectorAll("line")).toHaveLength(3);
+  });
+
+  it("flips to a table of links, busiest first", async () => {
+    const user = userEvent.setup();
+    await draw(flights);
+    await user.click(screen.getByRole("button", { name: "table" }));
+    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+    expect(rows.map((r) => [...r.querySelectorAll("td")].slice(0, 3).map((td) => td.textContent))).toEqual([
+      ["Lisbon", "New York", "9 flights"],
+      ["Lisbon", "Sao Paulo", "6 flights"],
+      ["New York", "Sao Paulo", "3 flights"],
+    ]);
+  });
+});
+
+describe("hexbin", () => {
+  it("bins points into hexagons coloured by count, says how many, and lists the fullest cells", async () => {
+    const user = userEvent.setup();
+    const { container } = await draw(stations);
+    const cells = [...container.querySelectorAll("[data-mark=cell]")];
+    expect(cells.length).toBeGreaterThanOrEqual(4);
+    const values = cells.map((c) => Number(c.getAttribute("data-value")));
+    expect(values.reduce((a, b) => a + b, 0)).toBe(33);
+    expect(cells.every((c) => /^var\(--scale-seq-\d+\)$/.test(c.getAttribute("fill")!))).toBe(true);
+    expect(screen.getAllByRole("img", { name: /^Cell at \d+\.\d° N, \d+\.\d° [EW], \d+ stations, class \d of 4/ }).length).toBe(cells.length);
+    expect(screen.getByRole("group", { name: "Colour scale" })).toHaveTextContent(`33 points in ${cells.length} cells, each 32 px across`);
+    await user.click(screen.getByRole("button", { name: "table" }));
+    const rows = within(screen.getByRole("table")).getAllByRole("row").slice(1);
+    expect(rows).toHaveLength(cells.length);
+    expect(rows[0].querySelectorAll("td")[1].textContent).toBe(`${Math.max(...values)} stations`);
+  });
+});
+
+describe("bubble crowds", () => {
+  it("rings every bubble in the surface colour and labels up to 10 of a crowd, none overlapping", async () => {
+    const crowd = Array.from({ length: 30 }, (_, i) => ({
+      lon: 2 + (i % 6) * 0.6,
+      lat: 48 + Math.floor(i / 6) * 0.6,
+      label: `Store ${i}`,
+      value: 1 + i,
+    }));
+    const { container } = await draw({ kind: "bubble", region: "europe", points: crowd, view: [-10, 35, 30, 60] });
+    const bubbles = [...container.querySelectorAll("[data-mark=bubble]")];
+    expect(bubbles.every((b) => b.getAttribute("stroke") === "var(--chart-surface)" && b.getAttribute("stroke-width") === "2")).toBe(true);
+    const labels = [...container.querySelectorAll("[data-part=label]")];
+    expect(labels.length).toBeGreaterThan(0);
+    expect(labels.length).toBeLessThanOrEqual(10);
+    // The biggest is labelled first.
+    expect(labels.map((l) => l.textContent)).toContain("Store 29");
+  });
+});
+
+describe("the 50m world", () => {
+  it("draws a zoomed world view from the detailed coast once it loads", async () => {
+    const { container } = await draw({ kind: "outline", region: "world", view: [-10, 36, 4, 44], highlight: [{ id: "PT" }] });
+    await waitFor(() => expect(container.querySelector('[data-detail="50m"]')).not.toBeNull());
+    expect(container.querySelector('path[data-region="PRT"]')).not.toBeNull();
+    const whole = await draw({ kind: "outline", region: "world", highlight: [{ id: "PT" }] });
+    expect(whole.container.querySelector("[data-detail]")).toBeNull();
+  });
+});
+
 describe("theme", () => {
   it("takes every colour from a theme token: no hex, rgb or named colour anywhere in the map", async () => {
     for (const props of [
       margins,
       { kind: "bubble", region: "world", points: [{ lon: 0, lat: 0, label: "a", value: 1 }] },
       { kind: "outline", highlight: [{ id: "BR", tone: "danger" }] },
+      flights,
+      stations,
     ]) {
       const { container, unmount } = await draw(props);
       const colours = [...container.querySelectorAll("svg *")].flatMap((el) =>

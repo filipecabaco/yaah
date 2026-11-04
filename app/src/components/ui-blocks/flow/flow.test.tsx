@@ -194,6 +194,25 @@ describe("sankey drawn", () => {
     expect(rows[4]).toHaveTextContent("LintFailed8 jobs");
   });
 
+  it("draws each band as a quiet fill with 1px edges, in theme tokens, stronger when active", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<UiFlow props={ci} />);
+    const neutral = container.querySelector<SVGPathElement>('[data-link="push>lint"]')!;
+    // A filled outline (two edges joined at the nodes), not a fat stroke: its edges are what holds 3:1.
+    expect(neutral).toHaveAttribute("data-part", "band");
+    expect(neutral.getAttribute("d")).toMatch(/Z$/);
+    expect(neutral).toHaveAttribute("fill", "var(--muted-foreground)");
+    expect(neutral).toHaveAttribute("stroke", "var(--flow-edge)");
+    expect(neutral).toHaveAttribute("stroke-width", "1");
+    expect(neutral.style.fillOpacity).toBe("var(--flow-band)");
+    // A toned band keeps its tone on both fill and edge.
+    expect(container.querySelector('[data-link="lint>fail"]')).toHaveAttribute("fill", "var(--destructive)");
+    await user.hover(neutral);
+    expect(neutral.style.fillOpacity).toBe("var(--flow-band-on)");
+    // Labels sit on bands behind a halo in the surface colour.
+    for (const l of container.querySelectorAll("[data-part=label]")) expect(l).toHaveAttribute("stroke", "var(--chart-surface)");
+  });
+
   it("moves focus node to node with arrows, along a node's links with Enter, and back with Escape", async () => {
     const user = userEvent.setup();
     render(<UiFlow props={ci} />);

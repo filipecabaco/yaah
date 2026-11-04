@@ -1206,9 +1206,9 @@ mod tests {
             ]}),
         )
         .unwrap();
-        // A chart is Recharts plus d3-scale (the dumbbell's axis and colour scales).
-        assert_eq!(dash.uses, vec!["d3-scale", "react-markdown", "recharts", "remark-gfm"]);
-        assert!(lib.catalog().unwrap()["components"].as_array().unwrap().iter().any(|c| c["uses"] == json!(["d3-scale", "recharts"])));
+        // A chart is React SVG over d3-scale (axes, colour scales) and d3-shape (line and area paths).
+        assert_eq!(dash.uses, vec!["d3-scale", "d3-shape", "react-markdown", "remark-gfm"]);
+        assert!(lib.catalog().unwrap()["components"].as_array().unwrap().iter().any(|c| c["uses"] == json!(["d3-scale", "d3-shape"])));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1277,9 +1277,9 @@ mod tests {
         let started = std::time::Instant::now();
         let catalog = lib.catalog().unwrap();
         let top = catalog["components"].as_array().unwrap().iter().find(|c| c["name"] == "lvl-6").unwrap();
-        assert_eq!(top["uses"], json!(["d3-scale", "recharts"]), "libraries still come through every level");
+        assert_eq!(top["uses"], json!(["d3-scale", "d3-shape"]), "libraries still come through every level");
         assert_eq!(lib.list().unwrap().len(), 7);
-        assert_eq!(lib.get("lvl-6").unwrap().unwrap().uses, ["d3-scale", "recharts"]);
+        assert_eq!(lib.get("lvl-6").unwrap().unwrap().uses, ["d3-scale", "d3-shape"]);
         let errs = lib.prepare(Some("lvl-6"), json!({}), None).unwrap_err();
         assert_eq!(errs.len(), 1, "said once: {errs:?}");
         assert!(errs[0].contains("more than 3000 nodes"), "{errs:?}");

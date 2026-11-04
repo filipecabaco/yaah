@@ -4,7 +4,7 @@ import { scaleLinear } from "d3-scale";
 import { asArray, asNumber, isObj, optText, show } from "@/lib/narrow";
 
 export type Kind = "bar" | "line" | "area" | "dumbbell";
-/** `key` is our own slot name; the agent's field names never reach CSS (shadcn writes config keys into a <style>). */
+/** `key` is our own slot name; the agent's field names are only ever shown as text, never used as a key, class or id. */
 export type Series = { key: string; label: string };
 export type Point = Record<string, string | number | null>;
 /** `axis: "y"` is a value (a target, zero), `"x"` a category or x value, whichever way the chart lies. */
@@ -37,7 +37,7 @@ export function namedSeries(rawSeries: unknown): { field: string; label: string 
  * The agent's rows and series, rekeyed onto fixed names: `x` for the category
  * and `series-N` per series, values as numbers (null leaves a gap). Field
  * names can then hold anything (dots, spaces, braces) without reaching
- * Recharts' path lookup or the chart's CSS variables.
+ * a path lookup, CSS or an id.
  */
 export function normalise(rawData: unknown, rawSeries: unknown, x: string): { data: Point[]; series: Series[] } {
   const named = namedSeries(rawSeries);
@@ -135,8 +135,8 @@ export function readLabels(raw: unknown, kind: Kind): Labels {
 
 /**
  * Which way it lies. Asked for, it is honoured for bar and dumbbell; otherwise a dumbbell lies on its
- * side, and bars do when a category name is too long to sit under a column (Recharts would drop the
- * ones that collide, and every bar must be labelled). Lines and areas always run left to right.
+ * side, and bars do when a category name is too long to sit under a column (names under columns would
+ * collide, and every bar must be labelled). Lines and areas always run left to right.
  */
 export function readOrientation(raw: unknown, kind: Kind, data: Point[]): Orientation {
   if (kind === "line" || kind === "area") return "vertical";

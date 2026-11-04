@@ -283,7 +283,7 @@
 .dark .ui-chart {
   --chart-band-opacity: 0.55;
 }
-.ui-chart .ui-band .recharts-area-area {
+.ui-chart .ui-band [data-part="area"] {
   fill-opacity: var(--chart-band-opacity);
 }
 [data-slot="card"] .ui-chart {
@@ -310,6 +310,19 @@
 .dark .ui-map,
 .dark .ui-flow {
   --map-land: color-mix(in oklab, var(--foreground) 14%, var(--chart-surface));
+}
+/* Sankey bands (ui-blocks/flow/flow.tsx): a neutral band is a quiet fill of the muted text that
+   crossings show through, edged by a 1px hairline mixed like the map's borders (3:1 on the surface),
+   so its extent reads in every theme without wide bands becoming slabs; labels on a band keep 4.5:1
+   (theme-contrast.test.ts, "flow bands"). Near black a fill needs more of the text to be seen. */
+.ui-flow [data-part="links"] {
+  --flow-edge: color-mix(in oklab, var(--muted-foreground) 90%, var(--chart-surface));
+  --flow-band: 0.18;
+  --flow-band-on: 0.4;
+}
+.dark .ui-flow [data-part="links"] {
+  --flow-band: 0.24;
+  --flow-band-on: 0.48;
 }
 /* The no-data swatch in a legend, as the map's hatch pattern draws it. */
 .ui-hatch {

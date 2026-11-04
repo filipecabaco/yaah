@@ -245,8 +245,8 @@
     "chart": {
       "description": "A bar, line, area or dumbbell chart over one x field and up to 5 series on a single y axis (never two y scales; put measures of different scale in separate charts). bar compares amounts, line shows a trend, area a trend of parts (stacked), dumbbell two values per category (before → after, poll → result) as two dots joined by a line. Always shows a legend for 2+ series and lets the user flip to a table of the data. More than 5 series: keep the biggest and fold the rest into an \"Other\" series. Colours come from the theme and are checked for colour-blind safety; you can't set them. At most 2,000 rows.",
       "uses": [
-        "recharts",
-        "d3-scale"
+        "d3-scale",
+        "d3-shape"
       ],
       "children": false,
       "props": {
@@ -346,13 +346,14 @@
       }
     },
     "map": {
-      "description": "A map. `kind` picks the form: \"markers\" (the default) is a street map (OpenStreetMap tiles) with labelled markers, for \"where on the streets\"; \"choropleth\" colours regions by one value each (a value per country or state); \"bubble\" sizes a circle at each place by its value (a value at a point: revenue by city); \"outline\" is a plain map with highlighted regions and marked places. The region kinds draw bundled geometry (`region`: world, europe, us-states), work offline, follow the theme, label small sets directly, and flip to a table. Region ids are what you'd write: ISO alpha-3 (\"PRT\"), alpha-2 (\"PT\") or an English name for countries; postal code (\"PA\"), FIPS or name for US states. An unknown id is refused with the nearest names. Colours come from the theme; you can't set them.",
+      "description": "A map. `kind` picks the form: \"markers\" (the default) is a street map (OpenStreetMap tiles) with labelled markers, for \"where on the streets\"; \"choropleth\" colours regions by one value each (a value per country or state); \"bubble\" sizes a circle at each place by its value (a value at a point: revenue by city); \"outline\" is a plain map with highlighted regions and marked places; \"connection\" draws links between places as great-circle arcs, as wide as their value (flights between hubs, traffic between data centres); \"hexbin\" bins many raw points into hexagons coloured by how many fall in each (or the sum or mean of a weight). The region kinds draw bundled geometry (`region`: world, europe, us-states), work offline, follow the theme, label small sets directly, and flip to a table. Region ids are what you'd write: ISO alpha-3 (\"PRT\"), alpha-2 (\"PT\") or an English name for countries; postal code (\"PA\"), FIPS or name for US states. An unknown id is refused with the nearest names. Colours come from the theme; you can't set them.",
       "uses": [
         "leaflet",
         "react-leaflet",
         "d3-geo",
         "topojson-client",
-        "d3-scale"
+        "d3-scale",
+        "d3-hexbin"
       ],
       "children": false,
       "props": {
@@ -362,13 +363,15 @@
             "markers",
             "outline",
             "choropleth",
-            "bubble"
+            "bubble",
+            "connection",
+            "hexbin"
           ],
           "description": "Default \"markers\"."
         },
         "markers": {
           "type": "array",
-          "description": "markers only, required there: [{ lat, lng, label, detail?, tone?: 'default'|'success'|'warning'|'danger' }], at most 2,000."
+          "description": "markers only, required there: [{ id?, lat, lng, label, detail?, tone?: 'default'|'success'|'warning'|'danger' }], at most 2,000. `id` lets a route in `lines` name the marker."
         },
         "center": {
           "type": "array",
@@ -377,6 +380,55 @@
         "zoom": {
           "type": "number",
           "description": "markers only."
+        },
+        "lines": {
+          "type": "array",
+          "description": "markers only: routes, [{ points, label?, detail?, tone? }], at most 50; `points` is 2 to 1,000 places in order, each [lat, lng] or a marker's `id`. Drawn as lines on the street map, named for the keyboard."
+        },
+        "cluster": {
+          "type": "any",
+          "description": "markers only: \"auto\" (default: close markers group into a numbered cluster from 40 markers, ringed in the worst status), true, or false. Enter or a click on a cluster zooms in."
+        },
+        "hubs": {
+          "type": "array",
+          "description": "connection, required: [{ id, label, lon, lat, detail? }], at most 100; ids unique (text up to 40 characters, or a whole number)."
+        },
+        "links": {
+          "type": "array",
+          "description": "connection, required: [{ from, to, value?, label?, detail? }] between hub ids, at most 200; no self-links, one row per pair (per direction when `directed`). `value` (0 or more) sets the width."
+        },
+        "directed": {
+          "type": "boolean",
+          "description": "connection: arrowheads from `from` to `to`. Default false."
+        },
+        "width": {
+          "type": "string",
+          "enum": [
+            "value",
+            "fixed"
+          ],
+          "description": "connection: lines as wide as their value (default when any link has one) or all one width."
+        },
+        "radius": {
+          "type": "number",
+          "description": "hexbin: the hexagon's radius, 8 to 40 px. Default 16."
+        },
+        "aggregate": {
+          "type": "string",
+          "enum": [
+            "count",
+            "sum",
+            "mean"
+          ],
+          "description": "hexbin: what a cell's colour says: how many points (default), or the sum or mean of their `weight`."
+        },
+        "missing": {
+          "type": "string",
+          "enum": [
+            "hatch",
+            "land"
+          ],
+          "description": "choropleth: how regions without a row look: hatched as \"no data\", or plain land (outside the data, as for 14 swing states on a US map). Default: hatched while at most half the set lacks a row, else land. A null value is always hatched."
         },
         "region": {
           "type": "string",
@@ -397,15 +449,15 @@
         },
         "points": {
           "type": "array",
-          "description": "bubble, required: [{ lon, lat, value (0 or more), label, detail?, shade? }], at most 500, area proportional to value, the biggest few labelled. outline: [{ lon, lat, label, detail?, tone? }], at most 200."
+          "description": "bubble, required: [{ lon, lat, value (0 or more), label, detail?, shade? }], at most 500, area proportional to value, the biggest labelled where they fit. outline: [{ lon, lat, label, detail?, tone? }], at most 200. hexbin, required: [{ lon, lat, weight? }], at most 5,000 raw points."
         },
         "scale": {
           "type": "object",
-          "description": "choropleth (and bubble `shade`): { type: \"sequential\" | \"diverging\" | \"categorical\", domain?: [low, high], midpoint?, bins?: 2-7, unit? }. Default sequential, 5 classes. Values past the domain go in the end classes (labelled \"< low\", \"> high\"); without a domain, outliers are fenced off the same way."
+          "description": "choropleth, hexbin (sequential or diverging) and bubble `shade`: { type: \"sequential\" | \"diverging\" | \"categorical\", domain?: [low, high], midpoint?, bins?: 2-7, unit? }. Default sequential, 5 classes. Values past the domain go in the end classes (labelled \"< low\", \"> high\"); without a domain, outliers are fenced off the same way."
         },
         "view": {
           "type": "any",
-          "description": "Region kinds: \"auto\" (default: the region set, or for bubbles the places, ignoring the outer 2% from 20 places, with \"N outside view\") or [west, south, east, north] in degrees."
+          "description": "Region kinds: \"auto\" (default: the region set, or for bubble, connection and hexbin the places, ignoring the far-off ones from 20 places, with \"N outside view\") or [west, south, east, north] in degrees. A world view narrower than about 50° by 35° draws the detailed (1:50m) coast."
         },
         "title": {
           "type": "string",
@@ -422,11 +474,11 @@
             "all",
             "none"
           ],
-          "description": "Region kinds. \"auto\" (default): every label for 12 or fewer items, else the regions whose label fits and the 5 biggest bubbles; \"all\" up to 24."
+          "description": "Region kinds. \"auto\" (default): every label for 12 or fewer items, else the regions whose label fits inside them, up to 10 of the biggest bubbles and 12 of the busiest hubs where they don't collide, and link labels up to 40 links; \"all\" up to 24 (hexbin: each cell's value, from radius 16); \"none\"."
         },
         "noDataLabel": {
           "type": "string",
-          "description": "choropleth: the legend's word for missing data. Default \"No data\"."
+          "description": "choropleth: the legend's word for regions without a row (hatched or land, see `missing`). Default \"No data\" (hatched) or \"Not in the data\" (land)."
         },
         "maxRadius": {
           "type": "number",
@@ -434,7 +486,7 @@
         },
         "unit": {
           "type": "string",
-          "description": "bubble: suffix for values, as on charts (\"M EUR\", \"%\", \" stations\")."
+          "description": "bubble, connection, hexbin: suffix for values, as on charts (\"M EUR\", \"%\", \" flights\", \" stations\")."
         },
         "borders": {
           "type": "string",

@@ -1,5 +1,6 @@
 // The region map's props, read from untrusted JSON into fixed shapes, and the rules that turn
-// data into marks: a region's fill (a bin, or hatched for no data), bubble radii, draw order.
+// data into marks: a region's fill (a bin, hatched for no data, or plain land when the set is
+// mostly outside the data), bubble radii, draw order.
 // Pure, so they are tested without a renderer. In step with src-tauri/src/ui_library/map.rs.
 import { scaleSqrt } from "d3-scale";
 import { asArray, asNumber, isObj, optText, type Obj } from "@/lib/narrow";
@@ -8,13 +9,28 @@ import { isTone, type Tone } from "@/components/ui-blocks/viz";
 import { REGION_SETS, type RegionSet } from "@/components/ui-blocks/map/geo";
 import type { Bbox } from "@/components/ui-blocks/map/projection";
 
-export type MapKind = "markers" | "outline" | "choropleth" | "bubble";
+export type MapKind = "markers" | "outline" | "choropleth" | "bubble" | "connection" | "hexbin";
 export type LabelMode = "auto" | "all" | "none";
 export type Highlight = { id: unknown; label?: string; detail?: string; tone: Tone };
 export type Place = { id?: string; lon: number; lat: number; label: string; detail?: string; tone: Tone; value: number; shade?: number };
 export type Datum = { id: unknown; value: number | null; label?: string; detail?: string };
+export type Hub = { id: string; label: string; lon: number; lat: number; detail?: string };
+export type Link = { from: string; to: string; value?: number; label?: string; detail?: string };
+export type HexPoint = { lon: number; lat: number; weight?: number };
+export type Aggregate = "count" | "sum" | "mean";
+/** How regions without a row are drawn: hatched ("no data"), or as plain land (outside the data's set). */
+export type Missing = "hatch" | "land";
 
-export const CAPS = { highlight: 100, outlinePoints: 200, bubblePoints: 500, data: 3000, labelsAll: 24 } as const;
+export const CAPS = {
+  highlight: 100,
+  outlinePoints: 200,
+  bubblePoints: 500,
+  data: 3000,
+  labelsAll: 24,
+  hubs: 100,
+  links: 200,
+  hexPoints: 5000,
+} as const;
 /** Labels that are always visible: this many labelled items or fewer. */
 export const ALWAYS_LABEL = 12;
 /** A bubble map labels its biggest few when there are more than ALWAYS_LABEL. */
@@ -34,12 +50,27 @@ export type MapModel = {
   points: Place[];
   data: Datum[];
   noDataLabel: string;
+  /** Whether the agent wrote its own noDataLabel. */
+  noDataGiven: boolean;
   maxRadius?: number;
   unit?: string;
   borders: boolean;
+  /** choropleth: unset is "auto" (missingMode). */
+  missing?: Missing;
+  hubs: Hub[];
+  links: Link[];
+  directed: boolean;
+  /** connection: stroke by value, or one width; unset is by value when any link has one. */
+  width?: "value" | "fixed";
+  hexPoints: HexPoint[];
+  /** hexbin: the hexagon's radius in px. */
+  radius: number;
+  aggregate: Aggregate;
 };
 
-export const readMapKind = (v: unknown): MapKind => (v === "outline" || v === "choropleth" || v === "bubble" ? v : "markers");
+const KINDS: readonly MapKind[] = ["outline", "choropleth", "bubble", "connection", "hexbin"];
+export const readMapKind = (v: unknown): MapKind => (KINDS.includes(v as MapKind) ? (v as MapKind) : "markers");
+export const DEFAULT_HEX_RADIUS = 16;
 
 const text = (v: unknown, max: number) => optText(v)?.slice(0, max);
 
@@ -84,6 +115,7 @@ export function readMapModel(p: Obj): MapModel {
   const legend = isObj(p.legend) ? { show: true, title: text(p.legend.title, 80) } : { show: p.legend !== false };
   const height = asNumber(p.height);
   const maxRadius = asNumber(p.maxRadius);
+  const hubs = readHubs(p.hubs);
   return {
     kind: kind === "markers" ? "outline" : kind,
     region,
@@ -100,7 +132,11 @@ export function readMapModel(p: Obj): MapModel {
           ? [{ id: h.id, label: text(h.label, 60), detail: text(h.detail, 200), tone: isTone(h.tone) ? h.tone : "default" }]
           : [],
       ),
-    points: readPlaces(p.points, kind === "bubble" ? CAPS.bubblePoints : CAPS.outlinePoints, kind === "bubble"),
+    // Hexbin points are read below (hexPoints): binned, never drawn one by one.
+    points:
+      kind === "hexbin" || kind === "connection"
+        ? []
+        : readPlaces(p.points, kind === "bubble" ? CAPS.bubblePoints : CAPS.outlinePoints, kind === "bubble"),
     data: asArray(p.data)
       .slice(0, CAPS.data)
       .flatMap((d): Datum[] =>
@@ -109,10 +145,68 @@ export function readMapModel(p: Obj): MapModel {
           : [],
       ),
     noDataLabel: text(p.noDataLabel, 40) ?? "No data",
+    noDataGiven: text(p.noDataLabel, 40) != null,
     maxRadius: maxRadius == null ? undefined : Math.max(6, Math.min(48, maxRadius)),
     unit: text(p.unit, 12),
     borders: p.borders !== "none",
+    missing: p.missing === "hatch" || p.missing === "land" ? p.missing : undefined,
+    hubs,
+    links: readLinks(p.links, hubs),
+    directed: p.directed === true,
+    width: p.width === "value" || p.width === "fixed" ? p.width : undefined,
+    hexPoints: (kind === "hexbin" ? asArray(p.points) : []).slice(0, CAPS.hexPoints).flatMap((q): HexPoint[] => {
+      if (!isObj(q)) return [];
+      const lon = asNumber(q.lon);
+      const lat = asNumber(q.lat);
+      if (lon == null || lat == null || Math.abs(lon) > 180 || Math.abs(lat) > 90) return [];
+      const weight = asNumber(q.weight);
+      return [weight == null ? { lon, lat } : { lon, lat, weight }];
+    }),
+    radius: Math.max(8, Math.min(40, asNumber(p.radius) ?? DEFAULT_HEX_RADIUS)),
+    aggregate: p.aggregate === "sum" || p.aggregate === "mean" ? p.aggregate : "count",
   };
+}
+
+function readHubs(raw: unknown): Hub[] {
+  const seen = new Set<string>();
+  return asArray(raw)
+    .slice(0, CAPS.hubs)
+    .flatMap((h): Hub[] => {
+      if (!isObj(h)) return [];
+      const id = typeof h.id === "number" ? String(h.id) : optText(h.id);
+      const lon = asNumber(h.lon);
+      const lat = asNumber(h.lat);
+      if (!id || seen.has(id) || lon == null || lat == null || Math.abs(lon) > 180 || Math.abs(lat) > 90) return [];
+      seen.add(id);
+      return [{ id, label: text(h.label, 60) ?? id, lon, lat, detail: text(h.detail, 200) }];
+    });
+}
+
+/** Links between known hubs: unknown ends and self-links are left out (Rust refuses them). */
+export function readLinks(raw: unknown, hubs: Hub[]): Link[] {
+  const ids = new Set(hubs.map((h) => h.id));
+  const id = (v: unknown) => (typeof v === "number" ? String(v) : optText(v));
+  return asArray(raw)
+    .slice(0, CAPS.links)
+    .flatMap((l): Link[] => {
+      if (!isObj(l)) return [];
+      const from = id(l.from);
+      const to = id(l.to);
+      if (!from || !to || from === to || !ids.has(from) || !ids.has(to)) return [];
+      const value = asNumber(l.value);
+      return [{ from, to, value: value != null && value >= 0 ? value : undefined, label: text(l.label, 60), detail: text(l.detail, 200) }];
+    });
+}
+
+/**
+ * How a choropleth draws regions without a row. Given: as asked. Unset: hatched while at most
+ * half the set lacks a row (the gaps are the exception, worth seeing), else plain land (the data
+ * covers a part of the set, like 14 swing states; hatching the rest would drown it). A row whose
+ * value is null is always hatched: the agent said that region has no data.
+ */
+export function missingMode(mode: Missing | undefined, regions: number, rows: number): Missing {
+  if (mode) return mode;
+  return regions - rows > regions / 2 ? "land" : "hatch";
 }
 
 /** The default sequential scale of a choropleth: 5 classes. */

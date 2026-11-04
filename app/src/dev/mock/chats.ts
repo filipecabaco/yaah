@@ -621,6 +621,8 @@ const electionTree = {
                 data: ELECTION.map(([state, , result]) => ({ id: state, value: result, detail: margin(result) })),
                 scale: { type: "diverging", domain: [-24, 24], midpoint: 0, bins: 7, unit: " pts" },
                 legend: { title: "Result margin (R + / D −)" },
+                // 37 states have no row: plain land, not 37 hatched "no data" states drowning the 14.
+                missing: "land",
                 noDataLabel: "Not in this set",
               },
             },
@@ -735,7 +737,7 @@ function cardsRecording(text: string, prefix: string, entries: [string, Record<s
 }
 /** "map types": the region map kinds (map-types.ts). */
 const mapTypesRecording = cardsRecording(
-  "Four region maps: a world choropleth, US states by 2024 margin, European store revenue as bubbles, and edge locations as an outline. Numbers are illustrative.",
+  "Ten maps: a world choropleth, US states by 2024 margin, European store revenue as bubbles, edge locations as an outline, flights and data-centre traffic as connections, weather stations as a hexbin, Iberia zoomed in, a delivery round and bike docks on the street map. Numbers are illustrative.",
   "map-types",
   mapTypes,
 );

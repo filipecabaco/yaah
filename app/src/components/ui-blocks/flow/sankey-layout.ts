@@ -16,7 +16,17 @@ export type SankeyBox = {
   inValue: number;
   outValue: number;
 };
-export type SankeyBand = { i: number; source: string; target: string; value: number; width: number; path: string; mid: { x: number; y: number } };
+/** `path` is the band's centre line; `area` its outline (filled, with its two edges stroked). */
+export type SankeyBand = {
+  i: number;
+  source: string;
+  target: string;
+  value: number;
+  width: number;
+  path: string;
+  area: string;
+  mid: { x: number; y: number };
+};
 export type SankeyLayout = { nodes: SankeyBox[]; links: SankeyBand[]; columns: number };
 
 export const NODE_WIDTH = 12;
@@ -25,6 +35,18 @@ export const NODE_WIDTH = 12;
 export function bandPath(x0: number, y0: number, x1: number, y1: number): string {
   const xm = (x0 + x1) / 2;
   return `M${x0},${y0}C${xm},${y0} ${xm},${y1} ${x1},${y1}`;
+}
+
+/**
+ * A link band's outline: its top and bottom edges as the same horizontal cubic, `w` apart, joined at
+ * the source's right edge and the target's left. Filled, it is the band; stroked, its edges.
+ */
+export function bandArea(x0: number, y0: number, x1: number, y1: number, w: number): string {
+  const xm = (x0 + x1) / 2;
+  const h = w / 2;
+  const r = (n: number) => Math.round(n * 100) / 100;
+  const [a, b, c, d] = [y0 - h, y1 - h, y1 + h, y0 + h].map(r);
+  return `M${r(x0)},${a}C${r(xm)},${a} ${r(xm)},${b} ${r(x1)},${b}L${r(x1)},${c}C${r(xm)},${c} ${r(xm)},${d} ${r(x0)},${d}Z`;
 }
 
 type N = FlowNode & { inValue?: number; outValue?: number };
@@ -75,6 +97,7 @@ export function layoutSankey(nodes: FlowNode[], links: FlowLink[], width: number
       value: l.value,
       width: Math.max(1, l.width ?? 1),
       path: bandPath(s.x1, y0, t.x0, y1),
+      area: bandArea(s.x1, y0, t.x0, y1, Math.max(1, l.width ?? 1)),
       mid: { x: (s.x1 + t.x0) / 2, y: (y0 + y1) / 2 },
     };
   });

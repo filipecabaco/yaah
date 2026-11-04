@@ -6,6 +6,14 @@ Anything not checked against a primary source is marked UNVERIFIED. Sizes were m
 
 `docs/research/map-types.md` did not exist when this was written, so nothing here depends on it. The earlier review is `docs/research/maps-and-charts.md`.
 
+## Status (4 November 2026, later the same day)
+
+- **Steps 1 and 2**: done; **step 3**: the region maps are done, heatmap, bundle, chord and arc are not. The core (`ui-blocks/viz/`) carries the dumbbell, sankey, network and the maps (`docs/experiments/2026-11-04-d3-maps-flow/`), so the gate (3 or more kinds) is met.
+- **Step 4**: done. Bar, line and area are React SVG on the core (`ui-blocks/chart.tsx`, geometry in `chart-geometry.ts`), with d3-scale 4.0.2 for scales and ticks and d3-shape 3.2.0 for line and area paths (`d3.stack` was not needed: stacking by sign is 20 lines in `stackRows`). Same props, same mark specs; the Recharts-tied tests were rewritten against our own `data-part` attributes and ARIA, and new ones cover keyboard focus, hover, the crosshair and Expand.
+- **Step 5**: done. Recharts, `ui/chart.tsx`, the `.recharts-*` CSS and the `getBoundingClientRect` mock are gone; `ui-primitives.json` says `d3-scale`, `d3-shape`. Chart chunk 95.7 KB gz to 8.5 KB gz; the chart chunk no longer matches `Function(` in the CSP grep. `docs/experiments/2026-11-04-charts-on-d3/`.
+- **Step 6**: done with step 4. Every category is a named list item in one roving tab stop (arrows, Home, End), the tooltip shows on focus as on hover, with the same words in the item's name.
+- Sankey neutral bands now have 1px edges at 3:1 on the surface in every theme, over a quiet fill (`index.css`, `theme-contrast.test.ts` "flow bands").
+
 ## 1. Answers
 
 **Q1. Do we have the Flow graphs?** No, not as primitives. The `chart` primitive is bar, line, area and dumbbell. Of the five Flow types (chord, network, sankey, arc, edge bundling), only two are reachable today, both through `diagram` (Mermaid 11.17.2):
@@ -251,7 +259,8 @@ Notes:
 
 - **d3-sankey 0.12.3** is the newest release and is from 2019. It depends on `d3-array 1 - 2` and `d3-shape ^1.2.0`, so the tree gets old copies next to d3-array 3.2.4 and d3-shape 3.2.0 (the repo already has d3-array 2.12.1 and d3-shape 1.3.7 installed through it). Cost about 4 KB gz. Types come from `@types/d3-sankey` (0.12.5 on npm; check the publish date before pinning, UNVERIFIED). If the duplicate bothers us, the layout is small enough to vendor.
 - **d3-axis, d3-selection, d3-zoom, d3-transition**: not needed; leave them out.
-- **Recharts**: stay on 3.8.0 until step 5. Newest at least two weeks old is 3.10.1 (25 July 2026); no reason to bump if it is being removed.
+- **Recharts**: stayed on 3.8.0 until step 5, then removed (see Status).
+- **d3-shape 3.2.0** depends on `d3-path ^3.1.0`; 3.1.1 is from 3 November 2026, so `pnpm-workspace.yaml` overrides `d3-path@3` to 3.1.0. `@types/d3-shape` 3.2.0 is from 21 August 2026.
 - Licences are from the npm registry. All are permissive (ISC or BSD-3-Clause), no attribution beyond the notice in the package.
 - Bundled geodata (us-atlas 3.0.1, world-atlas 2.0.2) is unchanged from `maps-and-charts.md`.
 

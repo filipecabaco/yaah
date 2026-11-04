@@ -89,10 +89,14 @@ export function BinLegend(props: {
   title?: string;
   open?: { below?: boolean; above?: boolean };
   noData?: string;
+  /** A plain land swatch and its words: regions drawn outside the data (a choropleth's `missing: "land"`). */
+  land?: string;
+  /** The land swatch as an outline on the surface (land drawn that way so it can't pass for a gray middle class). */
+  landOutline?: boolean;
   footer?: string;
   marks?: boolean;
 }) {
-  const { scale, domain, unit, title, open, noData, footer, marks = false } = props;
+  const { scale, domain, unit, title, open, noData, land, landOutline = false, footer, marks = false } = props;
   const colors = binColors(scale, marks);
   const attached = !!unit && ATTACHED.test(unit.trim());
   const fmt = formatter(attached ? unit.trim() : undefined);
@@ -132,6 +136,17 @@ export function BinLegend(props: {
           <div className="flex min-w-12 flex-col gap-0.5" data-part="no-data">
             <span className="ui-hatch h-2.5 w-full rounded-sm border border-[var(--map-hatch)]" />
             <span className="text-2xs leading-tight whitespace-nowrap">{noData}</span>
+          </div>
+        )}
+        {land && (
+          <div className="flex min-w-12 flex-col gap-0.5" data-part="land">
+            <span
+              className={cn(
+                "h-2.5 w-full rounded-sm border border-[var(--map-stroke)]",
+                landOutline ? "bg-[var(--chart-surface)]" : "bg-[var(--map-land)]",
+              )}
+            />
+            <span className="text-2xs leading-tight whitespace-nowrap">{land}</span>
           </div>
         )}
       </div>

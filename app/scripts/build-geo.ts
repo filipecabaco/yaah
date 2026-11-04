@@ -248,6 +248,33 @@ const ids: Record<string, unknown[]> = {};
   ids.world = rows.sort((a, b) => a.id.localeCompare(b.id));
 }
 
+// ── world (50m, for zoomed views) ───────────────────────────────────────────
+
+// The same countries in more detail, drawn only when a world map is zoomed in (map/geo.ts
+// loads it then). Its ids are the 110m set's, so validation (region-ids.json) stays one list;
+// the countries 110m has no shape for (Malta, Andorra…) stay plain land here.
+{
+  const t = read<Topology>("world-atlas/countries-50m.json");
+  const known = new Set((ids.world as CountryRow[]).map((r) => r.id));
+  const regions: Geometry[] = [];
+  const context: Geometry[] = [];
+  for (const g of t.objects.countries.geometries) {
+    const name = nameOf(g);
+    const c = country(g.id, name);
+    if (c && known.has(c.id))
+      regions.push({ type: g.type, arcs: g.arcs, id: c.id, properties: { name: c.name, a2: c.a2, ...(c.num ? { num: c.num } : {}) } });
+    else context.push({ type: g.type, arcs: g.arcs, properties: { name: c?.name ?? name } });
+  }
+  write(
+    "world-50m.topo.json",
+    prune(
+      t,
+      { regions: { type: "GeometryCollection", geometries: regions }, context: { type: "GeometryCollection", geometries: context } },
+      decode(t),
+    ),
+  );
+}
+
 // ── europe (50m, clamped) ────────────────────────────────────────────────────
 
 /** Geographic Europe, plus Cyprus, Türkiye and the Caucasus, which European datasets (Eurostat, UEFA, Eurovision) often include. */

@@ -18,7 +18,7 @@ A rendered component can be expanded into a large dialog. Blocks with a main scr
 ## Before saving
 
 - Call `ui_catalog` and reuse what is there. Improve an existing component of the user's (`ui_get_component`, then save with `expectedVersion`) instead of making a near-duplicate.
-- A chart in a component takes its rows as a prop (`"data": "{{rows}}"`) and keeps `kind` fixed, so it is checked when saved (a dumbbell needs exactly 2 series). The same goes for a `map` (keep `kind` and `region` fixed; a bound row's id is resolved when it renders) and a `flow` (keep `kind` fixed). Colours come from the theme; a component can't set them.
+- A chart in a component takes its rows as a prop (`"data": "{{rows}}"`) and keeps `kind` fixed, so it is checked when saved (a dumbbell needs exactly 2 series). The same goes for a `map` (keep `kind` and `region` fixed; a bound row's id is resolved when it renders, and bound `hubs` skip the link-to-hub check) and a `flow` (keep `kind` fixed). Colours come from the theme; a component can't set them.
 - yaah's own components (source `yaah`) and installed libraries' components (`library/name`) are read-only: compose them inside yours, or save a variant under a new unqualified name.
 - Save only shapes that will come up again. For a one-off, pass a `tree` to `ui_render`.
 
