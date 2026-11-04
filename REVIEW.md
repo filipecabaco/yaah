@@ -272,7 +272,7 @@ Gaps:
 - [ ] Not yet tried with live agents in the real app.
 
 **Built: model and effort pickers.** A Model and an Effort picker under the message box, only for what the chat's agent offers (ACP `configOptions`, else the older `models`). The agent's answer is the chat's state; picks are re-sent after `session/load` when the agent doesn't keep them. Changes are disabled while a turn runs. Settings → Agents has "New chats start with" per profile; a profile bound to Bedrock or OpenRouter keeps its model from the binding.
-- [ ] Mode, fast mode, ultracode and goose's `provider` are parsed but have no UI. A mode picker interacts with yaah's permission handling, so it needs a decision.
+- [x] **Decided (2026-11-04): no mode picker for now.** Mode, fast mode, ultracode and goose's `provider` are parsed and kept but have no UI. If one comes later, leave out modes that skip permission prompts.
 - [ ] Codex's and Gemini's signed-in model lists, and whether Codex keeps its picks across a reload, need a signed-in (tier B) run.
 
 **Built: `#` references.** `#` lists every connected tracker; `github#`, `gitlab#` and `linear#` list one. Ranked in Rust: exact ids, then the chat's repos, then items involving you, then recent. No API call per keystroke (a 250 ms pause, 60 s cache). On send Rust reads each item (read-only, up to 10 per message) and attaches it as an embedded resource or as text.
