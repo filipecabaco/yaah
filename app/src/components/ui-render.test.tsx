@@ -273,6 +273,19 @@ describe("buttons that send a message", () => {
   });
 });
 
+describe("the code primitive", () => {
+  it("is highlighted by its language and keeps its text (numbers at the start of a line are not a file read's)", async () => {
+    render(<UiTree tree={{ type: "code", props: { text: "12 const x = 1;\n13 let y = 2;", language: "ts" } }} props={{}} />);
+    const pre = await waitFor(() => {
+      const el = document.querySelector('pre[data-highlight="typescript"]');
+      expect(el).not.toBeNull();
+      return el!;
+    });
+    expect(pre.textContent).toBe("12 const x = 1;\n13 let y = 2;");
+    expect(pre.querySelectorAll(".hl").length).toBeGreaterThan(0);
+  });
+});
+
 describe("a field outside a form", () => {
   it("is an editable input with its default, not a locked empty one", async () => {
     const user = userEvent.setup();

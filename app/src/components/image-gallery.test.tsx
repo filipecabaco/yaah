@@ -32,6 +32,19 @@ function setup(count: number) {
 }
 
 describe("image mosaic", () => {
+  it("opens a lone image straight away: no tiles, no Back, no Prev/Next, no count; Esc closes", async () => {
+    const { user } = setup(1);
+    await user.click(screen.getByRole("button", { name: /^Open vitro: screenshot/ }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).queryByRole("button", { name: /^Open image/ })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Back to all" })).toBeNull();
+    expect(within(dialog).queryByRole("button", { name: "Next image" })).toBeNull();
+    expect(within(dialog).queryByText(/1 of 1/)).toBeNull();
+    expect(within(dialog).getByRole("img", { name: /screenshot/ })).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("opens from any thumbnail, a tile opens one image, Prev/Next/keys/Back/Esc step through", async () => {
     const { user } = setup(7);
     const thumbs = screen.getAllByRole("button", { name: /^Open vitro: screenshot/ });
