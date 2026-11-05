@@ -111,8 +111,8 @@ describe("messages", () => {
 describe("tool calls and permissions", () => {
   it("copies a permission request with the input of the tool call it asks about", async () => {
     const { user } = renderApp();
-    const log = await sendInQuickChat(user, "write hello.txt please");
-    const permission = await within(log).findByRole("group", { name: "Permission requested" });
+    await sendInQuickChat(user, "write hello.txt please");
+    const permission = await screen.findByRole("group", { name: "Permission requested" });
     const writeText = spyClipboard();
 
     const menu = await rightClick(within(permission).getByText("Permission requested"));
@@ -129,7 +129,7 @@ describe("tool calls and permissions", () => {
   it("offers the file path, and Ask about this on the card's diff", async () => {
     const { user } = renderApp();
     const log = await sendInQuickChat(user, "write hello.txt please");
-    await within(log).findByRole("group", { name: "Permission requested" });
+    await screen.findByRole("group", { name: "Permission requested" });
 
     // The card's title: no diff under the pointer.
     const title = within(log).getAllByText("Write /Users/dev/workspace/api/hello.txt")[0];

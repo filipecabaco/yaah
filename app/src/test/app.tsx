@@ -35,14 +35,15 @@ export async function sendInQuickChat(user: ReturnType<typeof userEvent.setup>, 
 /** Answer every pending permission with `option` until `done` holds. */
 export async function answerPermissionsUntil(
   user: ReturnType<typeof userEvent.setup>,
-  log: HTMLElement,
+  _log: HTMLElement,
   option: string,
   done: () => boolean,
   timeout = 15_000,
 ) {
   await waitFor(
     async () => {
-      for (const group of within(log).queryAllByRole("group", { name: "Permission requested" })) {
+      // The prompt is docked above the composer, not in the log.
+      for (const group of screen.queryAllByRole("group", { name: "Permission requested" })) {
         const button = within(group).queryByRole("button", { name: option });
         if (button && !button.hasAttribute("disabled")) await user.click(button);
       }

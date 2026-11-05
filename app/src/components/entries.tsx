@@ -2,7 +2,7 @@
 // only draw it. Every entry is memoised on the entry object itself (Rust sends
 // a new object only for the entry that changed), so a streaming reply
 // re-renders one entry, not the whole chat.
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Brain,
@@ -30,8 +30,8 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { Markdown } from "@/components/markdown";
-import { ErrorText } from "@/components/error-text";
+import { CodeBlock } from "@/components/code-block";
+import { Markdown, PlainMarkdown } from "@/components/markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -40,16 +40,16 @@ import { draftIntoComposer, useChat } from "@/components/chat-context";
 import { PatchView, TextDiff } from "@/components/ui-render";
 import { ToolTerminal } from "@/components/terminal/tool-terminal";
 import { FolderRequestEntry, UiEntry } from "@/components/ui-entry";
-import { api, type Entry, type ToolContent } from "@/lib/api";
+import { type Entry, type ToolContent } from "@/lib/api";
 import { openSettings } from "@/lib/app-events";
-import { focusAfterPermission } from "@/lib/pane-focus";
 import { permissionAnswer, permissionChip, type PermissionEntry } from "@/lib/permissions";
-import { SCOPE_WORDS, trustApi, useTrustView, type TrustScope } from "@/lib/trust-api";
 import { baseName, compactPath, elapsedText, plural } from "@/lib/format";
 import { cardKey, cardKeyLabel, cardMode, saveCardRule, useCardRules, type CardMode } from "@/lib/tool-cards";
+import { parseNumbered } from "@/lib/language";
+import { isObj } from "@/lib/narrow";
 import { readToolText, toolTextLayout } from "@/lib/tool-output";
 import { cn } from "@/lib/utils";
-import { toolLabel } from "@/lib/ui-tool-label";
+import { commandLines, shellCommand, shellCommandFromJson, shellDescription, toolLabel } from "@/lib/ui-tool-label";
 import { toolImages } from "@/lib/attachments";
 import { ImageStrip } from "@/components/image-preview";
 import { SentAttachments } from "@/components/composer-attachments";
@@ -121,10 +121,19 @@ function UserMessage({ entry }: { entry: Of<"user"> }) {
           act={() => [{ label: "Edit as new message", icon: <Pencil />, onSelect: () => draftIntoComposer({ text: entry.text }, pane) }]}
           actions={[{ label: "Copy text", text: () => entry.text }]}
         >
-          <div className="max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">
-            {/* `github#o/r#9` and the like as links to the item (components/references.tsx). */}
-            <ReferenceText text={entry.text} references={entry.references} />
-          </div>
+          {entry.references?.length ? (
+            // `github#o/r#9` and the like as chips linking to the item (components/references.tsx);
+            // that path draws the text as written.
+            <div className="max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">
+              <ReferenceText text={entry.text} references={entry.references} />
+            </div>
+          ) : (
+            // What the user wrote, as plain CommonMark/GFM (never MDX: their text is not rewritten);
+            // `.user-message` keeps their single line breaks.
+            <div className="user-message max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere]">
+              <PlainMarkdown>{entry.text}</PlainMarkdown>
+            </div>
+          )}
         </CopyMenu>
       )}
       <ReferenceNotes references={entry.references} />
@@ -275,10 +284,26 @@ function ToolCall({ entry, turnActive, permission }: { entry: Of<"tool">; turnAc
   const output = toolOutput(entry.content);
   const label = toolLabel({ title: entry.title, status: entry.status, rawInput: entry.rawInput, output });
   const hasBody = entry.content.length > 0 || entry.rawInput != null;
+  // Shown in the body when the label isn't the command itself, or to read a long one a step per line.
+  // Some agents also echo the input as JSON text in the body (`{"command": "…\n…"}`); that is the command again, with escapes.
+  const echoed = (c: ToolContent) => c.type === "content" && !!c.content.text && shellCommandFromJson(c.content.text) !== null;
+  const rawCommand =
+    shellCommand(entry.rawInput) ??
+    entry.content.flatMap((c) => (c.type === "content" && c.content.text ? [shellCommandFromJson(c.content.text)] : [])).find(Boolean) ??
+    null;
+  // The command in full, decoded, one step per line, when the title isn't already all of it.
+  const bodyContent = rawCommand ? entry.content.filter((c) => !echoed(c)) : entry.content;
+  // Nothing but the echo to show: the command itself is the body.
+  const bodyIsEcho = !!rawCommand && bodyContent.length === 0;
+  const command =
+    rawCommand && (shellDescription(entry.rawInput) || commandLines(rawCommand).length > 1 || rawCommand.length > 60 || bodyIsEcho)
+      ? rawCommand
+      : null;
   const copyActions = [{ label: "Copy title", text: () => entry.title }];
   if (entry.rawInput != null) copyActions.push({ label: "Copy input", text: () => JSON.stringify(entry.rawInput, null, 2) });
   if (output) copyActions.push({ label: "Copy output", text: () => output });
   const paths = toolPaths(entry);
+  const filePath = entry.kind === "read" ? readPath(entry) : undefined;
   if (paths.length) copyActions.push({ label: paths.length === 1 ? "Copy file path" : "Copy file paths", text: () => paths.join("\n") });
   const like = cardKeyLabel(key);
   const extra: MenuAction[] = RULE_ACTIONS.filter((a) => a.mode !== mode).map(({ mode, label, icon: I }) => ({
@@ -316,15 +341,26 @@ function ToolCall({ entry, turnActive, permission }: { entry: Of<"tool">; turnAc
         <ImageStrip sessionId={sessionId} images={images} alt={label ? label.text : entry.title} className="border-t px-3 py-2" />
         <CollapsibleContent>
           <div className="flex flex-col gap-2 border-t px-3 py-2">
-            {entry.content.length > 0 ? (
-              entry.content.map((c, i) => <ToolContentView key={i} content={c} failed={entry.status === "failed"} />)
-            ) : (
-              <Pre layout="code">{JSON.stringify(entry.rawInput, null, 2)}</Pre>
-            )}
+            {command && <CommandBlock command={command} />}
+            {bodyContent.length > 0
+              ? bodyContent.map((c, i) => <ToolContentView key={i} content={c} failed={entry.status === "failed"} path={filePath} />)
+              : !command && <Pre layout="code">{JSON.stringify(entry.rawInput, null, 2)}</Pre>}
           </div>
         </CollapsibleContent>
       </Collapsible>
     </CopyMenu>
+  );
+}
+
+/** A shell command in full, one step per line (split on `&&`, `;`, newlines), wrapped. Never a vertical scroller of its own: it would trap the transcript's wheel. */
+export function CommandBlock({ command, className }: { command: string; className?: string }) {
+  return (
+    <pre
+      data-slot="command"
+      className={cn("overflow-x-auto rounded-md bg-muted/50 px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap", className)}
+    >
+      {commandLines(command).join("\n")}
+    </pre>
   );
 }
 
@@ -339,12 +375,23 @@ function toolPaths(entry: Of<"tool">): string[] {
   return [...new Set(paths.filter(Boolean))];
 }
 
-function ToolContentView({ content, failed }: { content: ToolContent; failed: boolean }) {
+/** The file a read tool opened: its location, else the path in its input. */
+function readPath(entry: Of<"tool">): string | undefined {
+  const input = entry.rawInput;
+  const fromInput = isObj(input) ? [input.file_path, input.path, input.filePath].find((v) => typeof v === "string" && v) : undefined;
+  return entry.locations.find((l) => l.path)?.path ?? (fromInput as string | undefined);
+}
+
+function ToolContentView({ content, failed, path }: { content: ToolContent; failed: boolean; path?: string }) {
   switch (content.type) {
     case "content":
       // Images are drawn under the card's title (ToolCall).
       if (content.content.type === "image") return null;
-      return content.content.text == null ? <Pre>{`[${content.content.type}]`}</Pre> : <ToolText raw={content.content.text} failed={failed} />;
+      return content.content.text == null ? (
+        <Pre>{`[${content.content.type}]`}</Pre>
+      ) : (
+        <ToolText raw={content.content.text} failed={failed} path={path} />
+      );
     case "diff":
       return <TextDiff path={content.path} oldText={content.oldText ?? ""} newText={content.newText} />;
     case "terminal":
@@ -357,10 +404,12 @@ function ToolContentView({ content, failed }: { content: ToolContent; failed: bo
  * (with the raw text a click away), anything else (messages, errors) wrapped; a failed call's in
  * the destructive colour.
  */
-export function ToolText({ raw, failed = false }: { raw: string; failed?: boolean }) {
+export function ToolText({ raw, failed = false, path }: { raw: string; failed?: boolean; path?: string }) {
   const shown = useMemo(() => readToolText(raw), [raw]);
   const [asText, setAsText] = useState(false);
-  const layout = toolTextLayout(shown);
+  // A file read (numbered lines, or a fence that names its language) is code, highlighted by its path or fence.
+  const layout = toolTextLayout(shown) === "prose" && path && parseNumbered(shown.text) ? "code" : toolTextLayout(shown);
+  if (layout === "code" && !failed) return <CodeBlock text={shown.text} path={path} language={shown.lang} />;
   if (layout !== "diff")
     return (
       <Pre layout={layout} failed={failed}>
@@ -420,13 +469,6 @@ function Plan({ entry }: { entry: Of<"plan"> }) {
   );
 }
 
-const OPTION_VARIANT: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
-  allow_once: "default",
-  allow_always: "secondary",
-  reject_once: "outline",
-  reject_always: "destructive",
-};
-
 /**
  * "Allowed", "Always allowed" or "Auto-allowed" on a tool card whose permission request was
  * allowed: the request itself isn't drawn then. The reason (auto, always) shows beside it when
@@ -447,99 +489,34 @@ function AllowedChip({ entry }: { entry: PermissionEntry }) {
   );
 }
 
-function Permission({ entry, index, toolInput }: { entry: Of<"permission">; index: number; toolInput?: unknown }) {
-  const chat = useChat();
-  const [sending, setSending] = useState<string | null>(null);
-  const [error, setError] = useState<unknown>(null);
-  const pending = entry.chosen == null;
-  const card = useRef<HTMLDivElement>(null);
-  // Answered, the keyboard moves on to the next waiting request or the message box (KB-1).
-  const respond = (optionId: string) => {
-    if (!chat) return;
-    setSending(optionId);
-    setError(null);
-    const moveOn = focusAfterPermission(card.current);
-    api
-      .respondPermission(chat.sessionId, index, optionId)
-      .then(moveOn)
-      .catch(setError)
-      .finally(() => setSending(null));
-  };
-  // Trusting answers with the one-off option, so it is offered only when there is one.
-  const server = pending && entry.options.some((o) => o.kind === "allow_once") ? entry.mcpServer : undefined;
-  // Where this chat can trust it (session/trust.rs): this chat, its project, quick chats, all chats.
-  const view = useTrustView(server ? chat?.sessionId : undefined);
-  const trust = (scope: TrustScope) => {
-    if (!chat) return;
-    setSending(`trust:${scope}`);
-    setError(null);
-    const moveOn = focusAfterPermission(card.current);
-    trustApi
-      .trustMcpServer(chat.sessionId, index, scope)
-      .then(moveOn)
-      .catch(setError)
-      .finally(() => setSending(null));
-  };
+/**
+ * A waiting request in the transcript is only a row: the prompt itself is docked above the message
+ * box (permission-dock.tsx), where the keys and buttons are. An answered one keeps a line here.
+ */
+function Permission({ entry, toolInput }: { entry: Of<"permission">; index: number; toolInput?: unknown }) {
   const request = () => (toolInput == null ? entry.title : `${entry.title}\n\n${JSON.stringify(toolInput, null, 2)}`);
-  if (!pending) return <AnsweredPermission entry={entry} request={request} />;
+  if (entry.chosen != null) return <AnsweredPermission entry={entry} request={request} />;
   return (
     <CopyMenu actions={[{ label: "Copy request", text: request }]}>
-      <div ref={card} role="group" aria-label="Permission requested" className="rounded-lg border border-amber-500/60 bg-amber-500/5 px-3 py-2">
-        <div className="flex items-start gap-2 text-sm">
-          <ShieldQuestion className="mt-0.5 size-4 shrink-0 text-amber-600" />
-          <div className="min-w-0 flex-1">
-            <div className="font-medium">Permission requested</div>
-            {/* Rust's words for what the request is (permissions.rs `command_note`); it still asks. */}
-            {entry.note && <div className="text-xs text-muted-foreground">{entry.note}</div>}
-            {/* Said at once, not only when the polite log gets to it (SR-2); the answers are a Shift+Tab from the message box. */}
-            <span role="alert" className="sr-only">
-              Permission requested: {entry.title}
-            </span>
-            <div className="truncate font-mono text-xs text-muted-foreground" title={entry.title}>
-              {entry.title}
-            </div>
-          </div>
-        </div>
-        <div className="mt-2 flex flex-wrap gap-2">
-          {entry.options.map((o) => (
-            <Button
-              key={o.optionId}
-              size="sm"
-              variant={OPTION_VARIANT[o.kind] ?? "outline"}
-              disabled={!chat || sending != null}
-              onClick={() => respond(o.optionId)}
-            >
-              {sending === o.optionId && <Loader2 className="animate-spin" />}
-              {o.name}
-            </Button>
-          ))}
-        </div>
-        {server && view && view.offered.length > 0 && (
-          <div className="mt-2 flex flex-col items-start gap-1 border-t pt-2">
-            <div className="text-xs font-medium">Always allow tools from {server.label}</div>
-            <div role="group" aria-label={`Always allow tools from ${server.label}`} className="-ml-2 flex flex-wrap gap-1">
-              {view.offered.map((scope) => (
-                <Button
-                  key={scope}
-                  size="sm"
-                  variant="ghost"
-                  aria-label={`Always allow tools from ${server.label} ${SCOPE_WORDS[scope]}`}
-                  disabled={!chat || sending != null}
-                  onClick={() => trust(scope)}
-                >
-                  {sending === `trust:${scope}` ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
-                  {SCOPE_WORDS[scope].replace(/^in/, "In")}
-                </Button>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Covers every {server.label} tool, including ones that change things: yaah can&apos;t tell which only read.
-            </p>
-          </div>
-        )}
-        <ErrorText error={error} className="mt-1" />
-      </div>
+      <WaitingChip what={entry.title} />
     </CopyMenu>
+  );
+}
+
+/** The small transcript row for a prompt that waits in the dock. */
+export function WaitingChip({ what }: { what: string }) {
+  return (
+    <div
+      data-slot="permission-waiting"
+      className="flex items-center gap-2 rounded-lg border border-amber-500/40 px-3 py-1.5 text-xs text-muted-foreground"
+    >
+      <ShieldQuestion className="size-3.5 shrink-0 text-amber-600" aria-hidden />
+      <span className="shrink-0 font-medium text-foreground">Waiting for your answer</span>
+      <span className="min-w-0 truncate font-mono" title={what}>
+        {what}
+      </span>
+      <span className="ml-auto hidden shrink-0 @sm:inline">answer above the message box</span>
+    </div>
   );
 }
 

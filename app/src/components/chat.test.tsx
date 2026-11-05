@@ -12,14 +12,14 @@ describe("a quick chat", () => {
     const log = await sendInQuickChat(user, "write hello.txt please");
 
     // The agent asks before writing; nothing after it plays until the user answers.
-    const permission = await within(log).findByRole("group", { name: "Permission requested" });
+    const permission = await screen.findByRole("group", { name: "Permission requested" });
     expect(within(permission).getAllByText(WRITE).length).toBeGreaterThan(0);
     expect(within(log).queryByText(/I created/)).toBeNull();
     expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
 
     await user.click(within(permission).getByRole("button", { name: "Yes" }));
     // Answered: the request folds into the Write card, as a chip.
-    await waitFor(() => expect(within(log).queryByRole("group", { name: "Permission requested" })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Permission requested" })).toBeNull());
     const card = within(log).getAllByText(WRITE)[0].closest("button") as HTMLElement;
     expect(within(card).getByText("Allowed")).toBeInTheDocument();
 
@@ -33,13 +33,13 @@ describe("a quick chat", () => {
   it("collapses a tool card when its turn ends, unless a rule says otherwise", async () => {
     const { user } = renderApp();
     const log = await sendInQuickChat(user, "write hello.txt please");
-    await within(log).findByRole("group", { name: "Permission requested" });
+    await screen.findByRole("group", { name: "Permission requested" });
 
     // While the turn runs the Write card is open and shows its diff.
     const card = () => within(log).getAllByText(WRITE)[0].closest("button") as HTMLElement;
     await waitFor(() => expect(card()).toHaveAttribute("aria-expanded", "true"));
 
-    await user.click(within(log).getByRole("button", { name: "Yes" }));
+    await user.click(screen.getByRole("button", { name: "Yes" }));
     await screen.findByRole("button", { name: "Send" });
     // Turn over: `auto` closes it.
     await waitFor(() => expect(card()).toHaveAttribute("aria-expanded", "false"));
@@ -58,7 +58,7 @@ describe("a quick chat", () => {
   it("offers the rule from the card's right-click menu", async () => {
     const { user } = renderApp();
     const log = await sendInQuickChat(user, "write hello.txt please");
-    await within(log).findByRole("group", { name: "Permission requested" });
+    await screen.findByRole("group", { name: "Permission requested" });
     const title = within(log).getAllByText(WRITE)[0];
 
     fireEvent.contextMenu(title);

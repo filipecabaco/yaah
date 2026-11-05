@@ -3,7 +3,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderApp, sendInQuickChat } from "@/test/app";
-import { addDropZone, capabilityText, countText, dropHeadline, handleDragEvent, type DragState } from "@/lib/attachments";
+import { addDropZone, capabilityText, countText, cssPoint, dropHeadline, handleDragEvent, type DragState } from "@/lib/attachments";
 import type { AgentReport } from "@/lib/api";
 
 type MockDrag = {
@@ -72,7 +72,36 @@ describe("what the drop overlay says", () => {
   });
 });
 
+describe("drop positions", () => {
+  it("divides by the pixel ratio except on macOS, where wry already reports points", () => {
+    expect(cssPoint({ x: 600, y: 400 }, 2, false)).toEqual({ x: 300, y: 200 });
+    expect(cssPoint({ x: 300, y: 200 }, 2, true)).toEqual({ x: 300, y: 200 });
+    expect(cssPoint({ x: 300, y: 200 }, 0, false)).toEqual({ x: 300, y: 200 });
+  });
+});
+
 describe("drop zones", () => {
+  it("falls back to the focused pane when the pointer is over no pane", () => {
+    const [a, b] = [document.createElement("section"), document.createElement("section")];
+    a.dataset.paneId = "a";
+    b.dataset.paneId = "b";
+    b.dataset.focused = "true";
+    const [ca, cb] = [document.createElement("div"), document.createElement("div")];
+    a.append(ca);
+    b.append(cb);
+    document.body.append(a, b);
+    const dropped = { a: [] as string[][], b: [] as string[][] };
+    const offA = addDropZone({ el: ca, onDrag: () => {}, onDrop: (p) => dropped.a.push(p) });
+    const offB = addDropZone({ el: cb, onDrag: () => {}, onDrop: (p) => dropped.b.push(p) });
+    restore = pointAt(() => document.body);
+    handleDragEvent({ type: "drop", paths: ["/x/a.png"], position: { x: 1, y: 1 } });
+    expect(dropped).toEqual({ a: [], b: [["/x/a.png"]] });
+    offA();
+    offB();
+    a.remove();
+    b.remove();
+  });
+
   it("only the pane under the pointer reacts, and only it gets the drop", async () => {
     renderApp();
     const [a, b] = [document.createElement("div"), document.createElement("div")];
@@ -217,14 +246,16 @@ describe("images agents send", () => {
     const shots = within(strip).getAllByRole("button", { name: /^Open vitro: screenshot, 960 × 600/ });
     expect(shots).toHaveLength(2);
 
-    // A click opens the large view, titled by the tool call.
+    // A click opens the mosaic of the group's images; a tile opens one large, titled by the tool call.
     await user.click(shots[1]);
-    const dialog = await screen.findByRole("dialog");
+    const mosaic = await screen.findByRole("dialog");
+    await user.click(within(mosaic).getByRole("button", { name: /^Open image 2 of 2/ }));
+    const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByText("vitro: screenshot")).toBeInTheDocument();
     expect(within(dialog).getByText(/960 × 600 · 55\.9 KB · PNG/)).toBeInTheDocument();
     // An agent's screenshot isn't a file of the user's: nothing to reveal.
     expect(within(dialog).queryByRole("button", { name: /Reveal|Show in file manager/ })).toBeNull();
-    await user.keyboard("{Escape}");
+    await user.keyboard("{Escape}{Escape}");
 
     // Opened, the group shows the cards, each with its image under its title.
     await user.click(within(log).getByRole("button", { name: /4 tool calls/ }));

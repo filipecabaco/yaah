@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
+import { displayTitle } from "@/lib/chat-title";
 import {
   Bot,
   ChevronDown,
@@ -544,7 +545,7 @@ function ProjectNode({
                   onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
                   className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs"
                 >
-                  <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                  <span className="min-w-0 flex-1 truncate">{displayTitle(c.title)}</span>
                   {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
                 </button>
                 <ChatRowActions chat={c} />
@@ -763,7 +764,7 @@ function QuickChats({
                 className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm"
               >
                 <MessageSquare className="size-3.5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                <span className="min-w-0 flex-1 truncate">{displayTitle(c.title)}</span>
                 {folder && <span className="max-w-20 shrink-0 truncate font-mono text-2xs text-muted-foreground">{folder}</span>}
                 {c.running && <Loader2 className="size-3 shrink-0 animate-spin text-muted-foreground" />}
               </button>

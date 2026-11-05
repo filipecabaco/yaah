@@ -6,6 +6,7 @@ import { emit } from "@tauri-apps/api/event";
 import type { AgentReport, Entry } from "@/lib/api";
 import type { Attachment, Described, Staged } from "@/lib/attachments";
 import { asObj, asString } from "@/lib/narrow";
+import { isMac } from "@/lib/shortcuts";
 import { baseName, home, type Mock, type Replies } from "./context";
 import type { Recording } from "./fixtures";
 
@@ -216,7 +217,8 @@ const pathFor = (f: FakeFile) => (f.folder ? `${home}/workspace/${f.name}` : `${
 /** Install the converter, and `window.__yaahMock` for scripts. Returns its uninstall. */
 export function installDragBridge(m: Mock): () => void {
   const dpr = () => window.devicePixelRatio || 1;
-  const at = (x: number, y: number) => ({ x: x * dpr(), y: y * dpr() });
+  // As the app's webview reports it: physical pixels, except on macOS where it is points.
+  const at = (x: number, y: number) => ({ x: x * (isMac ? 1 : dpr()), y: y * (isMac ? 1 : dpr()) });
   const register = (files: FakeFile[]) =>
     files.map((f) => {
       const path = pathFor(f);

@@ -152,7 +152,7 @@ describe("switching a chat's agent", () => {
   it("from ⌘K, and refused while a turn runs", async () => {
     const { user } = renderApp();
     const log = await sendInQuickChat(user, "write hello.txt please");
-    await within(log).findByRole("group", { name: "Permission requested" });
+    await screen.findByRole("group", { name: "Permission requested" });
 
     await user.click(screen.getByRole("button", { name: /^Search/ }));
     let dialog = await screen.findByRole("dialog", { name: "Command palette" });

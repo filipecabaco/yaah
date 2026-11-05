@@ -20,11 +20,14 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { CodeBlock, HighlightedLine } from "@/components/code-block";
 import { Markdown } from "@/components/markdown";
 import { useFind } from "@/components/ui-blocks/find";
 import { growAttr, growClass, useUiView } from "@/components/ui-view";
 import { formatBytes, formatDuration, plural } from "@/lib/format";
 import { fuzzyScore } from "@/lib/fuzzy";
+import { detectLanguage } from "@/lib/language";
+import { useTokens } from "@/lib/use-tokens";
 import { asArray, asNumber, isObj, optArray, optText, show } from "@/lib/narrow";
 import { cn } from "@/lib/utils";
 import {
@@ -744,7 +747,7 @@ export function TextFileView({
       </Suspense>
     );
   else if (!raw && kind === "json") body = <JsonView text={text} find={find} />;
-  else body = <Lines lines={lines} start={start} highlight={marked} follow={follow} find={find} />;
+  else body = <Lines lines={lines} path={path} start={start} highlight={marked} follow={follow} find={find} />;
   return (
     <div className="flex flex-col gap-1">
       {header}
@@ -754,7 +757,21 @@ export function TextFileView({
 }
 
 /** Short text sits inline; longer text gets line numbers, a scroll box and search. */
-function Lines({ lines, start, highlight, follow, find }: { lines: string[]; start: number; highlight: number[]; follow: boolean; find?: string }) {
+function Lines({
+  lines,
+  path,
+  start,
+  highlight,
+  follow,
+  find,
+}: {
+  lines: string[];
+  path?: string;
+  start: number;
+  highlight: number[];
+  follow: boolean;
+  find?: string;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const { expanded } = useUiView();
   // Follow the end as the text grows, unless the reader scrolled up to look at something.
@@ -766,6 +783,11 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
   const current = at.q === q ? at.i : 0;
   const [wrap, setWrap] = useState(false);
   const [all, setAll] = useState(false);
+  const code = useMemo(() => lines.join("\n"), [lines]);
+  const tokens = useTokens(
+    code,
+    useMemo(() => detectLanguage({ path, text: code }), [path, code]),
+  );
   const hits = useMemo(() => {
     const out: number[] = [];
     if (q) for (let i = 0; i < lines.length; i++) if (lines[i].toLowerCase().includes(q)) out.push(i);
@@ -783,7 +805,7 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
     if (box.current && el) box.current.scrollTop = Math.max(0, el.offsetTop - box.current.offsetTop - box.current.clientHeight / 3);
   }, [target]);
   const short = lines.length <= 12 && lines.every((l) => l.length <= 120) && !highlight.length && !follow && !query;
-  if (short) return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-code whitespace-pre">{lines.join("\n")}</pre>;
+  if (short) return <CodeBlock text={code} path={path} numbered={false} className="max-h-none overflow-x-auto p-2" />;
   const cap = all || target >= 2000 ? lines.length : 2000;
   const hitSet = new Set(hits);
   const width = String(start + lines.length).length;
@@ -817,6 +839,7 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
         ref={box}
         onScroll={(e) => (pinned.current = e.currentTarget.scrollHeight - e.currentTarget.scrollTop - e.currentTarget.clientHeight < 24)}
         {...growAttr(expanded)}
+        data-highlight={tokens ? "" : undefined}
         className={cn("overflow-auto py-1 font-mono text-code leading-(--code-row)", growClass(expanded, "max-h-[480px]"))}
       >
         {lines.slice(0, cap).map((line, i) => (
@@ -836,7 +859,7 @@ function Lines({ lines, start, highlight, follow, find }: { lines: string[]; sta
               {start + i}
             </span>
             <span className={cn("pr-3", wrap ? "break-all whitespace-pre-wrap" : "whitespace-pre")}>
-              {hitSet.has(i) ? <Mark text={line} q={query} /> : line || " "}
+              {hitSet.has(i) ? <Mark text={line} q={query} /> : tokens?.[i]?.length ? <HighlightedLine tokens={tokens[i]} /> : line || " "}
             </span>
           </div>
         ))}

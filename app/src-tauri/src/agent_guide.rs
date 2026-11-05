@@ -535,9 +535,9 @@ mod tests {
         ] {
             assert!(text.contains(must), "the guide mentions {must}");
         }
-        // About 4 characters a token: 250-560 tokens for the guide itself (raised from 460 for the "reference, don't paste" rule).
+        // About 4 characters a token: 250-640 tokens for the guide itself (raised from 460 for the "reference, don't paste" rule, then to 640 for the fewer-permission-prompts rule).
         let own = guide_text(&[]).len() / 4;
-        assert!((250..=560).contains(&own), "the guide is about {own} tokens");
+        assert!((250..=640).contains(&own), "the guide is about {own} tokens");
         assert!(!text.contains("{{"), "every placeholder is filled");
     }
 

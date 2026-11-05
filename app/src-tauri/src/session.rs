@@ -43,6 +43,7 @@ use permissions::{Auto, McpServer};
 /// Where trust applies (this chat, its project, quick chats, all chats), kept in `settings.json`.
 mod trust;
 use trust::Trust;
+pub mod shell_rules;
 pub use trust::{PermissionSettings, TrustView};
 /// Model, effort and the agent's other settings (ACP session config options).
 mod config;
@@ -106,6 +107,10 @@ pub enum Entry {
         content: Value,
         locations: Value,
         raw_input: Value,
+        /// The sub-agent's tool call (Claude Code's `Agent`/`Task`) this call was made inside, from
+        /// `_meta.claudeCode.parentToolUseId`. The UI nests it under that call's card.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_tool_call_id: Option<String>,
     },
     Plan {
         entries: Value,
@@ -283,6 +288,10 @@ pub struct SessionInfo {
     /// are its project's), by id: their tools are allowed without asking.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub trusted_mcp_servers: Vec<String>,
+    /// Shell command prefixes (`pnpm vitest`) the user allowed for this chat: a compound command is
+    /// allowed when every sub-command matches one (`session/shell_rules.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shell_rules: Vec<String>,
     /// The agent's settings (model, effort, …) and the user's picks, kept across restarts (`session/config.rs`).
     #[serde(default, skip_serializing_if = "ChatConfig::is_empty")]
     pub config: ChatConfig,
@@ -1335,6 +1344,7 @@ impl Hub {
             dirs_changed: false,
             remembered: BTreeMap::new(),
             trusted_mcp_servers: vec![],
+            shell_rules: vec![],
             config: ChatConfig { options: offered, ..ChatConfig::default() },
             queue: Queue::default(),
         };
@@ -1959,21 +1969,34 @@ impl Hub {
     pub fn respond_permission(&self, session_id: &str, index: usize, option_id: Option<&str>) -> Result<(), String> {
         let mut in_quick_chats = None;
         let res = self.shared.with(session_id, |s| {
-            let Some(Entry::Permission { request_id, options, chosen, title, answer, .. }) = s.entry_mut(index) else {
+            let Some(Entry::Permission { request_id, options, chosen, title, answer, tool_call_id, .. }) = s.entry_mut(index) else {
                 return Err("no permission request at that index".to_owned());
             };
             if chosen.is_some() {
                 return Err("permission request already answered".into());
             }
+            // yaah's own "allow, and keep this rule" option: the agent is answered with its one-off allow,
+            // so nothing the agent persists (its own settings files, folder grants) is written.
+            let rule_pick = option_id == Some(shell_rules::RULE_OPTION)
+                && option_kind(options, shell_rules::RULE_OPTION).as_deref() == Some(shell_rules::RULE_KIND);
+            let wire_id = if rule_pick {
+                Some(permissions::allow_once(options).ok_or("this request has no one-off allow to answer with")?.0)
+            } else {
+                option_id.map(str::to_owned)
+            };
             *chosen = Some(match option_id {
                 Some(id) => option_name(options, id).unwrap_or_else(|| id.to_owned()),
                 None => "cancelled".into(),
             });
-            let kind = option_id.and_then(|id| option_kind(options, id));
+            let kind = if rule_pick { Some("allow_once".to_owned()) } else { option_id.and_then(|id| option_kind(options, id)) };
             *answer = Some(if option_id.is_some() { kind.clone().unwrap_or_default() } else { "cancelled".into() });
             let (request_id, title) = (request_id.clone(), title.clone());
-            let sent = s.waiting.remove(&index).is_some_and(|(_, r)| r.ok(request_id, outcome(option_id)));
+            let (tool_call_id, chosen_name) = (tool_call_id.clone(), chosen.clone().unwrap_or_default());
+            let sent = s.waiting.remove(&index).is_some_and(|(_, r)| r.ok(request_id, outcome(wire_id.as_deref())));
             self.shared.emit_entry(s, index);
+            if rule_pick {
+                self.keep_rule_and_answer_matching(s, tool_call_id.as_deref(), &chosen_name);
+            }
 
             if let Some(kind @ ("allow_always" | "reject_always")) = kind.as_deref()
                 && title != UNNAMED_REQUEST
@@ -2011,6 +2034,41 @@ impl Hub {
             self.replay_in_quick_chats(session_id, &title, &kind);
         }
         res
+    }
+
+    /// The user chose yaah's rule option: keep the rules it named (this chat's, or its project's or quick
+    /// chats') and answer the other waiting requests they now allow, with their one-off allow.
+    fn keep_rule_and_answer_matching(&self, s: &mut Session, tool_call_id: Option<&str>, offered_name: &str) {
+        let scope = self.shared.rules_scope(&s.info);
+        let Some(rules) = shell_rules::learn(s, scope, tool_call_id, offered_name) else { return };
+        if scope == permissions::Scope::Chat {
+            self.shared.trust_changed();
+        } else {
+            self.shared.keep_shared_rules(&s.info, &rules);
+        }
+        let shared_rules = self.shared.shared_shell_rules(&s.info);
+        let mut waiting: Vec<usize> = s.waiting.keys().copied().collect();
+        waiting.sort_unstable();
+        for i in waiting {
+            let Some(Entry::Permission { request_id, options, chosen: None, tool_call_id: Some(t), .. }) = s.entries.get(i).map(|e| &**e) else {
+                continue;
+            };
+            let Some(Entry::Tool { kind, raw_input, .. }) = s.tool_index.get(t).map(|&j| &*s.entries[j]) else { continue };
+            if self.shared.ask_is_forced(s, options) {
+                continue;
+            }
+            let Some((id, name, auto)) = shell_rules::auto(&s.info, &shared_rules, kind.as_deref(), raw_input, options) else { continue };
+            let request_id = request_id.clone();
+            if let Some(Entry::Permission { chosen, answer, auto: slot, .. }) = s.entry_mut(i) {
+                *chosen = Some(name);
+                *answer = Some("allow_once".into());
+                *slot = Some(auto);
+            }
+            if let Some((_, r)) = s.waiting.remove(&i) {
+                r.ok(request_id, outcome(Some(&id)));
+            }
+            self.shared.emit_entry(s, i);
+        }
     }
 
     fn start_gate(&self, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -2133,7 +2191,25 @@ fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &
                         let tool_name = permissions::tool_name(tool_call);
                         let req = permissions::Request { kind, locations, raw_input, server: mcp_server.as_ref(), tool_name };
                         shared.auto_answer(s, &req, &options).map(|(option_id, name, auto)| (option_id, name, "allow_once", auto))
-                    });
+                    })
+                    // A shell command whose every sub-command the user allowed a rule for: in this chat, its
+                    // project or quick chats.
+                    .or_else(|| {
+                        let shared_rules = shared.shared_shell_rules(&s.info);
+                        shell_rules::auto(&s.info, &shared_rules, kind, raw_input, &options)
+                            .map(|(option_id, name, auto)| (option_id, name, "allow_once", auto))
+                    })
+                    // A command made only of built-in read-only ones (`ls`, `git status`, `cat x | head`).
+                    .or_else(|| {
+                        shared
+                            .read_only_on()
+                            .then(|| shell_rules::builtin(&s.info, kind, raw_input, &options))
+                            .flatten()
+                            .map(|(option_id, name, auto)| (option_id, name, "allow_once", auto))
+                    })
+                    // The agent insisted on asking (a user's `ask` rule, a risky action): ask and deny win over
+                    // every allow yaah would answer with. A remembered "no" still applies.
+                    .filter(|(_, _, kind, _)| *kind != "allow_once" || !shared.ask_is_forced(s, &options));
                 // A command that only reads the agent's own saved tool results still asks, but says so.
                 let note = (picked.is_none() && kind == Some("execute"))
                     .then(|| shared.own_dirs(s).and_then(|own| permissions::command_note(kind, raw_input, &own)))
@@ -2146,6 +2222,13 @@ fn handle_incoming(shared: &Shared, generation: u64, msg: Incoming, responder: &
                     None => (None, None, None),
                 };
                 let waiting = chosen.is_none();
+                // A command that can have rules says so on its "don't ask again" button, which keeps exactly those.
+                let mut options = options;
+                if waiting && !shared.ask_is_forced(s, &options) {
+                    let scope = shared.rules_scope(&s.info);
+                    let current = if scope == permissions::Scope::Chat { s.info.shell_rules.clone() } else { shared.shared_shell_rules(&s.info) };
+                    shell_rules::offer(&s.info, scope, &current, kind, raw_input, &mut options);
+                }
                 let i = shared
                     .push(s, Entry::Permission { request_id: id.clone(), tool_call_id, title, options, chosen, answer, auto, mcp_server, note });
                 if waiting {
@@ -2358,15 +2441,19 @@ fn upsert_tool(shared: &Shared, s: &mut Session, update: &Value) {
             content: field("content").unwrap_or_else(|| json!([])),
             locations: field("locations").unwrap_or_else(|| json!([])),
             raw_input: field("rawInput").unwrap_or_default(),
+            parent_tool_call_id: update["_meta"]["claudeCode"]["parentToolUseId"].as_str().map(str::to_owned),
         };
         let i = shared.push(s, entry);
         s.tool_index.insert(id.to_owned(), i);
         return;
     };
     // The whole tool entry goes again (`session-entry`): updates replace fields wholesale, so a diff would save little.
-    if let Some(Entry::Tool { title, kind, status, content, locations, raw_input, .. }) = s.entry_mut(i) {
+    if let Some(Entry::Tool { title, kind, status, content, locations, raw_input, parent_tool_call_id, .. }) = s.entry_mut(i) {
         if let Some(v) = str_field("title") {
             *title = v;
+        }
+        if parent_tool_call_id.is_none() {
+            *parent_tool_call_id = update["_meta"]["claudeCode"]["parentToolUseId"].as_str().map(str::to_owned);
         }
         for (slot, key) in [(kind, "kind"), (status, "status")] {
             if let Some(v) = str_field(key) {
@@ -2685,6 +2772,7 @@ fn test_info(id: &str) -> SessionInfo {
         dirs_changed: false,
         remembered: BTreeMap::new(),
         trusted_mcp_servers: vec![],
+        shell_rules: vec![],
         config: ChatConfig::default(),
         queue: Queue::default(),
     }
@@ -3288,6 +3376,7 @@ mod persistence_tests {
                 content: json!([]),
                 locations: json!([]),
                 raw_input: Value::Null,
+                parent_tool_call_id: None,
             },
             Entry::Permission {
                 request_id: json!(3),
@@ -3814,6 +3903,7 @@ mod lock_tests {
                 content: json!([{ "type": "content", "content": { "type": "text", "text": "x".repeat(4000) } }]),
                 locations: json!([]),
                 raw_input: json!({}),
+                parent_tool_call_id: None,
             })
             .collect()
     }
@@ -4082,6 +4172,7 @@ mod switch_tests {
             content: json!([]),
             locations: json!([]),
             raw_input: Value::Null,
+            parent_tool_call_id: None,
         }
     }
 

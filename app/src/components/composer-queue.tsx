@@ -1,5 +1,5 @@
 // The messages a chat has queued, above its composer: each one's text (one line, opens to
-// all of it), what it carries, and Send now, Edit, Move up/down and Remove; the count, why
+// all of it), what it carries, and Edit, Move up/down and Remove; one Send now in the header for the first; the count, why
 // the queue is paused and Resume. Rust owns the queue (session/queue.rs): the order, when
 // the next goes and when it pauses. This draws what it sends and asks it for changes.
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
@@ -80,6 +80,9 @@ export function ComposerQueue({ session, pane }: { session: SessionInfo; pane?: 
   );
   if (!items.length) return live;
   const paused = pauseText(queue);
+  // One Send now for the whole queue: it sends the first waiting message (Move up puts another there).
+  const next = items.find((x) => !x.sending);
+  const sendNow = next ? () => act(() => api.queueSendNow(sessionId, next.id), `Sending next: ${oneLine(next.text)}`) : null;
   const detail = queue?.paused?.detail;
   return (
     <section aria-labelledby={headingId} data-slot="composer-queue" className="@container border-t pt-2 pb-1">
@@ -103,6 +106,13 @@ export function ComposerQueue({ session, pane }: { session: SessionInfo; pane?: 
           ) : (
             <span className="text-muted-foreground">{session.running ? "Sent one at a time as each turn ends" : "Sending…"}</span>
           )}
+          {sendNow && (
+            <Hint label="Stop the running turn and send the first queued message now">
+              <Button size="xs" variant="ghost" className="ml-auto" onClick={sendNow} disabled={items.some((x) => x.sending)}>
+                <SendHorizontal /> Send now
+              </Button>
+            </Hint>
+          )}
         </div>
         {paused && detail && <p className="text-xs [overflow-wrap:anywhere] text-muted-foreground">{detail}</p>}
         <ol ref={list} className="flex max-h-48 flex-col overflow-y-auto" aria-labelledby={headingId}>
@@ -114,7 +124,6 @@ export function ComposerQueue({ session, pane }: { session: SessionInfo; pane?: 
               count={items.length}
               note={configNote(session, item)}
               blocked={items.some((x) => x.sending)}
-              onSendNow={() => act(() => api.queueSendNow(sessionId, item.id), `Sending next: ${oneLine(item.text)}`)}
               onEdit={() => edit(item, i)}
               onRemove={() => remove(item, i)}
               onMove={(by) => move(item, i, by)}
@@ -134,7 +143,6 @@ function QueueRow({
   count,
   note,
   blocked,
-  onSendNow,
   onEdit,
   onRemove,
   onMove,
@@ -143,9 +151,8 @@ function QueueRow({
   index: number;
   count: number;
   note: string | null;
-  /** A queued message is on its way: Send now waits for it. */
+  /** A queued message is on its way, so the first row can't move up past it. */
   blocked: boolean;
-  onSendNow: () => void;
   onEdit: () => void;
   onRemove: () => void;
   onMove: (by: -1 | 1) => void;
@@ -199,11 +206,6 @@ function QueueRow({
       </div>
       {!sending && (
         <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label={`Actions for “${short}”`}>
-          <Hint label="Stop the running turn and send this next">
-            <Button size="xs" variant="ghost" onClick={onSendNow} disabled={blocked}>
-              <SendHorizontal /> Send now
-            </Button>
-          </Hint>
           <Hint label="Edit: back in the message box">
             <Button size="icon-xs" variant="ghost" onClick={onEdit} aria-label={`Edit “${short}”`}>
               <Pencil />

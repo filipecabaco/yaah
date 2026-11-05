@@ -2,6 +2,7 @@
 //! show it (`session/trust.rs`). Trusting from a card is `commands::trust_mcp_server`.
 #![allow(clippy::needless_pass_by_value, reason = "Tauri hands commands their arguments and state by value")]
 
+use crate::session::permissions::Scope;
 use crate::session::{Hub, PermissionSettings, TrustView};
 use std::sync::Arc;
 use tauri::State;
@@ -11,6 +12,12 @@ use tauri::State;
 #[tauri::command]
 pub fn trust_scope(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<TrustView, String> {
     hub.trust_scope(&session_id)
+}
+
+/// A chat header's Remove on a command rule ("don't ask again for `pnpm vitest` commands") in `scope`.
+#[tauri::command]
+pub fn forget_shell_rule(hub: State<'_, Arc<Hub>>, session_id: String, rule: String, scope: Scope) -> Result<(), String> {
+    hub.forget_shell_rule(&session_id, &rule, scope)
 }
 
 /// Settings → Chat: the permission switches and the servers trusted in all chats.

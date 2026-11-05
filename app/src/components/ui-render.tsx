@@ -677,6 +677,9 @@ const originOf = (src: string) => (isWebUrl(src) ? new URL(src).origin : src);
 function BrowserFrame({ src, title, height }: { src: string; title?: string; height: number }) {
   const [reloads, setReloads] = useState(0);
   const [allowed, setAllowed] = useState<string | null>(null);
+  // A frame swallows the wheel (its page scrolls, or not, and the transcript never hears of it), so
+  // it is inert until clicked and inert again once the pointer leaves.
+  const [engaged, setEngaged] = useState(false);
   const ok = frameable(src);
   const preview = ok && isLocalPreview(src);
   const loaded = ok && (preview || allowed === src);
@@ -703,16 +706,21 @@ function BrowserFrame({ src, title, height }: { src: string; title?: string; hei
         </Button>
       </div>
       {loaded ? (
-        <iframe
-          key={reloads}
-          src={src}
-          title={title ?? "Page preview"}
-          style={{ height }}
-          className="block w-full bg-white"
-          sandbox="allow-scripts allow-forms allow-modals allow-same-origin"
-          referrerPolicy="no-referrer"
-          allow="clipboard-write"
-        />
+        <div className="relative" onMouseLeave={() => setEngaged(false)}>
+          {!engaged && (
+            <div data-slot="frame-shield" className="absolute inset-0 z-10" title="Click to interact" onPointerDown={() => setEngaged(true)} />
+          )}
+          <iframe
+            key={reloads}
+            src={src}
+            title={title ?? "Page preview"}
+            style={{ height }}
+            className="block w-full bg-white"
+            sandbox="allow-scripts allow-forms allow-modals allow-same-origin"
+            referrerPolicy="no-referrer"
+            allow="clipboard-write"
+          />
+        </div>
       ) : ok ? (
         <div className="flex flex-col items-start gap-2 p-4 text-sm">
           <p className="text-muted-foreground">

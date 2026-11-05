@@ -225,6 +225,7 @@ pub fn run() {
             commands::untrust_chat_mcp_server,
             commands::set_trust_read_only,
             permission_commands::trust_scope,
+            permission_commands::forget_shell_rule,
             permission_commands::permission_settings,
             permission_commands::set_allow_web_search,
             permission_commands::untrust_mcp_server_everywhere,

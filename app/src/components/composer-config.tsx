@@ -12,6 +12,7 @@ import { isFocusedPane } from "@/components/chat-context";
 import { api, type ConfigChoice, type ConfigOption, type SessionInfo } from "@/lib/api";
 import { onOpenComposerConfig, type ConfigRole } from "@/lib/app-events";
 import { choiceName, configOption } from "@/lib/composer-config";
+import { ComposerMode } from "@/components/composer-mode";
 
 /** Past this many values the list gets a search box. */
 const SEARCH_FROM = 8;
@@ -35,22 +36,25 @@ export function ComposerConfig({ session, pane, onError }: { session: SessionInf
     [session.sessionId, pane],
   );
 
-  if (roles.length === 0) return null;
+  if (roles.length === 0) return <ComposerMode session={session} pane={pane} onError={onError} />;
   return (
-    // Shrinks before the toolbar wraps: the values truncate (the full one is in the label and tooltip).
-    <div role="group" aria-label="Model and effort for the next message" className="flex min-w-0 items-center gap-0.5">
-      {roles.map((role) => (
-        <ConfigPicker
-          key={role}
-          role={role}
-          session={session}
-          option={configOption(session, role)!}
-          open={open === role}
-          onOpenChange={(o) => setOpen(o ? role : null)}
-          onError={onError}
-        />
-      ))}
-    </div>
+    <>
+      {/* Shrinks before the toolbar wraps: the values truncate (the full one is in the label and tooltip). */}
+      <div role="group" aria-label="Model and effort for the next message" className="flex min-w-0 items-center gap-0.5">
+        {roles.map((role) => (
+          <ConfigPicker
+            key={role}
+            role={role}
+            session={session}
+            option={configOption(session, role)!}
+            open={open === role}
+            onOpenChange={(o) => setOpen(o ? role : null)}
+            onError={onError}
+          />
+        ))}
+      </div>
+      <ComposerMode session={session} pane={pane} onError={onError} />
+    </>
   );
 }
 

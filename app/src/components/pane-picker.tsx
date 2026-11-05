@@ -1,5 +1,6 @@
 // What a new split pane opens on: start a chat (with an agent) or a project, or
 // open any chat or project, through one search ranked like the ⌘K palette's.
+import { displayTitle } from "@/lib/chat-title";
 import { lazy, Suspense, useMemo, useState, type ReactNode } from "react";
 import { FolderGit2, FolderOpen, FolderPlus, GitCompare, History, Loader2, MessageSquare, MessageSquarePlus, SquareTerminal, X } from "lucide-react";
 import { TerminalFolders } from "@/components/terminal/terminal-folders";
@@ -109,7 +110,7 @@ export function PanePicker({
       chats.map((c): Entry => ({
         id: `chat-${c.sessionId}`,
         icon: c.running ? <Loader2 className="animate-spin" /> : <MessageSquare />,
-        label: c.title,
+        label: displayTitle(c.title),
         detail: c.projectId ? (projectName.get(c.projectId) ?? "") : "quick chat",
         run: () => onOpen({ kind: "chat", id: c.sessionId }),
       })),

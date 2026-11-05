@@ -1,6 +1,6 @@
 // Markdown help in the real message box: lists continue on Shift+Enter, ⌘B over a selection
 // is bold (and doesn't fold the sidebar), and a URL pasted over a selection becomes a link.
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { isMac } from "@/lib/shortcuts";
 import { renderApp } from "@/test/app";
@@ -48,5 +48,23 @@ describe("markdown in the message box", () => {
     box.setSelectionRange(4, 10);
     fireEvent.paste(box, { clipboardData: { files: [], getData: (t: string) => (t === "text/plain" ? "https://github.com/x/y/pull/9" : "") } });
     await waitFor(() => expect(box.value).toBe("see [the PR](https://github.com/x/y/pull/9)"));
+  });
+});
+
+describe("markdown in a sent message", () => {
+  it("draws the user's own message as Markdown, keeping its line breaks", async () => {
+    const { user, box } = await composer();
+    await user.click(box);
+    fireEvent.change(box, { target: { value: "say **loudly** with `code`\n- one\n- two" } });
+    await user.type(box, "{Enter}");
+    const log = screen.getByRole("log", { name: "Conversation" });
+    const bold = await within(log).findByText("loudly");
+    expect(bold.tagName).toBe("STRONG");
+    expect(within(log).getByText("code").tagName).toBe("CODE");
+    expect(
+      within(log)
+        .getAllByRole("listitem")
+        .map((li) => li.textContent),
+    ).toEqual(["one", "two"]);
   });
 });

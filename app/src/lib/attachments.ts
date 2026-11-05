@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { AgentReport } from "@/lib/api";
 import { Lru } from "@/lib/lru";
 import { plural } from "@/lib/format";
+import { isMac } from "@/lib/shortcuts";
 
 export type AttachmentKind = "image" | "file" | "folder";
 
@@ -131,12 +132,23 @@ let current: { paths: string[]; items: Described[]; zone: Zone | null } | null =
 
 function zoneAt(x: number, y: number): Zone | null {
   const hit = document.elementFromPoint(x, y);
-  if (!hit) return null;
-  return [...zones].find((z) => z.el.contains(hit)) ?? null;
+  const under = hit && [...zones].find((z) => z.el.contains(hit));
+  if (under) return under;
+  // Nothing under the pointer (a gap, a stale position): the focused pane takes it.
+  return [...zones].find((z) => z.el.closest("[data-pane-id]")?.hasAttribute("data-focused")) ?? null;
 }
 
-/** A physical position (what Tauri sends) in CSS pixels. */
-const logical = (p: { x: number; y: number }) => ({ x: p.x / (window.devicePixelRatio || 1), y: p.y / (window.devicePixelRatio || 1) });
+/**
+ * A drag-drop position in CSS pixels. Tauri types it as physical, but on macOS wry reports the
+ * webview's own points (already CSS pixels); dividing those by the devicePixelRatio on a Retina
+ * screen lands the pointer in the top-left, i.e. in the left-most pane. Elsewhere it is physical.
+ */
+export function cssPoint(p: { x: number; y: number }, dpr: number, mac: boolean) {
+  const k = mac ? 1 : dpr || 1;
+  return { x: p.x / k, y: p.y / k };
+}
+
+const logical = (p: { x: number; y: number }) => cssPoint(p, window.devicePixelRatio, isMac);
 
 function retarget(zone: Zone | null) {
   if (!current) return;

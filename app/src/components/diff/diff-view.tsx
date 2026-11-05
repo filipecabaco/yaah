@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
-import { inlineMax, useUiView } from "@/components/ui-view";
+import { useUiView } from "@/components/ui-view";
 import { menuActions } from "@/lib/menu-actions";
 import { changed, hunkRange, type DiffFile, type Hunk } from "@/components/diff/model";
 import { hunkTop, rowsOf, useWrap, WRAP_MAX } from "@/components/diff/lines";
@@ -157,7 +157,7 @@ function FileBlock({ file, folded, wrap, onReview }: { file: DiffFile; folded: b
       {open && (
         <>
           {/* Unwrapped, the file scrolls sideways as one block, line numbers staying put. */}
-          <div className={cn("overflow-auto", inlineMax(expanded, "max-h-[28rem]"))}>
+          <div className={expanded ? "overflow-auto" : "overflow-x-auto"}>
             <div className={wrap ? "w-full" : "w-max min-w-full"}>
               {shown.map((h, i) => (
                 <HunkView key={i} file={file} hunk={h} index={i} wrap={wrap} />

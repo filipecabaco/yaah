@@ -67,6 +67,9 @@ export function toolLabel(call: ToolCallLike): ToolLabel | null {
       busy: false,
     };
   }
+  // A shell call that says what it does (Bash's `description`): that is the label, the command is the body.
+  const said = shellDescription(call.rawInput);
+  if (!server && said) return { text: said, busy: false };
   if (server) {
     const arg = mainArgument(input);
     const name = tool === server ? "" : tool.replace(/_/g, " ");
@@ -220,4 +223,68 @@ function mainArgument(input: Input): string | null {
 function clip(s: string, max: number): string {
   const one = s.replace(/\s+/g, " ");
   return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+}
+
+/** A shell call's own words for what it does (`description`), when it gave both those and a command. */
+export function shellDescription(rawInput: unknown): string | null {
+  const input = asInput(rawInput);
+  return str(input.command) && str(input.description) ? str(input.description) : null;
+}
+
+/** A shell call's command, if its input has one. */
+export function shellCommand(rawInput: unknown): string | null {
+  const c = asInput(rawInput).command;
+  return typeof c === "string" && c.trim() ? c : null;
+}
+
+/**
+ * The `command` of a shell call's input shown as JSON text (`{"command": "…"}`), the way some agents
+ * echo a pending call. Null for anything else.
+ */
+export function shellCommandFromJson(text: string): string | null {
+  const t = text.trim();
+  if (!t.startsWith("{")) return null;
+  try {
+    const parsed: unknown = JSON.parse(t);
+    return shellCommand(parsed);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A command one step per line: split on `&&`, `||`, `;` and newlines outside quotes, the operator
+ * kept at the end of its line. Only for reading; the command itself is never changed.
+ */
+export function commandLines(command: string): string[] {
+  const lines: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  const push = (extra = "") => {
+    const l = (cur.trimEnd() + extra).trim();
+    if (l) lines.push(l);
+    cur = "";
+  };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      cur += c;
+      if (c === "\\" && quote === '"' && i + 1 < command.length) cur += command[++i];
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      cur += c;
+    } else if (c === "\\" && i + 1 < command.length) {
+      cur += c + command[++i];
+    } else if ((c === "&" || c === "|") && command[i + 1] === c) {
+      push(` ${c}${c}`);
+      i++;
+    } else if (c === ";") push(";");
+    else if (c === "\n") push();
+    else cur += c;
+  }
+  push();
+  return lines;
 }

@@ -444,6 +444,18 @@
   background: var(--background);
   border: 1px solid var(--border);
 }
+/* The user's own bubble: Markdown, but a single line break they typed stays a line break. */
+.user-message .markdown p,
+.user-message .markdown li {
+  white-space: pre-wrap;
+}
+.user-message .markdown > * + * {
+  margin-top: 0.5em;
+}
+.user-message .markdown pre {
+  background: var(--background);
+  border: 1px solid var(--border);
+}
 /* A short reply fits its text; one holding wide blocks (code, tables, diagrams, rendered MDX parts)
    takes the full measure, so those have room and the bubble doesn't jump as they arrive. */
 .agent-reply:has(pre, table, svg, details, [role="alert"], [role="tablist"]) {
@@ -492,4 +504,12 @@
   .yaah-mark[data-assemble] rect {
     animation: none;
   }
+}
+
+/* Syntax highlighting (lib/highlight.ts): each token carries both themes' colours; the mode picks one. */
+.hl {
+  color: var(--shiki-light);
+}
+.dark .hl {
+  color: var(--shiki-dark);
 }

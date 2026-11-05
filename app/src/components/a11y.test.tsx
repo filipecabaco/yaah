@@ -126,19 +126,21 @@ async function openChat(entries: Entry[]) {
 
 describe("KB-1: answering a permission moves the keyboard on", () => {
   it("to the next request waiting, then to the message box", async () => {
-    const log = await openChat([{ type: "user", text: "go", attachments: [] }, pending(1, "Run ls"), pending(2, "Run pwd")]);
-    const [first, second] = await within(log).findAllByRole("group", { name: "Permission requested" });
-    const yes = within(first).getByRole("button", { name: "Yes" });
-    yes.focus();
-    fireEvent.click(yes);
+    // Two waiting requests are one grouped card; answering one leaves the other as a single card.
+    await openChat([{ type: "user", text: "go", attachments: [] }, pending(1, "Run ls"), pending(2, "Run pwd")]);
+    const batch = await screen.findByRole("group", { name: "2 permission requests" });
+    const allow = within(batch).getByRole("button", { name: "Allow: Run ls" });
+    allow.focus();
+    fireEvent.click(allow);
+    const second = await screen.findByRole("group", { name: "Permission requested" });
     await waitFor(() => expect(within(second).getByRole("button", { name: "Yes" })).toHaveFocus());
     fireEvent.click(within(second).getByRole("button", { name: "Yes" }));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Message" })).toHaveFocus());
   });
 
   it("announces a waiting request at once (SR-2)", async () => {
-    const log = await openChat([{ type: "user", text: "go", attachments: [] }, pending(1, "Run ls")]);
-    const card = await within(log).findByRole("group", { name: "Permission requested" });
+    await openChat([{ type: "user", text: "go", attachments: [] }, pending(1, "Run ls")]);
+    const card = await screen.findByRole("group", { name: "Permission requested" });
     expect(within(card).getByRole("alert")).toHaveTextContent("Permission requested: Run ls");
   });
 });

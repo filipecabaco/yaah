@@ -36,10 +36,10 @@ const claudeEfforts: Record<string, string[]> = {
   "sonnet[1m]": ["low", "medium", "high"],
 };
 
-function claude(model: string, effort: string): ConfigOption[] {
+function claude(model: string, effort: string, mode = "default"): ConfigOption[] {
   const levels = claudeEfforts[model];
   return [
-    select("mode", "Mode", "mode", "default", named(["default", "acceptEdits", "plan"])),
+    select("mode", "Mode", "mode", mode, named(["default", "acceptEdits", "auto", "plan", "bypassPermissions"])),
     select("model", "Model", "model", model, claudeModels, "model"),
     ...(levels
       ? [
@@ -81,7 +81,7 @@ function opencode(model: string, effort: string): ConfigOption[] {
 }
 
 /** What a profile's agent offers with `model` and `effort` in use; empty for agents without settings. */
-function offered(state: State, accountId: string, model?: string, effort?: string): ConfigOption[] {
+function offered(state: State, accountId: string, model?: string, effort?: string, mode?: string): ConfigOption[] {
   const p = state.profiles.find((x) => x.id === accountId);
   if (p?.preset === "opencode")
     return opencode(model ?? (p.provider ? `openrouter/${p.provider.model}` : openRouterModels[0].value), effort ?? "default");
@@ -89,7 +89,7 @@ function offered(state: State, accountId: string, model?: string, effort?: strin
     const models = [{ value: "auto", name: "Auto (Gemini 2.5)" }, ...named(["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"])];
     return [{ ...select("model", "Model", "model", model ?? "auto", models, "model"), source: "models" }];
   }
-  if (p?.preset === "claude" && p.id !== "personal") return claude(model ?? "default", effort ?? "default");
+  if (p?.preset === "claude" && p.id !== "personal") return claude(model ?? "default", effort ?? "default", mode);
   return [];
 }
 
@@ -140,7 +140,8 @@ export function configReplies(m: Mock): Replies {
       await m.wait(250);
       const model = configId === "model" ? value : find(s.config?.options, "model")?.current;
       const effort = configId === option.id && option.role === "effort" ? value : find(s.config?.options, "effort")?.current;
-      const options = offered(state, s.accountId, model, effort);
+      const mode = configId === "mode" ? value : s.config?.options?.find((o) => o.id === "mode")?.current;
+      const options = offered(state, s.accountId, model, effort, mode);
       const choices = { ...(s.config?.choices ?? {}), [configId]: value };
       // The picks follow what the agent has now (an effort level the new model lacks goes back to default).
       for (const id of Object.keys(choices)) {

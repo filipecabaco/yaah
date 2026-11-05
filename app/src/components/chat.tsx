@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { displayTitle } from "@/lib/chat-title";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { ComposerConfig } from "@/components/composer-config";
+import { ModeStatus } from "@/components/composer-mode";
 import { COMPOSER_INPUT, ComposerShell, TRIGGER_HELP, TriggerHint } from "@/components/composer-shell";
 import { ComposerQueue } from "@/components/composer-queue";
 import { Mark } from "@/components/brand/mark";
@@ -48,9 +50,18 @@ import type { Starting } from "@/hooks/use-yaah";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { applyEdit, markdownKey, pasteLink } from "@/lib/markdown-input";
 import { isMac } from "@/lib/shortcuts";
+import { cycleMode } from "@/lib/app-events";
+import { modeOption, nextSafeMode } from "@/lib/permission-modes";
 import { ChatContext, isFocusedPane, onDraft } from "@/components/chat-context";
-import { TranscriptEntry } from "@/components/entries";
+import { TranscriptEntry, WaitingChip } from "@/components/entries";
 import { ToolGroup } from "@/components/tool-group";
+import { PermissionDock } from "@/components/permission-dock";
+import { SubagentCard } from "@/components/subagent-card";
+import { SubagentStrip } from "@/components/subagent-strip";
+import { agentSummary } from "@/lib/subagents";
+import { WorkingIndicator } from "@/components/working-indicator";
+import { turnPhase, useTurnStart } from "@/lib/working";
+import { pendingBatch } from "@/lib/permission-batch";
 import { foldedPermissions, isAutoAllowed } from "@/lib/permissions";
 import { isRunning, transcriptRows, useGroupToolCalls } from "@/lib/tool-groups";
 import { FolderMenu } from "@/components/menus";
@@ -59,6 +70,7 @@ import { AttachButton, AttachmentChips, DropOverlay } from "@/components/compose
 import { ReferenceChips, ReferenceRow } from "@/components/references";
 import { ActiveDescendant } from "@/components/active-descendant";
 import { useReferenceSuggestions } from "@/hooks/use-reference-suggestions";
+import { loadDraft, saveDraft } from "@/lib/composer-draft";
 import { connectLabel, findReferenceTrigger, referenceHeading, standing } from "@/lib/references";
 import { openSettings } from "@/lib/app-events";
 import type { Reference, ReferenceService } from "@/lib/api";
@@ -102,7 +114,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
 
   return (
     // `@container/chat`: the header drops what matters least as its pane narrows (in rem, so it follows the interface size).
-    <div ref={dropRoot} {...dropHandlers} className="@container/chat relative flex h-full min-w-0 flex-1 flex-col">
+    <div ref={dropRoot} {...dropHandlers} data-chat-root className="@container/chat relative flex h-full min-w-0 flex-1 flex-col">
       {/* Drags the window (its buttons stay buttons): there's no title bar on macOS. */}
       <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
         {project && (
@@ -121,8 +133,8 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
           </>
         )}
         {/* The title gives way last: the folder path shrinks first and goes in a narrow pane; the full title is its tooltip. */}
-        <h1 className="min-w-[4ch] truncate font-medium" title={session.title}>
-          {session.title}
+        <h1 className="min-w-[4ch] truncate font-medium" title={displayTitle(session.title)}>
+          {displayTitle(session.title)}
         </h1>
         <button
           type="button"
@@ -154,7 +166,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
           </span>
         </FolderMenu>
         <ChatFolders roots={roots} pending={!!session.dirsChanged} inProject={!!project} onAdd={() => openAddRepos(session.sessionId, pane)} />
-        {trustView && trustView.servers.length > 0 && (
+        {trustView && (trustView.servers.length > 0 || trustView.shellRules.length > 0) && (
           <TrustedServers
             view={trustView}
             onRemove={(server, scope) =>
@@ -166,6 +178,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
                     ? api.untrustProjectMcpServer(project.id, server)
                     : api.untrustChatMcpServer(session.sessionId, server)
             }
+            onForgetRule={(rule, scope) => trustApi.forgetShellRule(session.sessionId, rule, scope)}
             onManage={project ? () => onOpenProject(project.id) : undefined}
           />
         )}
@@ -187,6 +200,10 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
         <Transcript key={session.sessionId} sessionId={session.sessionId} running={session.running} onLogin={onLogin} />
       </ChatContext.Provider>
       <ComposerQueue session={session} pane={pane} />
+      {/* A waiting permission request is answered here, always in the same place (components/permission-dock.tsx). */}
+      <ChatContext.Provider value={chat}>
+        <PermissionDock session={session} />
+      </ChatContext.Provider>
       <Composer key={session.sessionId} session={session} agentLabel={agent?.label} pane={pane} />
       <DropOverlay drag={drag} agent={agent?.label ?? "This agent"} report={agent?.report} />
     </div>
@@ -200,29 +217,34 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
 function TrustedServers({
   view,
   onRemove,
+  onForgetRule,
   onManage,
 }: {
   view: TrustView;
   onRemove: (server: string, scope: TrustScope) => Promise<unknown>;
+  onForgetRule: (rule: string, scope: TrustScope) => Promise<unknown>;
   onManage?: () => void;
 }) {
-  const { servers, here } = view;
+  const { servers, shellRules, here } = view;
+  const count = servers.length + shellRules.length;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="flex min-h-[24px] shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-          aria-label={`${plural(servers.length, "trusted MCP server")} ${SCOPE_WORDS[here]}`}
+          aria-label={`${[servers.length > 0 && plural(servers.length, "trusted MCP server"), shellRules.length > 0 && plural(shellRules.length, "allowed command rule")].filter(Boolean).join(" and ")} ${SCOPE_WORDS[here]}`}
         >
           <ShieldCheck className="size-3.5" aria-hidden />
-          <span className="tabular-nums">{servers.length}</span>
+          <span className="tabular-nums">{count}</span>
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="max-w-96 min-w-64">
-        <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
-          All tools of these MCP servers run without asking {SCOPE_WORDS[here]}, including ones that change things
-        </DropdownMenuLabel>
+        {servers.length > 0 && (
+          <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+            All tools of these MCP servers run without asking {SCOPE_WORDS[here]}, including ones that change things
+          </DropdownMenuLabel>
+        )}
         {servers.map((s) => (
           <DropdownMenuItem
             key={`${s.scope}:${s.id}`}
@@ -234,6 +256,25 @@ function TrustedServers({
             <X className="text-muted-foreground" aria-hidden />
           </DropdownMenuItem>
         ))}
+        {shellRules.length > 0 && (
+          <>
+            {servers.length > 0 && <DropdownMenuSeparator />}
+            <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+              Commands starting with these run without asking, when every part of the command matches one
+            </DropdownMenuLabel>
+            {shellRules.map((r) => (
+              <DropdownMenuItem
+                key={`${r.scope}:${r.rule}`}
+                onSelect={() => void onForgetRule(r.rule, r.scope).catch((e: unknown) => console.error("could not forget", r.rule, e))}
+                aria-label={`Stop allowing ${r.rule} commands ${SCOPE_WORDS[r.scope]}`}
+              >
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">{r.rule}</span>
+                {r.scope !== here && <span className="shrink-0 text-2xs text-muted-foreground">{SCOPE_WORDS[r.scope]}</span>}
+                <X className="text-muted-foreground" aria-hidden />
+              </DropdownMenuItem>
+            ))}
+          </>
+        )}
         {onManage && (
           <>
             <DropdownMenuSeparator />
@@ -320,7 +361,10 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
   const folded = useMemo(() => foldedPermissions(entries), [entries]);
   const grouping = useGroupToolCalls();
   const rows = useMemo(() => transcriptRows(entries, first, folded, grouping), [entries, first, folded, grouping]);
+  const batch = useMemo(() => pendingBatch(entries), [entries]);
   const inTurnAt = (i: number) => running && i > turnStart;
+  const agents = useMemo(() => agentSummary(entries, (i) => running && i > turnStart), [entries, running, turnStart]);
+  const turnSince = useTurnStart(sessionId, running, turnStart);
   const entryAt = (i: number) => {
     const entry = entries[i];
     if (!entry) return null;
@@ -405,8 +449,17 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      <SubagentStrip agents={agents} />
       <div
         ref={scroller}
+        // Scrolling up is the user taking the wheel: let go of the end now, before the next
+        // layout growth can pull them back (a small nudge stays inside the 40px "at end" band).
+        onWheel={(e) => {
+          if (e.deltaY < 0 && pinned.current && e.currentTarget.scrollHeight > e.currentTarget.clientHeight) {
+            pinned.current = false;
+            setAway(true);
+          }
+        }}
         onScroll={(e) => {
           const el = e.currentTarget;
           const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
@@ -447,8 +500,8 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
           )}
           {rows.map((row) => {
             // Rust addresses entries by index and only ever appends or replaces in place, so the index is a stable key.
-            const i = row.kind === "entry" ? row.index : row.indices[0];
-            const last = row.kind === "entry" ? row.index : row.indices[row.indices.length - 1];
+            const i = row.kind === "group" ? row.indices[0] : row.index;
+            const last = row.kind === "group" ? row.indices[row.indices.length - 1] : row.kind === "batch" ? entries.length : row.index;
             // Off-screen entries skip layout and paint (content-visibility), so long chats open fast.
             const offScreen = last < entries.length - LIVE_TAIL ? "transcript-entry" : undefined;
             if (row.kind === "entry")
@@ -457,6 +510,41 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
                   {entryAt(i)}
                 </div>
               );
+            if (row.kind === "batch") {
+              const items = (batch?.items ?? []).flatMap((m) => {
+                const entry = entries[m.index];
+                return entry?.type === "permission"
+                  ? [{ ...m, entry, toolInput: entry.toolCallId ? toolInputs.get(entry.toolCallId) : undefined }]
+                  : [];
+              });
+              if (items.length < 2) return null;
+              return (
+                <div key={`b${i}`} className={offScreen}>
+                  <WaitingChip what={`${items.length} permission requests`} />
+                </div>
+              );
+            }
+            if (row.kind === "agent") {
+              const tool = entries[row.index];
+              if (tool?.type !== "tool") return null;
+              const calls = row.inside.map((j) => entries[j]).filter((e): e is ToolEntry => e?.type === "tool");
+              return (
+                <div key={i} className={offScreen}>
+                  <SubagentCard
+                    id={`${sessionId}:agent:${tool.toolCallId}`}
+                    tool={tool}
+                    inTurn={inTurnAt(row.index)}
+                    calls={calls}
+                    items={row.inside.map((j) => {
+                      const e = entries[j];
+                      return { index: j, waiting: e?.type === "permission" && e.chosen == null };
+                    })}
+                    card={entryAt}
+                    asking={row.asking}
+                  />
+                </div>
+              );
+            }
             const tools = row.indices.map((j) => entries[j]).filter((e): e is ToolEntry => e?.type === "tool");
             return (
               <div key={`g${i}`} className={offScreen}>
@@ -470,7 +558,13 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
               </div>
             );
           })}
-          {running && entries[entries.length - 1]?.type === "user" && <p className="text-xs text-muted-foreground">Working…</p>}
+          {running && turnSince != null && (
+            <WorkingIndicator
+              phase={turnPhase(entries, turnStart)}
+              since={turnSince}
+              agents={agents.filter((a) => a.status === "running" || a.status === "background").length}
+            />
+          )}
         </div>
       </div>
       {away && entries.length > 0 && (
@@ -544,15 +638,17 @@ const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const mentioned = (text: string, label: string) => new RegExp(`(^|\\s)@${escapeRe(label)}(?=\\s|$)`).test(text);
 
 function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLabel?: string; pane?: string }) {
-  const [text, setText] = useState("");
-  const [caret, setCaret] = useState(0);
+  // The composer remounts per chat, so the unsent text is kept per session (lib/composer-draft.ts).
+  const [draft] = useState(() => loadDraft(session.sessionId));
+  const [text, setText] = useState(draft?.text ?? "");
+  const [caret, setCaret] = useState(draft?.text.length ?? 0);
   const [error, setError] = useState<unknown>(null);
   /** A model or effort pick the agent refused (shown under the frame, with the send error). */
   const [configError, setConfigError] = useState<unknown>(null);
   /** Files picked from the @ list: label → absolute path. */
-  const [mentions, setMentions] = useState<Record<string, string>>({});
+  const [mentions, setMentions] = useState<Record<string, string>>(draft?.mentions ?? {});
   /** Tracker items picked from the # list, by token (Rust reads every token in the text on send). */
-  const [picked, setPicked] = useState<Record<string, Reference>>({});
+  const [picked, setPicked] = useState<Record<string, Reference>>(draft?.picked ?? {});
   const [sending, setSending] = useState(false);
   /** The last file search, for the @ trigger that started at `start`. */
   const [found, setFound] = useState<{ start: number; files: FileMatch[] } | null>(null);
@@ -560,6 +656,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
   /** Start of a trigger closed with Esc; it stays closed until it's gone. */
   const [dismissed, setDismissed] = useState<number | null>(null);
   const [focused, setFocused] = useState(true);
+  useEffect(() => saveDraft(session.sessionId, { text, mentions, picked }), [session.sessionId, text, mentions, picked]);
   const input = useRef<HTMLTextAreaElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const moveCaret = useRef<number | null>(null);
@@ -770,6 +867,16 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
       applyEdit(el, md);
       return;
     }
+    // Shift+Tab cycles the permission mode, as in the CLI (never into an unrestricted one). While a turn
+    // runs, or with no other mode to go to, it stays the browser's own "previous field".
+    if (e.key === "Tab" && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && !session.running) {
+      const mode = modeOption(session);
+      if (mode && nextSafeMode(mode)) {
+        e.preventDefault();
+        cycleMode(session.sessionId, pane);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void send();
@@ -976,6 +1083,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
         <p id={hintId} className="sr-only">
           {TRIGGER_HELP}
         </p>
+        <ModeStatus session={session} />
         <ErrorText error={error} className="mt-1.5" />
         <ErrorText error={configError} className="mt-1.5" />
       </div>

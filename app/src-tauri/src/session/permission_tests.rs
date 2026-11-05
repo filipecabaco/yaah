@@ -749,3 +749,379 @@ fn a_claude_chats_saved_tool_results_are_read_without_asking() {
     let (_, e) = ask(&hub, &responder, "chat-1", 4, read("r3", "acp-1"), options());
     assert!(waiting(&e));
 }
+
+// ── built-in read-only commands, shared shell rules, ask rules ──────────────
+
+fn bash(id: &str, command: &str) -> Value {
+    json!({ "toolCallId": id, "title": command, "kind": "execute", "name": "Bash", "rawInput": { "command": command, "description": "d" } })
+}
+
+#[test]
+fn built_in_read_only_commands_are_allowed_marked_and_the_rest_ask() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, mut rx) = Responder::for_test();
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    std::fs::create_dir_all(h.base.join("work/repo/src")).unwrap();
+    let safe = [
+        "ls -la",
+        "pwd",
+        "cat src/lib.rs | head -20",
+        "git status",
+        "git diff --stat | tail -3",
+        "cd src && ls; pwd",
+        "git log -n 5 --oneline",
+        "wc -l src/lib.rs 2>&1",
+        "echo hi",
+        "git branch --list",
+    ];
+    for (n, command) in (1..).zip(safe) {
+        let (_, e) = ask(&hub, &responder, "c", n, bash(&format!("s{n}"), command), options());
+        assert_eq!(auto_why(&e), Some((shell_rules::BUILTIN.into(), "built-in: read-only command".into())), "{command}");
+    }
+    assert_eq!(answers(&mut rx).len(), safe.len());
+    let unsafe_ = [
+        "rm -rf x",
+        "find . -exec rm {} ;",
+        "find . -name x",
+        "sed -i s/a/b/ f",
+        "awk 'BEGIN{system(\"id\")}'",
+        "xargs ls",
+        "env",
+        "ls | xargs rm",
+        "cat a > b",
+        "cat a >> b",
+        "ls $(pwd)",
+        "ls `pwd`",
+        "ls; rm x",
+        "ls && git push",
+        "cat /etc/passwd",
+        "cat ../x",
+        "cat ~/.ssh/id_rsa",
+        "git -c core.pager=x status",
+        "git diff --output=out",
+        "git diff --ext-diff",
+        "git log --textconv",
+        "git branch newbranch",
+        "git branch -D x",
+        "git tag v1",
+        "git checkout x",
+        "git commit -m x",
+        "git show --output=x",
+        "sort -o out in",
+        "grep -f pats x",
+        "grep -rf pats x",
+        "tail -f log",
+        "date -s 2020-01-01",
+        "hostname evil",
+        "curl http://example.com",
+        "python -c 1",
+        "bash -c ls",
+        "cp a b",
+        "mkdir x",
+        "touch x",
+        "tee x",
+    ];
+    for (n, command) in (100..).zip(unsafe_) {
+        let (_, e) = ask(&hub, &responder, "c", n, bash(&format!("u{n}"), command), options());
+        assert!(waiting(&e), "{command} must ask: {e:?}");
+    }
+    assert_eq!(answers(&mut rx), [], "nothing else was answered for the user");
+    // A symlink in the repository that points out of it.
+    std::os::unix::fs::symlink(h.base.join(".config"), h.base.join("work/repo/link")).unwrap();
+    let (_, e) = ask(&hub, &responder, "c", 300, bash("l1", "ls link"), options());
+    assert!(waiting(&e), "{e:?}");
+    // Not an `execute`, or other tool input beside the command: ask.
+    let odd = json!({ "toolCallId": "o1", "title": "ls", "kind": "other", "rawInput": { "command": "ls" } });
+    assert!(waiting(&ask(&hub, &responder, "c", 301, odd, options()).1));
+    let extra = json!({ "toolCallId": "o2", "title": "ls", "kind": "execute", "rawInput": { "command": "ls", "dangerouslyDisableSandbox": true } });
+    assert!(waiting(&ask(&hub, &responder, "c", 302, extra, options()).1));
+}
+
+/// A Claude Code request without a "don't ask again" option is one the CLI insisted on (a user's `ask`
+/// rule, a risky action): yaah's own allows must not answer it. Other agents are not judged by it.
+#[test]
+fn an_ask_the_agent_insisted_on_is_never_answered_by_yaah() {
+    let h = Home::new();
+    let agents = h.base.join(".config/yaah/agents.json");
+    let profile = json!({ "id": "claude-personal", "label": "Claude", "preset": "claude", "command": "claude-agent-acp" });
+    let codex = json!({ "id": "codex", "label": "Codex", "preset": "codex", "command": "codex-acp" });
+    std::fs::write(&agents, json!({ "profiles": [profile, codex] }).to_string()).unwrap();
+    let store: &'static Store = Box::leak(Box::new(Store::at(agents)));
+    let hub = Hub::open(quiet(), Some(h.base.join("sessions")), store);
+    hub.use_permission_file_at(h.settings());
+    let (responder, mut rx) = Responder::for_test();
+    let mut info = test_info("cl");
+    info.cwd = h.p("work/repo");
+    info.account_id = "claude-personal".into();
+    let mut s = Session::new(info, vec![], None);
+    s.attached = Some(GEN);
+    hub.shared.insert(s);
+    attach(&hub, "other", &h.p("work/repo"), None, None);
+    hub.shared.with("other", |s| s.info.account_id = "codex".into()).unwrap();
+    let once_only = json!([{ "optionId": "o", "name": "Yes", "kind": "allow_once" }, { "optionId": "r", "name": "No", "kind": "reject_once" }]);
+    let read = |id: &str| {
+        let file = h.p("work/repo");
+        json!({ "toolCallId": id, "title": "Read", "kind": "read", "name": "Read", "rawInput": { "file_path": file }, "locations": [{ "path": file }] })
+    };
+    // With the option: answered as before. Without it: asks, for every kind of allow yaah has.
+    assert_eq!(auto_reason(&ask(&hub, &responder, "cl", 1, read("r1"), options()).1), Some(permissions::READ_ONLY));
+    assert_eq!(auto_reason(&ask(&hub, &responder, "cl", 2, bash("b1", "git status"), options()).1), Some(shell_rules::BUILTIN));
+    assert!(waiting(&ask(&hub, &responder, "cl", 3, read("r2"), once_only.clone()).1));
+    assert!(waiting(&ask(&hub, &responder, "cl", 4, bash("b2", "git status"), once_only.clone()).1));
+    assert!(waiting(&ask(&hub, &responder, "cl", 5, linear("l1", "get_issue"), once_only.clone()).1));
+    hub.shared.with("cl", |s| s.info.shell_rules = vec!["pnpm vitest".into()]).unwrap();
+    assert!(waiting(&ask(&hub, &responder, "cl", 6, bash("b3", "pnpm vitest run"), once_only.clone()).1), "a rule doesn't beat the agent's ask");
+    let remembered = json!({ "toolCallId": "m", "title": "npm test", "kind": "execute" });
+    hub.shared.with("cl", |s| s.info.remembered.insert("npm test".into(), "allow_always".into())).unwrap();
+    assert!(waiting(&ask(&hub, &responder, "cl", 7, remembered, once_only.clone()).1));
+    assert_eq!(answers(&mut rx), [(1, "o".to_owned()), (2, "o".to_owned())]);
+    // Another agent (not Claude Code) has no such signal: unchanged.
+    let (_, e) = ask(&hub, &responder, "other", 8, bash("b4", "git status"), once_only);
+    assert_eq!(auto_reason(&e), Some(shell_rules::BUILTIN));
+}
+
+/// "Don't ask again" on a command in a project chat is kept for the project: another chat of it, and a
+/// restart, are answered; a chat outside the project is not. It can be taken back, and only yaah's
+/// `settings.json` is written.
+#[test]
+fn a_dont_ask_again_on_a_command_covers_the_whole_project() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, mut rx) = Responder::for_test();
+    for id in ["p1", "p2"] {
+        attach(&hub, id, &h.p("work/repo"), Some("proj"), None);
+    }
+    attach(&hub, "solo", &h.p("work/repo"), None, None);
+    let (i, e) = ask(&hub, &responder, "p1", 1, bash("t1", "cd . && pnpm vitest run a; pnpm tsc --noEmit | tail -3"), options());
+    let Entry::Permission { options: shown, .. } = &e else { panic!() };
+    assert_eq!(shown[3]["name"], "Allow pnpm vitest, pnpm tsc in this project (runs project code)");
+    hub.respond_permission("p1", i, Some(shell_rules::RULE_OPTION)).unwrap();
+    assert!(hub.transcript("p1").unwrap().info.shell_rules.is_empty(), "kept with the project, not the chat");
+    assert_eq!(h.saved()["shellRules"], json!({ "project:proj": ["pnpm vitest", "pnpm tsc"] }));
+    let (_, e) = ask(&hub, &responder, "p2", 2, bash("t2", "pnpm tsc --noEmit"), options());
+    assert_eq!(auto_why(&e), Some((permissions::REMEMBERED.into(), "rule: pnpm tsc".into())));
+    // One part without a rule asks; a chat outside the project asks.
+    assert!(waiting(&ask(&hub, &responder, "p2", 3, bash("t3", "pnpm tsc; pnpm install"), options()).1));
+    assert!(waiting(&ask(&hub, &responder, "solo", 4, bash("t4", "pnpm tsc"), options()).1));
+    let view = hub.trust_scope("p2").unwrap();
+    assert_eq!(
+        view.shell_rules.iter().map(|r| (r.rule.as_str(), r.scope)).collect::<Vec<_>>(),
+        [("pnpm vitest", Scope::Project), ("pnpm tsc", Scope::Project)]
+    );
+    assert_eq!(hub.trust_scope("solo").unwrap().shell_rules.len(), 0);
+
+    drop(hub);
+    let hub = h.hub();
+    attach(&hub, "p3", &h.p("work/repo"), Some("proj"), None);
+    assert_eq!(auto_reason(&ask(&hub, &responder, "p3", 5, bash("t5", "pnpm vitest run b"), options()).1), Some(permissions::REMEMBERED));
+    hub.forget_shell_rule("p3", "pnpm vitest", Scope::Project).unwrap();
+    assert_eq!(h.saved()["shellRules"], json!({ "project:proj": ["pnpm tsc"] }));
+    assert!(waiting(&ask(&hub, &responder, "p3", 6, bash("t6", "pnpm vitest run b"), options()).1));
+    assert!(hub.forget_shell_rule("p3", "pnpm tsc", Scope::QuickChats).is_err(), "not a scope this chat has");
+    let got = answers(&mut rx);
+    assert_eq!(got.iter().filter(|(_, o)| o == "o").count(), 3, "the agent got its one-off allow (p1, p2, p3): {got:?}");
+    assert!(!got.iter().any(|(_, o)| o == "a" || o == shell_rules::RULE_OPTION), "never its own always: {got:?}");
+}
+
+#[test]
+fn quick_chats_share_command_rules_and_a_lone_chat_keeps_its_own() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, _rx) = Responder::for_test();
+    attach(&hub, "q1", &h.p(".yaah/scratch/q1"), None, None);
+    attach(&hub, "q2", &h.p(".yaah/scratch/q2"), None, None);
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    let (i, e) = ask(&hub, &responder, "q1", 1, bash("a", "cargo test"), options());
+    let Entry::Permission { options: shown, .. } = &e else { panic!() };
+    assert_eq!(shown[3]["name"], "Allow cargo test in quick chats (runs project code)");
+    hub.respond_permission("q1", i, Some(shell_rules::RULE_OPTION)).unwrap();
+    assert_eq!(h.saved()["shellRules"], json!({ "quick": ["cargo test"] }));
+    assert_eq!(auto_reason(&ask(&hub, &responder, "q2", 2, bash("b", "cargo test --lib"), options()).1), Some(permissions::REMEMBERED));
+    let (i, e) = ask(&hub, &responder, "c", 3, bash("c", "cargo test"), options());
+    let Entry::Permission { options: shown, .. } = &e else { panic!() };
+    assert_eq!(shown[3]["name"], "Allow cargo test in this chat (runs project code)");
+    hub.respond_permission("c", i, Some(shell_rules::RULE_OPTION)).unwrap();
+    assert_eq!(hub.transcript("c").unwrap().info.shell_rules, ["cargo test"]);
+    assert_eq!(h.saved()["shellRules"], json!({ "quick": ["cargo test"] }), "a lone chat's rule isn't shared");
+}
+
+#[test]
+fn saved_shell_rules_are_checked_when_read() {
+    let h = Home::new();
+    std::fs::write(
+        h.settings(),
+        json!({ "shellRules": {
+            "project:proj": ["pnpm vitest", "rm", "git push", "pnpm run build", "git status", "git status", 7, "sh -c x"],
+            "other": ["pnpm tsc"], "project:": ["pnpm tsc"], "quick": "nope"
+        } })
+        .to_string(),
+    )
+    .unwrap();
+    let hub = h.hub();
+    attach(&hub, "p", &h.p("work/repo"), Some("proj"), None);
+    let rules = hub.shared.shared_shell_rules(&hub.shared.with_info("p", Clone::clone).unwrap());
+    assert_eq!(rules, ["pnpm vitest", "git status"], "only rules the table could have written, once");
+    // Malformed as a whole: nothing.
+    std::fs::write(h.settings(), "{ not json").unwrap();
+    let hub = h.hub();
+    attach(&hub, "p", &h.p("work/repo"), Some("proj"), None);
+    assert_eq!(hub.shared.shared_shell_rules(&hub.shared.with_info("p", Clone::clone).unwrap()), Vec::<String>::new());
+}
+
+// ── review fixes: bare repositories, the separate rule option, rule removal ──
+
+fn plant_bare(dir: &Path, marker: &Path) {
+    for d in ["objects", "refs"] {
+        std::fs::create_dir_all(dir.join(d)).unwrap();
+    }
+    std::fs::write(dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(dir.join("config"), format!("[core]\n\tbare = true\n\tfsmonitor = touch {}\n", marker.display())).unwrap();
+}
+
+/// A plain folder that looks like a git directory (config naming a program) is never a place `git`
+/// runs unasked: not through the built-in list, not through a learned rule, not with a `cd` before it.
+#[test]
+fn git_in_a_fake_bare_repository_asks_and_never_runs() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, mut rx) = Responder::for_test();
+    let marker = h.base.join("PWNED");
+    plant_bare(&h.base.join("work/repo/sub"), &marker);
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    hub.shared.with("c", |s| s.info.shell_rules = vec!["git status".into(), "git log".into(), "git diff".into()]).unwrap();
+    for (n, command) in (1..).zip(["cd sub && git status", "cd sub && git log -n 3", "cd sub && git diff", "cd sub && ls && git status"]) {
+        let (_, e) = ask(&hub, &responder, "c", n, bash(&format!("g{n}"), command), options());
+        assert!(waiting(&e), "{command}: {e:?}");
+    }
+    // The chat's own folder being the fake repository.
+    attach(&hub, "bare", &h.p("work/repo/sub"), None, None);
+    hub.shared.with("bare", |s| s.info.shell_rules = vec!["git status".into()]).unwrap();
+    assert!(waiting(&ask(&hub, &responder, "bare", 10, bash("b1", "git status"), options()).1));
+    assert!(waiting(&ask(&hub, &responder, "bare", 11, bash("b2", "git log"), options()).1));
+    // A normal chat folder still works, and so does `ls` in the fake one.
+    assert_eq!(auto_reason(&ask(&hub, &responder, "c", 20, bash("ok", "git status"), options()).1), Some(permissions::REMEMBERED));
+    assert_eq!(auto_reason(&ask(&hub, &responder, "bare", 21, bash("ls", "ls"), options()).1), Some(shell_rules::BUILTIN));
+    assert_eq!(answers(&mut rx).len(), 2);
+    assert!(!marker.exists(), "git never ran");
+}
+
+#[test]
+fn the_built_in_read_only_list_follows_the_trust_read_only_setting() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, _rx) = Responder::for_test();
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    assert_eq!(auto_reason(&ask(&hub, &responder, "c", 1, bash("a", "ls"), options()).1), Some(shell_rules::BUILTIN));
+    hub.set_trust_read_only(false);
+    assert!(waiting(&ask(&hub, &responder, "c", 2, bash("b", "ls"), options()).1));
+    hub.set_trust_read_only(true);
+    assert_eq!(auto_reason(&ask(&hub, &responder, "c", 3, bash("c", "ls"), options()).1), Some(shell_rules::BUILTIN));
+}
+
+/// yaah's rule option sits beside the agent's options, which keep their ids and names. Choosing it answers
+/// the agent with its one-off allow (never its "always", which would write the agent's own settings),
+/// keeps the rule in yaah, remembers no exact command, tells the header, and answers siblings it allows.
+#[test]
+fn the_rule_option_is_separate_and_answers_the_agent_with_its_one_off_allow() {
+    let h = Home::new();
+    let events: Arc<std::sync::Mutex<Vec<String>>> = Arc::default();
+    let sink = events.clone();
+    let emit: Emit = Arc::new(move |name: &str, _: Value| sink.lock().unwrap().push(name.to_owned()));
+    let hub = Hub::open(emit, Some(h.base.join("sessions")), Store::user());
+    hub.set_scratch_root(h.base.join(".yaah/scratch"));
+    hub.use_permission_file_at(h.settings());
+    let (responder, mut rx) = Responder::for_test();
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    let (first, e) = ask(&hub, &responder, "c", 1, bash("t1", "pnpm vitest run a"), options());
+    let Entry::Permission { options: shown, .. } = &e else { panic!() };
+    assert_eq!(shown.as_array().unwrap()[..3], options().as_array().unwrap()[..], "the agent's options are untouched");
+    assert_eq!(
+        shown[3],
+        json!({ "optionId": shell_rules::RULE_OPTION, "name": "Allow pnpm vitest in this chat (runs project code)", "kind": shell_rules::RULE_KIND })
+    );
+    let (_, sibling) = ask(&hub, &responder, "c", 2, bash("t2", "pnpm vitest run b | tail -2"), options());
+    assert!(waiting(&sibling));
+    let (_, other) = ask(&hub, &responder, "c", 3, bash("t3", "pnpm tsc"), options());
+    assert!(waiting(&other));
+    events.lock().unwrap().clear();
+
+    hub.respond_permission("c", first, Some(shell_rules::RULE_OPTION)).unwrap();
+    let got = answers(&mut rx);
+    assert_eq!(got, [(1, "o".to_owned()), (2, "o".to_owned())], "the agent's allow_once, never its always or our id");
+    let info = hub.transcript("c").unwrap();
+    assert_eq!(info.info.shell_rules, ["pnpm vitest"]);
+    assert!(info.info.remembered.is_empty(), "no exact command kept");
+    let Entry::Permission { chosen, answer, .. } = &info.entries[first] else { panic!() };
+    assert_eq!((chosen.as_deref(), answer.as_deref()), (Some("Allow pnpm vitest in this chat (runs project code)"), Some("allow_once")));
+    let perms: Vec<&Entry> = info.entries.iter().filter(|e| matches!(e, Entry::Permission { .. })).collect();
+    assert_eq!(auto_why(perms[1]), Some((permissions::REMEMBERED.into(), "rule: pnpm vitest".into())));
+    assert!(waiting(perms[2]), "a command the rule doesn't cover still asks");
+    assert!(events.lock().unwrap().iter().any(|e| e == "trust-changed"), "the header list refreshes");
+
+    // The agent's own "always" is not ours: it is the agent's, and nothing of yaah's is kept for it.
+    attach(&hub, "d", &h.p("work/repo"), None, None);
+    let (i, _) = ask(&hub, &responder, "d", 4, bash("u1", "pnpm eslint src"), options());
+    hub.respond_permission("d", i, Some("a")).unwrap();
+    assert_eq!(answers(&mut rx), [(4, "a".to_owned())]);
+    assert_eq!(hub.transcript("d").unwrap().info.shell_rules, Vec::<String>::new());
+}
+
+#[test]
+fn no_rule_option_when_the_cap_is_reached_or_the_agent_has_no_one_off_allow() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, _rx) = Responder::for_test();
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    let count = |e: &Entry| match e {
+        Entry::Permission { options, .. } => options.as_array().unwrap().len(),
+        _ => 0,
+    };
+    assert_eq!(count(&ask(&hub, &responder, "c", 1, bash("a", "cargo clippy"), options()).1), 4);
+    hub.shared.with("c", |s| s.info.shell_rules = (0..64).map(|i| format!("pnpm x{i}")).collect()).unwrap();
+    assert_eq!(count(&ask(&hub, &responder, "c", 2, bash("b", "cargo clippy"), options()).1), 3, "full: not offered");
+    let always_only =
+        json!([{ "optionId": "a", "name": "Always", "kind": "allow_always" }, { "optionId": "r", "name": "No", "kind": "reject_once" }]);
+    hub.shared.with("c", |s| s.info.shell_rules.clear()).unwrap();
+    assert_eq!(count(&ask(&hub, &responder, "c", 3, bash("c", "cargo clippy"), always_only).1), 2);
+}
+
+#[test]
+fn removing_a_rule_also_removes_the_exact_commands_it_covered() {
+    let h = Home::new();
+    let hub = h.hub();
+    let (responder, _rx) = Responder::for_test();
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    hub.shared
+        .with("c", |s| {
+            s.info.shell_rules = vec!["pnpm vitest".into(), "pnpm tsc".into()];
+            s.info.remembered.insert("pnpm vitest run a".into(), "allow_always".into());
+            s.info.remembered.insert("pnpm tsc".into(), "allow_always".into());
+            s.info.remembered.insert("Read".into(), "allow_always".into());
+        })
+        .unwrap();
+    hub.forget_shell_rule("c", "pnpm vitest", Scope::Chat).unwrap();
+    let info = hub.transcript("c").unwrap().info;
+    assert_eq!(info.shell_rules, ["pnpm tsc"]);
+    assert_eq!(info.remembered.keys().map(String::as_str).collect::<Vec<_>>(), ["Read", "pnpm tsc"], "only the covered command went");
+    assert!(waiting(&ask(&hub, &responder, "c", 1, bash("a", "pnpm vitest run a"), options()).1), "asks again");
+}
+
+#[test]
+fn a_later_update_sets_the_parent_of_a_tool_call() {
+    let h = Home::new();
+    let hub = h.hub();
+    attach(&hub, "c", &h.p("work/repo"), None, None);
+    let parent = |hub: &Hub| match &hub.transcript("c").unwrap().entries[0] {
+        Entry::Tool { parent_tool_call_id, .. } => parent_tool_call_id.clone(),
+        _ => panic!(),
+    };
+    hub.shared.with("c", |s| upsert_tool(&hub.shared, s, &json!({ "toolCallId": "t", "title": "x" }))).unwrap();
+    assert_eq!(parent(&hub), None);
+    let with_parent = json!({ "toolCallId": "t", "_meta": { "claudeCode": { "parentToolUseId": "p1" } } });
+    hub.shared.with("c", |s| upsert_tool(&hub.shared, s, &with_parent)).unwrap();
+    assert_eq!(parent(&hub).as_deref(), Some("p1"));
+    let other = json!({ "toolCallId": "t", "_meta": { "claudeCode": { "parentToolUseId": "p2" } } });
+    hub.shared.with("c", |s| upsert_tool(&hub.shared, s, &other)).unwrap();
+    assert_eq!(parent(&hub).as_deref(), Some("p1"), "set once");
+}

@@ -56,7 +56,7 @@ describe("toPalette", () => {
     ["solarized-light", solarizedLight, false],
     ["dracula", dracula, true],
   ])("maps %s legibly and keeps its polarity", (_, theme, dark) => {
-    const p = toPalette(theme as VsCodeTheme);
+    const p = toPalette(theme);
     expect(p.dark).toBe(dark);
     expectLegible(p);
   });

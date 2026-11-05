@@ -136,13 +136,13 @@ describe("chartPalette", () => {
 describe("themes", () => {
   // Two light, two dark, both high-contrast, and one with its own charts.* colours.
   const sample: [string, VsCodeTheme][] = [
-    ["github-light", githubLight as VsCodeTheme],
-    ["solarized-light", solarizedLight as VsCodeTheme],
-    ["dracula", dracula as VsCodeTheme],
-    ["nord", nord as VsCodeTheme],
-    ["github-dark-high-contrast", githubDarkHc as VsCodeTheme],
-    ["github-light-high-contrast", githubLightHc as VsCodeTheme],
-    ["tokyo-night", tokyoNight as VsCodeTheme],
+    ["github-light", githubLight],
+    ["solarized-light", solarizedLight],
+    ["dracula", dracula],
+    ["nord", nord],
+    ["github-dark-high-contrast", githubDarkHc],
+    ["github-light-high-contrast", githubLightHc],
+    ["tokyo-night", tokyoNight],
   ];
 
   it.each(sample)("%s gets chart colours that pass on its own surface, or a fallback that does", (name, theme) => {
@@ -161,7 +161,7 @@ describe("themes", () => {
     expect(chartPaletteFor(toPalette(tokyoNight as VsCodeTheme)).source).toBe("theme charts");
     expect(chartPaletteFor(toPalette(dracula as VsCodeTheme)).source).toBe("terminal ANSI");
     // Nord's are pastel: below the chroma floor, so they read as gray. yaah's, nudged, instead.
-    const n = chartPaletteFor(toPalette(nord as VsCodeTheme));
+    const n = chartPaletteFor(toPalette(nord));
     expect(n.source).toBe("yaah");
     expect(n.skipped.map((s) => s.source)).toEqual(["theme charts", "terminal ANSI"]);
   });

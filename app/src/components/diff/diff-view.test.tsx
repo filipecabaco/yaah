@@ -104,7 +104,7 @@ describe("long tab-indented lines", () => {
     // The line is as wide as its text (the file box scrolls), and its numbers stay at the left edge.
     expect(line).toHaveClass("w-max");
     expect(line.firstElementChild).toHaveClass("sticky", "left-0");
-    expect(line.closest(".overflow-auto")).not.toBeNull();
+    expect(line.closest(".overflow-auto, .overflow-x-auto")).not.toBeNull();
   });
 
   it("wrap with a hanging indent under their own code", async () => {
