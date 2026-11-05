@@ -23,6 +23,8 @@ import { AgentMenu } from "@/components/agent-choice";
 import { ComposerConfig } from "@/components/composer-config";
 import { ModeStatus } from "@/components/composer-mode";
 import { COMPOSER_INPUT, ComposerShell, TRIGGER_HELP, TriggerHint } from "@/components/composer-shell";
+import { CommandDialog } from "@/components/command-dialog";
+import { commandOf, runCommand } from "@/lib/slash-commands";
 import { ComposerQueue } from "@/components/composer-queue";
 import { Mark } from "@/components/brand/mark";
 import { Hint } from "@/components/shortcuts";
@@ -40,7 +42,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Kbd } from "@/components/ui/kbd";
 import { Textarea } from "@/components/ui/textarea";
-import { api, type AgentProfile, type Entry, type FileMatch, type Project, type SessionInfo } from "@/lib/api";
+import { api, type AgentProfile, type Entry, type FileMatch, type Project, type SessionInfo, type SlashCommand } from "@/lib/api";
 import { openInTerminalApp } from "@/lib/terminal-api";
 import { SCOPE_WORDS, trustApi, useTrustView, type TrustScope, type TrustView } from "@/lib/trust-api";
 import { onOpenAddRepos, openAddRepos, openAgentSwitch } from "@/lib/app-events";
@@ -50,6 +52,7 @@ import type { Starting } from "@/hooks/use-yaah";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { applyEdit, markdownKey, pasteLink } from "@/lib/markdown-input";
 import { isMac } from "@/lib/shortcuts";
+import { MarkdownTextarea } from "@/components/markdown-textarea";
 import { cycleMode } from "@/lib/app-events";
 import { modeOption, nextSafeMode } from "@/lib/permission-modes";
 import { ChatContext, isFocusedPane, onDraft } from "@/components/chat-context";
@@ -796,13 +799,29 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
     if (reference) setPicked((p) => ({ ...p, [reference.token]: reference }));
   }
 
-  async function send() {
+  const [held, setHeld] = useState<{ command: SlashCommand; text: string } | null>(null);
+
+  async function send(now = false) {
     const prompt = text.trim();
     if ((!prompt && !attached.items.length) || attached.pending) return;
     const own = localCommands(session, pane).find((c) => prompt === c.label);
     if (own) {
       setText("");
       own.local?.();
+      return;
+    }
+    // A slash command during a turn isn't a message to queue: a dialog asks when it should run.
+    const command = session.running ? commandOf(prompt, session.commands) : undefined;
+    if (command) {
+      if (!now) return setHeld({ command, text: prompt });
+      // Ctrl/⌘+Enter: no questions, stop the turn and run it.
+      setError(null);
+      try {
+        await runCommand(session.sessionId, prompt, true);
+        setText("");
+      } catch (e) {
+        setError(e);
+      }
       return;
     }
     // While a turn runs Rust queues the message instead (session/queue.rs); the composer clears either way.
@@ -879,7 +898,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
     }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      void send();
+      void send(e.ctrlKey || e.metaKey);
     }
   }
 
@@ -1040,7 +1059,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
               </>
             }
           >
-            <Textarea
+            <MarkdownTextarea
               data-composer
               ref={input}
               // Only the pane the user is in takes the focus (a restored layout opens several chats at once).
@@ -1072,6 +1091,7 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
               aria-label="Message"
               aria-describedby={hintId}
               className={COMPOSER_INPUT}
+              overlayClassName="px-3 pt-2.5 pb-1"
               rows={1}
               role="combobox"
               aria-expanded={showList}
@@ -1080,6 +1100,16 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
             />
           </ComposerShell>
         </div>
+        {held && (
+          <CommandDialog
+            sessionId={session.sessionId}
+            command={held.command}
+            text={held.text}
+            running={session.running}
+            onClose={() => setHeld(null)}
+            onDone={() => setText("")}
+          />
+        )}
         <p id={hintId} className="sr-only">
           {TRIGGER_HELP}
         </p>

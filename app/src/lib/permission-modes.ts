@@ -34,11 +34,13 @@ export const modeText = (o: ConfigOption, value: string): ModeText => {
 
 /**
  * The mode Shift+Tab moves to: the next one the agent offers after the current, in its order, wrapping
- * round. Unrestricted modes are never reached this way (they stay behind the confirmation dialog); from
- * one, the first safe mode. Null when there is nowhere to go.
+ * round. Auto is part of the cycle (the agent still judges what is risky, as in the CLI); bypass and full
+ * access are not (they stay behind the confirmation dialog); from one of those, the first cyclable mode.
+ * Null when there is nowhere to go.
  */
 export const nextSafeMode = (o: ConfigOption): string | null => {
-  const safe = o.choices.filter((c) => !isUnrestricted(c.value) && !isUnrestricted(c.name)).map((c) => c.value);
+  const cyclable = (x: string) => isAuto(x) || !isUnrestricted(x);
+  const safe = o.choices.filter((c) => cyclable(c.value) && (isAuto(c.value) || cyclable(c.name))).map((c) => c.value);
   if (safe.length === 0 || (safe.length === 1 && safe[0] === o.current)) return null;
   const at = safe.indexOf(o.current);
   return safe[(at + 1) % safe.length];

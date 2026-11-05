@@ -13,6 +13,17 @@ async function composer() {
 }
 
 describe("markdown in the message box", () => {
+  it("draws what is typed with Markdown colours behind the real text box", async () => {
+    const { user, box } = await composer();
+    await user.click(box);
+    await user.keyboard("# Title{Shift>}{Enter}{/Shift}some `code`");
+    const overlay = document.querySelector('[data-slot="markdown-overlay"]')!;
+    // Same text in both layers, the copy hidden from screen readers; coloured once the grammar has loaded.
+    expect(overlay).toHaveAttribute("aria-hidden", "true");
+    await waitFor(() => expect(overlay.querySelectorAll(".hl").length).toBeGreaterThan(0));
+    expect(overlay.textContent?.replace(/\u200b/g, "")).toBe(box.value);
+  });
+
   it("Shift+Enter continues a list, and an empty item ends it", async () => {
     const { user, box } = await composer();
     await user.click(box);

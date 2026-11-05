@@ -5,6 +5,7 @@
 // shadcn, and every prop is read from `unknown` through lib/narrow.
 import { Component, Suspense, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { ArrowDownRight, ArrowRight, ArrowUpRight, ChevronRight, ExternalLink, RotateCw } from "lucide-react";
+import { CodeBlock } from "@/components/code-block";
 import { Markdown, SafeImage } from "@/components/markdown";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
 import { ErrorText } from "@/components/error-text";
@@ -237,7 +238,7 @@ function Primitive({ node, p, scope }: { node: Obj; p: Obj; scope: Scope }): Rea
     case "markdown":
       return <Markdown>{show(p.text)}</Markdown>;
     case "code":
-      return <pre className="overflow-x-auto rounded-md bg-muted p-2 font-mono text-code whitespace-pre">{show(p.text)}</pre>;
+      return <CodeBlock text={show(p.text)} language={optText(p.language)} numbered={false} className="max-h-none overflow-x-auto p-2" />;
     case "badge":
       return (
         <Badge variant={variant(p.variant, "secondary")} className="self-start">

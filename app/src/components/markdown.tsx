@@ -18,6 +18,9 @@ import { Fragment, memo, useMemo, useState, type ComponentProps, type ReactNode 
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ImageOff } from "lucide-react";
+import { HighlightedLine } from "@/components/code-block";
+import { detectLanguage } from "@/lib/language";
+import { useTokens } from "@/lib/use-tokens";
 import { hostOf, isWebUrl, openExternal } from "@/lib/links";
 import { Lru } from "@/lib/lru";
 import { mdxBlocks, prepareMdx, splitFrontmatter } from "@/lib/mdx";
@@ -77,8 +80,40 @@ function heading(level: 1 | 2 | 3 | 4 | 5 | 6) {
   };
 }
 
+/** The text of a fence's code: a string, or the pieces react-markdown made of it. */
+const fenceText = (c: unknown): string | null =>
+  typeof c === "string" ? c : Array.isArray(c) && c.every((x) => typeof x === "string") ? c.join("") : null;
+
+function HighlightedFence({ text, className }: { text: string; className?: string }) {
+  const lang = detectLanguage({ language: /(?:^|\s)language-(\S+)/.exec(className ?? "")?.[1], text });
+  const tokens = useTokens(text, lang);
+  return (
+    <pre data-highlight={tokens ? (lang ?? "") : undefined}>
+      <code className={className}>
+        {tokens
+          ? tokens.map((line, i) => (
+              <Fragment key={i}>
+                {i > 0 && "\n"}
+                <HighlightedLine tokens={line} />
+              </Fragment>
+            ))
+          : text}
+      </code>
+    </pre>
+  );
+}
+
+/** A fenced code block: highlighted by the language on its fence (or what the text looks like), in the same `pre > code` as before. */
+function Pre({ children }: ComponentProps<"pre">) {
+  const code = (Array.isArray(children) ? children[0] : children) as { props?: { className?: string; children?: unknown } } | null;
+  const text = fenceText(code?.props?.children);
+  if (text == null) return <pre>{children}</pre>;
+  return <HighlightedFence text={text} className={code?.props?.className} />;
+}
+
 const components: Components = {
   a: Link,
+  pre: Pre,
   img: ({ src, alt }) => <SafeImage src={src} alt={alt} />,
   h1: heading(1),
   h2: heading(2),
