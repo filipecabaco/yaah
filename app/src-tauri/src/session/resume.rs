@@ -134,6 +134,7 @@ impl Hub {
             dirs_changed: false,
             remembered: std::collections::BTreeMap::new(),
             trusted_mcp_servers: vec![],
+            shell_rules: vec![],
             config: super::ChatConfig::default(),
             queue: super::Queue::default(),
         };

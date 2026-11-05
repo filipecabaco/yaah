@@ -233,3 +233,57 @@ still no mode switching and no shell allowlist.
   and no paths. Settings → Chat, "Allow web searches without asking" (`allowWebSearch`, off by default); `webSearch`
   "web search allowed in Settings". WebFetch and `mcp__fetch__fetch` keep asking.
 - Screenshots: `docs/experiments/2026-11-04-permission-scopes/`.
+
+## CLI parity: why yaah asked more, and what changed (4 November 2026, later)
+
+Source: claude-agent-acp 0.100.0 under `~/.yaah/agents/` (`dist/acp-agent.js`, `dist/permissions/*`). Not run live.
+
+**yaah does not bypass the agent's settings.** The adapter hardcodes `settingSources: ["user", "project", "local"]`
+(`acp-agent.js`, query options), reads `permissions.defaultMode` and `disableBypassPermissionsMode` from them, and
+registers `canUseTool`. yaah passes only `_meta.claudeCode.options.allowedTools` (its UI tools) and `additionalDirectories`.
+So for Claude Code the CLI core already evaluates, before any request reaches yaah: `permissions.allow/deny/ask` at user
+(`$CLAUDE_CONFIG_DIR`, else `~/.claude`), project and local level, with `Bash(prefix:*)` / `Read(path)` / `Edit(path)` /
+`mcp__server__tool` rules; additionalDirectories; its built-in read-only tools and read-only shell allowlist;
+`acceptEdits`. `canUseTool` (hence a yaah card) fires only for an "ask" outcome. **Deny and ask rules are therefore
+already enforced by the CLI; a second parser in yaah would only risk disagreeing with it, so none was written.**
+
+Why it still felt noisier than the CLI (inferred, not reproduced):
+1. Every "ask" becomes a card; the CLI's own terminal prompt is lighter. Allowed ones were doubled until the chip work.
+2. "Don't ask again" was keyed on the exact request title (`Run cd /x; pnpm vitest run a 2>&1 | tail`), which never
+   matches twice, and lived in one chat. The adapter's own rule goes to `.claude/settings.local.json` of the chat's cwd:
+   it does not follow a quick chat (new scratch cwd each time) or a project's other folders.
+3. Other agents (Codex, Gemini...) have no `settings.json` at all; only yaah's `decide` helps there.
+4. The mode: `defaultMode` is honoured at session start, but yaah's picker is per chat.
+5. Edits: the adapter already offers "Yes, allow all edits during this session" as the first `allow_always` option
+   (`filesystem.js`), and in `acceptEdits` the CLI auto-allows edits in the working dirs. Nothing to add (option d).
+
+**Built now** (`session/shell_rules.rs`, `trust.rs`, `session.rs`):
+- *Ask wins.* A Claude Code request with no `allow_always` option is one the CLI refused to let anyone persist (a user
+  `ask` rule, `suppressAlwaysAllowRule` delete-class and publish asks). yaah's own allows (reads, trusted servers, rules,
+  built-ins, replays of "always") no longer answer those (`Shared::ask_is_forced`). A remembered "no" still applies.
+- *Built-in read-only commands* (`shell_rules::builtin`): ls, pwd, cat, head, tail, wc, echo, stat, file, du, df, tree,
+  which, basename, dirname, realpath, readlink, diff, sort, cut, grep, date +fmt, uname, whoami, id, and `git` status, diff,
+  log, show, blame, rev-parse, rev-list, ls-files, ls-tree, describe, shortlog, show-ref, merge-base, name-rev, plus
+  list-only `branch`/`tag`/`remote -v`. Same parser as the prefix rules, so every part of a compound command must pass;
+  flags are an allowlist per command; paths must stay inside the chat's folders (symlinks resolved; a path that is a
+  link, even a dangling one, must resolve inside). No recursion or link-following flags (`-R`, `-r`, `--recursive`, `-L`,
+  `-H`, `tree -l`), and `diff` takes files only. `cd` counts only as the first command of a straight `&&` chain, to a
+  folder that exists, and **no `git` runs after a `cd`**; git is also refused (built-ins and learned rules) when its
+  folder, or any folder above it, looks like a git directory (HEAD/objects/refs/config), or has a `.git` other than the
+  chat root's own `.git` folder. Chip: "Always allowed (built-in: read-only)". Off with "Allow reads in the chat's
+  folders" (`trustReadOnly`), like reads.
+- *Command rules across chats.* "Don't ask again" on a command is kept for the project (`project:<id>`) or for quick
+  chats in yaah's own `settings.json` (`shellRules`), not the user's. It is a separate yaah option ("Allow pnpm vitest in
+  this chat (runs project code)", id `yaah:allow_rule`, kind `yaah_allow_rule`) beside the agent's own options, which
+  are untouched: the agent is answered with its `allow_once`, so nothing is written to the adapter's settings. Saved rules are re-validated
+  on read. The chat header lists them with a Remove (`forget_shell_rule`).
+
+**"Ask wins" is approximate.** The signal is the absence of an `allow_always` option, and the adapter only offers
+`allow_always` for some requests. For a request that never carries one for other reasons, yaah cannot tell "the CLI
+insisted on asking" from "this kind of request has no always": built-ins and rules do not apply to those and they ask.
+Agents other than Claude Code send no such signal, so their requests are judged by yaah's rules alone.
+
+**Not built, on purpose:** a yaah copy of settings.json matching (see above); `rg`, `jq`, `uniq`, `tr`, `find`, `sed`,
+`awk`, `xargs`, `env`, `curl`, `git -c`/`branch <name>`/`stash`/`config` (execute code, write, or leak env); auto-allowing
+anything non-read-only by default; writing the user's settings.json. Residual risk shared with the CLI: `git diff/status`
+can run helpers named in a hostile repo's `.git/config` (textconv, fsmonitor). The built-ins have no off switch yet (gap).

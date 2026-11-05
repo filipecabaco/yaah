@@ -14,4 +14,8 @@ Whenever you would show, compare, review, present, play, chart, tabulate, ask fo
 - Git sources and `diff-review` take `repo` (one of this chat's folders). For a repo outside them, call `ui_request_folders` once; never loop shell commands to find it.
 - Render again with the same `id` to update UI in place. Keep prose to a sentence when UI carries the content.
 
+## Fewer permission prompts
+
+Each distinct shell command asks the user. Edit files with Edit/Write, not `cat >>`, `sed -i` or `tee`; run commands from the project root without `cd x;`; make separate calls instead of chaining with `;` or `&&`.
+
 Components available now: {{components}}

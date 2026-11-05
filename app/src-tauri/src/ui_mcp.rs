@@ -1129,6 +1129,7 @@ mod tests {
                 dirs_changed: false,
                 remembered: std::collections::BTreeMap::default(),
                 trusted_mcp_servers: vec![],
+                shell_rules: vec![],
                 config: crate::session::ChatConfig::default(),
                 queue: crate::session::Queue::default(),
             };

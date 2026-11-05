@@ -17,6 +17,7 @@
 //! Nothing here writes anywhere but yaah's own `settings.json`.
 
 use super::permissions::{self, AgentDirs, Auto, McpServer, OwnDirs, Scope};
+use super::shell_rules;
 use super::{Entry, Hub, Session, SessionInfo, Shared, outcome, remembered_option};
 use crate::json_file::JsonFile;
 use crate::projects::Project;
@@ -28,6 +29,11 @@ use std::path::{Component, Path, PathBuf};
 const WEB_SEARCH_KEY: &str = "allowWebSearch";
 const EVERYWHERE_KEY: &str = "trustedMcpServers";
 const QUICK_KEY: &str = "quickChats";
+/// `{ "project:<id>": ["pnpm vitest"], "quick": [...] }`: shell command prefixes ("don't ask again" on a
+/// command, `shell_rules.rs`) kept for a project's chats or for quick chats. Only yaah's own file; never
+/// the agent's settings.
+const SHELL_RULES_KEY: &str = "shellRules";
+const QUICK_RULES: &str = "quick";
 
 /// What permission requests yaah may answer itself, beyond a chat's own choices.
 /// The app reads it from `settings.json` and `projects.json` (`Hub::set_permission_file`,
@@ -43,6 +49,8 @@ pub(super) struct Trust {
     pub(super) everywhere: Vec<String>,
     /// The scope every quick chat shares.
     pub(super) quick: QuickChats,
+    /// Shell command rules shared by a project's chats (`project:<id>`) or quick chats (`quick`).
+    pub(super) shell_rules: HashMap<String, Vec<String>>,
     /// Where quick chats' scratch folders are made (`commands::new_quick_chat`).
     scratch: PathBuf,
     /// `settings.json`, where the above is kept; `None`: in memory only (tests).
@@ -57,6 +65,7 @@ impl Default for Trust {
             projects: HashMap::new(),
             everywhere: vec![],
             quick: QuickChats::default(),
+            shell_rules: HashMap::new(),
             scratch: crate::accounts::home().join(".yaah/scratch"),
             file: None,
         }
@@ -82,6 +91,26 @@ fn server_ids(v: Option<&Value>) -> Vec<String> {
         if McpServer::new(id).is_some() && !out.iter().any(|o| o == id) {
             out.push(id.to_owned());
         }
+    }
+    out
+}
+
+/// Saved shell rules, kept only if each is a rule `shell_rules` could have written (a hand-edited
+/// file can't allow anything the table doesn't): anything else is dropped, never trusted.
+fn shell_rules_in(s: &Map<String, Value>) -> HashMap<String, Vec<String>> {
+    let mut out = HashMap::new();
+    for (key, list) in s.get(SHELL_RULES_KEY).and_then(Value::as_object).into_iter().flatten() {
+        if key != QUICK_RULES && key.strip_prefix("project:").is_none_or(str::is_empty) {
+            continue;
+        }
+        let mut rules: Vec<String> = vec![];
+        for r in list.as_array().into_iter().flatten().filter_map(Value::as_str) {
+            let words: Vec<String> = r.split(' ').map(str::to_owned).collect();
+            if shell_rules::prefix_of(&words).as_deref() == Some(r) && !rules.iter().any(|x| x == r) {
+                rules.push(r.to_owned());
+            }
+        }
+        out.insert(key.clone(), rules);
     }
     out
 }
@@ -114,6 +143,20 @@ impl Trust {
         self.web_search = s.get(WEB_SEARCH_KEY).and_then(Value::as_bool).unwrap_or(false);
         self.everywhere = server_ids(s.get(EVERYWHERE_KEY));
         self.quick = quick_in(s);
+        self.shell_rules = shell_rules_in(s);
+    }
+
+    /// Where a chat's shared shell rules are kept: its project's, or quick chats'; none for a lone chat.
+    pub(super) fn rules_key(&self, info: &SessionInfo) -> Option<String> {
+        match self.scope_of(info) {
+            Scope::Project => info.project_id.as_ref().map(|p| format!("project:{p}")),
+            Scope::QuickChats => Some(QUICK_RULES.to_owned()),
+            _ => None,
+        }
+    }
+
+    fn write_rules(&self) -> Result<(), String> {
+        self.write(SHELL_RULES_KEY, serde_json::to_value(&self.shell_rules).map_err(|e| e.to_string())?)
     }
 
     fn write(&self, key: &str, value: Value) -> Result<(), String> {
@@ -183,6 +226,15 @@ pub struct TrustView {
     pub offered: Vec<Scope>,
     /// Every server whose tools run without asking here, with the scope that trusts it.
     pub servers: Vec<TrustedServer>,
+    /// Shell command prefixes that run without asking here, with the scope that keeps each.
+    pub shell_rules: Vec<TrustedRule>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TrustedRule {
+    pub rule: String,
+    pub scope: Scope,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -217,6 +269,46 @@ impl Shared {
         let auto = permissions::decide(req, &policy)?;
         let (id, name) = permissions::allow_once(options)?;
         Some((id, name, auto))
+    }
+
+    /// The shell rules shared with chat `info` by its project or by quick chats.
+    pub(super) fn shared_shell_rules(&self, info: &SessionInfo) -> Vec<String> {
+        let t = self.trust.lock().unwrap();
+        t.rules_key(info).and_then(|k| t.shell_rules.get(&k).cloned()).unwrap_or_default()
+    }
+
+    /// Where a "don't ask again" on a command is kept for this chat.
+    pub(super) fn rules_scope(&self, info: &SessionInfo) -> Scope {
+        self.trust.lock().unwrap().scope_of(info)
+    }
+
+    /// Keep `rules` for the project of `info` or for quick chats (saved in yaah's `settings.json`).
+    pub(super) fn keep_shared_rules(&self, info: &SessionInfo, rules: &[String]) {
+        {
+            let mut t = self.trust.lock().unwrap();
+            let Some(key) = t.rules_key(info) else { return };
+            let mut list = t.shell_rules.get(&key).cloned().unwrap_or_default();
+            shell_rules::add_rules(&mut list, rules);
+            t.shell_rules.insert(key, list);
+            if let Err(e) = t.write_rules() {
+                // Not saved: it still holds until the app quits.
+                eprintln!("[permissions] shell rules not saved: {e}");
+            }
+        }
+        self.trust_changed();
+    }
+
+    /// Settings → Chat, "Allow reads in the chat's folders": also gates the built-in read-only commands.
+    pub(super) fn read_only_on(&self) -> bool {
+        self.trust.lock().unwrap().read_only
+    }
+
+    /// Whether the agent itself insisted on asking: Claude Code's requests carry a "don't ask again"
+    /// option unless a user's `ask` rule matched or the CLI judged the action too risky to remember
+    /// (deletes, publishes). Then yaah must not answer for the user: ask and deny rules win.
+    pub(super) fn ask_is_forced(&self, s: &Session, options: &Value) -> bool {
+        let claude = self.profiles.find(&s.info.account_id).is_some_and(|p| p.preset == crate::agents::CLAUDE);
+        claude && options.as_array().is_some_and(|o| !o.is_empty() && !o.iter().any(|o| o["kind"] == "allow_always"))
     }
 
     /// The chat's agent's own folders for it (`permissions::own_dirs`): Claude Code's
@@ -270,7 +362,7 @@ impl Shared {
         Scope::QuickChats
     }
 
-    fn trust_changed(&self) {
+    pub(super) fn trust_changed(&self) {
         (self.app)("trust-changed", json!({}));
     }
 }
@@ -365,7 +457,45 @@ impl Hub {
                 ids.into_iter().filter_map(move |id| McpServer::new(&id).map(|m| TrustedServer { id: m.id, label: m.label, scope }))
             })
             .collect();
-        Ok(TrustView { here, offered: Trust::offered(here), servers })
+        let mut shell_rules: Vec<TrustedRule> = info.shell_rules.iter().map(|r| TrustedRule { rule: r.clone(), scope: Scope::Chat }).collect();
+        if let Some(shared) = t.rules_key(&info).and_then(|k| t.shell_rules.get(&k)) {
+            shell_rules.extend(shared.iter().map(|r| TrustedRule { rule: r.clone(), scope: here }));
+        }
+        Ok(TrustView { here, offered: Trust::offered(here), servers, shell_rules })
+    }
+
+    /// Stop allowing the shell `rule` in `scope` for chat `session_id` (its own, its project's or quick chats').
+    pub fn forget_shell_rule(&self, session_id: &str, rule: &str, scope: Scope) -> Result<(), String> {
+        let info = self.shared.with(session_id, |s| {
+            if scope == Scope::Chat {
+                s.info.shell_rules.retain(|r| r != rule);
+            }
+            // An exact "don't ask again" on a command the rule covered would keep allowing it.
+            let info = s.info.clone();
+            s.info.remembered.retain(|key, _| !shell_rules::rule_covers_remembered(&info, rule, key));
+            self.shared.emit_info(s);
+            self.shared.save(s);
+            s.info.clone()
+        })?;
+        if scope != Scope::Chat {
+            let mut t = self.shared.trust.lock().unwrap();
+            if t.scope_of(&info) != scope {
+                return Err(format!("this chat has no shell rules {}", scope.words()));
+            }
+            let key = t.rules_key(&info).ok_or("this chat keeps no shared rules")?;
+            if let Some(list) = t.shell_rules.get_mut(&key) {
+                list.retain(|r| r != rule);
+            }
+            t.write_rules()?;
+            if scope == Scope::QuickChats {
+                let mut quick = t.quick.clone();
+                quick.remembered.retain(|key, _| !shell_rules::rule_covers_remembered(&info, rule, key));
+                t.write_quick(&quick)?;
+                t.quick = quick;
+            }
+        }
+        self.shared.trust_changed();
+        Ok(())
     }
 
     /// Settings → Chat's permission switches and the servers trusted in all chats.
