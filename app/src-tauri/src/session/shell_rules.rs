@@ -1201,7 +1201,7 @@ mod tests {
         let empty = serde_json::to_string(&info_in(&roots)).unwrap();
         assert!(!empty.contains("shellRules"));
         let old: SessionInfo = serde_json::from_str(&empty).unwrap();
-        assert!(old.shell_rules.is_empty());
+        assert_eq!(old.shell_rules, Vec::<String>::new());
     }
 
     fn options() -> Value {
@@ -1287,7 +1287,7 @@ mod tests {
         session.tool_index.insert("t1".into(), 0);
         // Another name (the agent's own "Always Allow") keeps nothing.
         assert_eq!(learn(&mut session, Scope::Chat, Some("t1"), "Always Allow"), None);
-        assert!(session.info.shell_rules.is_empty());
+        assert_eq!(session.info.shell_rules, Vec::<String>::new());
         let said = label(&w(&["pnpm vitest", "pnpm tsc"]), Scope::Chat);
         assert_eq!(learn(&mut session, Scope::Chat, Some("t1"), &said), Some(w(&["pnpm vitest", "pnpm tsc"])));
         assert_eq!(session.info.shell_rules, w(&["pnpm vitest", "pnpm tsc"]));

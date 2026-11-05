@@ -122,9 +122,12 @@ describe("the docked permission prompt", () => {
     expect(calls).toHaveLength(1);
 
     await user.clear(composer);
+    await settle();
     within(batch).getByRole("button", { name: "Allow: pwd" }).focus();
     await user.keyboard("a");
     await waitFor(() => expect(calls.slice(1)).toEqual([1, 2, 3].map((i) => [i, "y"])));
+    await settle();
+    within(batch).getByRole("button", { name: "Allow: pwd" }).focus();
     await user.keyboard("d");
     await waitFor(() => expect(calls.slice(4)).toEqual([1, 2, 3].map((i) => [i, "n"])));
   });

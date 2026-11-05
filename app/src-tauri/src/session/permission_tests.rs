@@ -909,7 +909,7 @@ fn a_dont_ask_again_on_a_command_covers_the_whole_project() {
         view.shell_rules.iter().map(|r| (r.rule.as_str(), r.scope)).collect::<Vec<_>>(),
         [("pnpm vitest", Scope::Project), ("pnpm tsc", Scope::Project)]
     );
-    assert!(hub.trust_scope("solo").unwrap().shell_rules.is_empty());
+    assert_eq!(hub.trust_scope("solo").unwrap().shell_rules.len(), 0);
 
     drop(hub);
     let hub = h.hub();
@@ -966,7 +966,7 @@ fn saved_shell_rules_are_checked_when_read() {
     std::fs::write(h.settings(), "{ not json").unwrap();
     let hub = h.hub();
     attach(&hub, "p", &h.p("work/repo"), Some("proj"), None);
-    assert!(hub.shared.shared_shell_rules(&hub.shared.with_info("p", Clone::clone).unwrap()).is_empty());
+    assert_eq!(hub.shared.shared_shell_rules(&hub.shared.with_info("p", Clone::clone).unwrap()), Vec::<String>::new());
 }
 
 // ── review fixes: bare repositories, the separate rule option, rule removal ──
@@ -1064,7 +1064,7 @@ fn the_rule_option_is_separate_and_answers_the_agent_with_its_one_off_allow() {
     let (i, _) = ask(&hub, &responder, "d", 4, bash("u1", "pnpm eslint src"), options());
     hub.respond_permission("d", i, Some("a")).unwrap();
     assert_eq!(answers(&mut rx), [(4, "a".to_owned())]);
-    assert!(hub.transcript("d").unwrap().info.shell_rules.is_empty());
+    assert_eq!(hub.transcript("d").unwrap().info.shell_rules, Vec::<String>::new());
 }
 
 #[test]
