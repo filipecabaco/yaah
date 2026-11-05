@@ -148,7 +148,7 @@ export function trustView(s: SessionInfo, t: TrustState): TrustView {
   const here = scopeOf(s);
   const label = (id: string) => id.replace(/^claude_ai_(?=.)/, "");
   const servers = trustedFor(s, t).flatMap(([scope, ids]) => ids.map((id) => ({ id, label: label(id), scope })));
-  return { here, offered: OFFERED[here], servers };
+  return { here, offered: OFFERED[here], servers, shellRules: [] };
 }
 
 /** A waiting request for a trusted server's tool, answered as session.rs would (allow_once, marked); else null. */

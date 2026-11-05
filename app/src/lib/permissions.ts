@@ -23,7 +23,10 @@ export function permissionAnswer(e: PermissionEntry): string | null {
 
 export const isAllowed = (answer: string | null) => answer === "allow_once" || answer === "allow_always";
 
-export type PermissionChip = { label: "Allowed" | "Always allowed" | "Auto-allowed"; reason?: string };
+export type PermissionChip = {
+  label: "Allowed" | "Always allowed" | "Always allowed (built-in: read-only)" | "Auto-allowed";
+  reason?: string;
+};
 
 /** The chip an allowed request puts on its tool card; null for one that isn't allowed. */
 export function permissionChip(e: PermissionEntry): PermissionChip | null {
@@ -31,6 +34,8 @@ export function permissionChip(e: PermissionEntry): PermissionChip | null {
   if (!isAllowed(answer)) return null;
   if (e.auto?.reason === "remembered" || (!e.auto && REMEMBERED.test(e.chosen ?? "")))
     return { label: "Always allowed", reason: e.auto?.why ?? "you said don't ask again in this chat" };
+  // A command made only of read-only built-ins (`ls`, `git status`): allowed everywhere, shown every time.
+  if (e.auto?.reason === "builtinReadOnly") return { label: "Always allowed (built-in: read-only)", reason: e.auto.why };
   if (e.auto) return { label: "Auto-allowed", reason: e.auto.why };
   return { label: answer === "allow_always" ? "Always allowed" : "Allowed" };
 }

@@ -71,3 +71,17 @@ export function onOpenComposerConfig(cb: (request: ComposerConfigRequest) => voi
   window.addEventListener(COMPOSER_CONFIG, listener);
   return () => window.removeEventListener(COMPOSER_CONFIG, listener);
 }
+
+const CYCLE_MODE = "yaah:cycle-mode";
+export type CycleModeRequest = { sessionId: string; pane?: string };
+
+/** Shift+Tab in a composer: ask that chat's mode picker for the next safe permission mode. */
+export function cycleMode(sessionId: string, pane?: string) {
+  window.dispatchEvent(new CustomEvent<CycleModeRequest>(CYCLE_MODE, { detail: { sessionId, pane } }));
+}
+
+export function onCycleMode(cb: (request: CycleModeRequest) => void): () => void {
+  const listener = (e: Event) => cb((e as CustomEvent<CycleModeRequest>).detail);
+  window.addEventListener(CYCLE_MODE, listener);
+  return () => window.removeEventListener(CYCLE_MODE, listener);
+}

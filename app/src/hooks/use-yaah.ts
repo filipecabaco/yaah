@@ -13,6 +13,7 @@ import {
   type StartStage,
   type WorkItem,
 } from "@/lib/api";
+import { pruneDrafts, removeDraft } from "@/lib/composer-draft";
 import { TranscriptStore } from "@/lib/transcripts";
 import { unlinkUnless, type Selection } from "@/lib/layout";
 import { useLayout } from "@/hooks/use-layout";
@@ -81,6 +82,7 @@ export function useYaah() {
       refreshProjects(),
       api.listSessions().then((list) => {
         setSessions(Object.fromEntries(list.map((s) => [s.sessionId, s])));
+        pruneDrafts(list.map((s) => s.sessionId));
         setSessionsLoaded(true);
       }),
     ]).catch(setLoadError);
@@ -305,6 +307,7 @@ export function useYaah() {
       await api.deleteSession(id);
       setSessions(({ [id]: _, ...rest }) => rest);
       transcripts.remove(id);
+      removeDraft(id);
       mapContents((c) => (c?.kind === "chat" && c.id === id ? (chat.projectId ? { kind: "project", id: chat.projectId } : null) : c));
     },
     [transcripts, mapContents],

@@ -44,7 +44,7 @@ describe("the chat column", () => {
 
   it("puts the user's message on the right edge, capped at 75ch", async () => {
     const { log } = await commandTurn();
-    const bubble = within(log).getByText("show me the command output");
+    const bubble = within(log).getByText("show me the command output").closest(".user-message") as HTMLElement;
     const message = bubble.closest("[data-align]") as HTMLElement;
     expect(message).toHaveAttribute("data-align", "end");
     expect(message.classList).toContain("ml-auto");

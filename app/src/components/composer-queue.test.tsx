@@ -126,11 +126,12 @@ describe("queued messages", () => {
     expect(mock.attachmentsStaged["att-1"]).toBeDefined();
   });
 
-  it("Send now stops the running turn and sends that one first; the rest follow", async () => {
+  it("one Send now for the queue stops the running turn and sends the first; the rest follow", async () => {
     await openChat((s) => Object.assign(s, { running: true, queue: { items: [item("a", "markdown alpha"), item("b", "markdown beta")] } }));
-    const beta = within(queueList()!).getAllByRole("listitem")[1];
-    await userEvent.click(within(beta).getByRole("button", { name: /Send now/ }));
-    await waitFor(() => expect(sent()).toEqual(["markdown beta", "markdown alpha"]), { timeout: 5000 });
+    expect(screen.getAllByRole("button", { name: /Send now/ })).toHaveLength(1);
+    expect(within(queueList()!).queryByRole("button", { name: /Send now/ })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: /Send now/ }));
+    await waitFor(() => expect(sent()).toEqual(["markdown alpha", "markdown beta"]), { timeout: 5000 });
     await waitFor(() => expect(queueList()).toBeNull());
   });
 

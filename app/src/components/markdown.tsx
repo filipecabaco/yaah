@@ -15,7 +15,8 @@
 // parsed once and kept, so a streamed reply re-parses only its last block, and
 // reopening a chat reuses blocks parsed before.
 import { Fragment, memo, useMemo, useState, type ComponentProps, type ReactNode } from "react";
-import type { Components } from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ImageOff } from "lucide-react";
 import { hostOf, isWebUrl, openExternal } from "@/lib/links";
 import { Lru } from "@/lib/lru";
@@ -145,4 +146,32 @@ export function Markdown({ children }: { children: string }) {
 /** The whole text in one parse (tests compare the block-by-block output with it). */
 export function WholeMarkdown({ children }: { children: string }) {
   return <Rendered text={children} whole />;
+}
+
+/** Raw HTML in plain text is text: `<Foo>` stays as typed, never a tag (react-markdown would drop it). */
+function remarkHtmlAsText() {
+  const walk = (node: { type: string; value?: string; children?: unknown[] }) => {
+    if (node.type === "html") node.type = "text";
+    for (const c of node.children ?? []) walk(c as typeof node);
+  };
+  return walk;
+}
+
+const PLAIN_PLUGINS = [remarkGfm, remarkHtmlAsText];
+const { a, img, h1, h2, h3, h4, h5, h6 } = components;
+const PLAIN_COMPONENTS: Components = { a, img, h1, h2, h3, h4, h5, h6 };
+
+/**
+ * What the user typed, as plain CommonMark + GFM (code, bold, lists, links, tables): no MDX and no
+ * frontmatter, so `import x from "y"`, `<Foo>` and a leading `---` are not rewritten, and raw HTML is
+ * shown as text, never rendered. Single line breaks are kept by `.user-message` (index.css).
+ */
+export function PlainMarkdown({ children }: { children: string }) {
+  return (
+    <div className="markdown">
+      <ReactMarkdown remarkPlugins={PLAIN_PLUGINS} components={PLAIN_COMPONENTS}>
+        {children}
+      </ReactMarkdown>
+    </div>
+  );
 }

@@ -6,6 +6,7 @@ import { useState } from "react";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { FolderOpen, ImageOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ImageGallery } from "@/components/image-gallery";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { imageFacts, useImageUrl } from "@/hooks/use-image-url";
 import { pathOfUri, type ImageBlock } from "@/lib/attachments";
@@ -23,10 +24,12 @@ type ThumbProps = {
   className?: string;
   /** `inline`: as big as the column lets it (agents' images); `chip`: a small square (attachments). */
   variant?: "inline" | "chip" | "strip";
+  /** Replaces the large view: the thumbnail is one of a set that opens as a mosaic. */
+  onOpen?: () => void;
 };
 
 /** A thumbnail that opens the large view. */
-export function ImageThumb({ sessionId, image, alt, path, note, className, variant = "inline" }: ThumbProps) {
+export function ImageThumb({ sessionId, image, alt, path, note, className, variant = "inline", onOpen }: ThumbProps) {
   const [open, setOpen] = useState(false);
   const { url, failed } = useImageUrl(sessionId, image);
   if (image.omitted)
@@ -45,7 +48,7 @@ export function ImageThumb({ sessionId, image, alt, path, note, className, varia
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={onOpen ?? (() => setOpen(true))}
         aria-label={`Open ${alt}${facts ? `, ${facts}` : ""}`}
         title={alt}
         data-slot="image-thumb"
@@ -63,7 +66,7 @@ export function ImageThumb({ sessionId, image, alt, path, note, className, varia
           </span>
         )}
       </button>
-      <ImageLightbox open={open} onOpenChange={setOpen} url={url} alt={alt} facts={facts} path={path} note={note} failed={failed} />
+      <ImageLightbox open={open && !onOpen} onOpenChange={setOpen} url={url} alt={alt} facts={facts} path={path} note={note} failed={failed} />
     </>
   );
 }
@@ -133,7 +136,9 @@ export function ImageStrip({
   variant?: ThumbProps["variant"];
   className?: string;
 }) {
+  const [open, setOpen] = useState(false);
   if (!images.length) return null;
+  const many = images.length > 1;
   return (
     <div className={cn("flex flex-wrap items-start gap-2", className)}>
       {images.map((img, i) => (
@@ -141,11 +146,13 @@ export function ImageStrip({
           key={img.image ?? i}
           sessionId={sessionId}
           image={img}
-          alt={images.length > 1 ? `${alt} (${i + 1} of ${images.length})` : alt}
+          alt={many ? `${alt} (${i + 1} of ${images.length})` : alt}
           path={pathOfUri(img.uri)}
           variant={variant}
+          onOpen={many ? () => setOpen(true) : undefined}
         />
       ))}
+      {many && <ImageGallery open={open} onOpenChange={setOpen} sessionId={sessionId} items={images.map((image) => ({ image, title: alt }))} />}
     </div>
   );
 }

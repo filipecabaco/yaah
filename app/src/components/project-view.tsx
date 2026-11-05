@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { displayTitle } from "@/lib/chat-title";
 import { ChevronDown, FolderGit2, GitCompare, Loader2, MessageSquarePlus, ShieldCheck, SquareTerminal, Trash2, X } from "lucide-react";
 import { AgentMenu, AgentSelect } from "@/components/agent-choice";
 import { ChatMenu } from "@/components/menus";
@@ -259,7 +260,7 @@ export function ProjectView({
                       onClick={() => onOpenChat(c.sessionId)}
                       className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted data-[state=open]:bg-muted"
                     >
-                      <span className="min-w-0 flex-1 truncate">{c.title}</span>
+                      <span className="min-w-0 flex-1 truncate">{displayTitle(c.title)}</span>
                       {c.running && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
                       <Badge variant="outline">{c.accountId}</Badge>
                     </button>

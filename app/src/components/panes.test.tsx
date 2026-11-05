@@ -328,7 +328,7 @@ describe("two chats side by side", () => {
     // The same chat in both; the focus is in p2, but the action is in p1's transcript.
     await within(pane("p2")).findByText("ACP spec");
     expect(focusedPane()).toBe("p2");
-    fireEvent.contextMenu(within(pane("p1")).getByText("explain the links", { selector: "div" }));
+    fireEvent.contextMenu(within(pane("p1")).getByText("explain the links", { selector: ".user-message p" }));
     await user.click(await screen.findByRole("menuitem", { name: "Edit as new message" }));
     await waitFor(() => expect(composerIn("p1")).toHaveValue("explain the links"));
     expect(composerIn("p2")).toHaveValue("");

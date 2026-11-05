@@ -36,7 +36,7 @@ const ask = (id: string, chosen: string | null = null): Entry => ({
 });
 
 const rowsOf = (entries: Entry[], group = true) =>
-  transcriptRows(entries, 0, foldedPermissions(entries), group).map((r) => (r.kind === "entry" ? r.index : r.indices));
+  transcriptRows(entries, 0, foldedPermissions(entries), group).map((r) => (r.kind === "group" ? r.indices : r.index));
 
 describe("which tool calls make a group", () => {
   it("two or more in a row; a single call isn't grouped", () => {
@@ -56,6 +56,13 @@ describe("which tool calls make a group", () => {
     expect(rowsOf([tool("a"), ask("a", "Yes"), tool("b"), agent(""), tool("c")])).toEqual([[0, 2, 4]]);
   });
 
+  it("a shell call with a waiting request isn't drawn twice: the request's card shows the command", () => {
+    const sh = (id: string) => tool(id, "Run tests", "pending", { kind: "execute", rawInput: { command: "pnpm vitest run" } });
+    expect(rowsOf([user(), sh("s"), ask("s")])).toEqual([0, 2]);
+    expect(rowsOf([user(), sh("s"), ask("s", "Yes")])).toEqual([0, 1]); // answered: the tool card returns with its chip
+    expect(rowsOf([user(), tool("r"), ask("r")])).toEqual([0, 1, 2]); // not a shell call: its card says more than the request
+  });
+
   it("an edit with a diff to show stays out of groups", () => {
     const edit = tool("e", "Edit tax.ts", "completed", { kind: "edit", content: [{ type: "diff", path: "/x/tax.ts", oldText: "a", newText: "b" }] });
     expect(rowsOf([tool("a"), tool("b"), edit, tool("c"), tool("d")])).toEqual([[0, 1], 2, [3, 4]]);
@@ -69,7 +76,25 @@ describe("which tool calls make a group", () => {
       tool("d", "mcp__claude_ai_Linear__get_issue"),
       tool("e", "mcp.linear.list"),
     ];
-    expect(groupPreview(tools as Extract<Entry, { type: "tool" }>[])).toBe("Read, grep, get_issue (Linear), …");
+    expect(groupPreview(tools as Extract<Entry, { type: "tool" }>[])).toBe("Read ×2, grep, get_issue (Linear), …");
+  });
+
+  it("names shell calls 'command' with a count, not by their first word", () => {
+    const sh = (id: string, command: string) => tool(id, command, "completed", { kind: "execute", rawInput: { command } });
+    const tools = [sh("a", "cd x && ls"), sh("b", "cat y"), sh("c", "python3 z.py")];
+    expect(groupPreview(tools as Extract<Entry, { type: "tool" }>[])).toBe("command ×3");
+  });
+
+  it("counts shell-looking calls as 'command' even without input or kind", () => {
+    const tools = [
+      tool("a", "cd /x; pnpm test"), // the title is a command line, no rawInput
+      tool("b", "cd /x && ls"),
+      tool("c", "Bash"),
+      tool("d", "bash"),
+      tool("e", "anything", "completed", { kind: "execute" }),
+      tool("f", "Read a.rs"),
+    ];
+    expect(groupPreview(tools as Extract<Entry, { type: "tool" }>[])).toBe("command ×5, Read");
   });
 });
 
@@ -99,7 +124,7 @@ describe("a group in the transcript", () => {
       agent("Done."),
     ]);
     const row = await within(log).findByRole("button", { name: /^3 tool calls/ });
-    expect(row).toHaveTextContent("Read, grep");
+    expect(row).toHaveTextContent("Read ×2, grep");
     expect(row).toHaveTextContent("· 1 failed");
     expect(row).toHaveTextContent("· 1 auto-allowed");
     expect(within(row).getByText("· 1 failed")).toHaveClass("text-destructive");

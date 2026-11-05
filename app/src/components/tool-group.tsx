@@ -1,13 +1,14 @@
 // A run of tool calls drawn as one quiet row ("7 tool calls · Read, grep, get_issue (linear)"),
 // which a click or Enter opens to the cards as they are. What may go in a run is decided in
 // lib/tool-groups.ts: never text, rendered UI or a waiting permission request.
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { ChevronRight, Layers, Loader2 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { Entry } from "@/lib/api";
 import { plural } from "@/lib/format";
 import { groupPreview, setGroupOpen, useGroupOpen } from "@/lib/tool-groups";
 import { useChat } from "@/components/chat-context";
+import { ImageGallery } from "@/components/image-gallery";
 import { ImageThumb } from "@/components/image-preview";
 import { toolImages } from "@/lib/attachments";
 import { toolLabel } from "@/lib/ui-tool-label";
@@ -41,7 +42,17 @@ export function ToolGroup({ id, tools, running, autoAllowed, card }: Props) {
         {busy ? <Loader2 className="size-3.5 shrink-0 animate-spin" aria-hidden /> : <Layers className="size-3.5 shrink-0" aria-hidden />}
         <span className="shrink-0 font-medium text-foreground">{plural(tools.length, "tool call")}</span>
         <span className="min-w-0 truncate">{groupPreview(tools)}</span>
-        {failed > 0 && <span className="shrink-0 text-destructive">· {failed} failed</span>}
+        {failed > 0 && (
+          <span
+            className="shrink-0 text-destructive"
+            title={tools
+              .filter((t) => t.status === "failed")
+              .map((t) => toolLabel({ title: t.title, status: t.status, rawInput: t.rawInput })?.text ?? t.title)
+              .join("\n")}
+          >
+            · {failed} failed
+          </span>
+        )}
         {autoAllowed > 0 && <span className="shrink-0">· {autoAllowed} auto-allowed</span>}
         {busy && <span className="sr-only">, one still running</span>}
       </CollapsibleTrigger>
@@ -61,6 +72,7 @@ export function ToolGroup({ id, tools, running, autoAllowed, card }: Props) {
 
 function GroupImages({ tools }: { tools: Tool[] }) {
   const sessionId = useChat()?.sessionId;
+  const [mosaic, setMosaic] = useState(false);
   // Named as their cards are ("vitro: screenshot").
   const all = tools.flatMap((t) =>
     toolImages(t.content).map((image) => ({
@@ -73,9 +85,18 @@ function GroupImages({ tools }: { tools: Tool[] }) {
   return (
     <div className="-mt-1.5 flex flex-wrap items-center gap-2 pl-7" data-slot="tool-group-images">
       {shown.map(({ image, title }, i) => (
-        <ImageThumb key={image.image ?? i} sessionId={sessionId} image={image} alt={title} variant="strip" />
+        <ImageThumb key={image.image ?? i} sessionId={sessionId} image={image} alt={title} variant="strip" onOpen={() => setMosaic(true)} />
       ))}
-      {all.length > shown.length && <span className="text-xs text-muted-foreground">+{all.length - shown.length} more inside</span>}
+      {all.length > shown.length && (
+        <button
+          type="button"
+          onClick={() => setMosaic(true)}
+          className="rounded-sm text-xs text-muted-foreground underline-offset-2 hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          +{all.length - shown.length} more inside
+        </button>
+      )}
+      <ImageGallery open={mosaic} onOpenChange={setMosaic} sessionId={sessionId} items={all.map(({ image, title }) => ({ image, title }))} />
     </div>
   );
 }

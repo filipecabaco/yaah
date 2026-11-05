@@ -578,7 +578,7 @@ export type PermissionOption = {
 
 /** Why yaah answered a permission request itself, and the same in words ("read-only in this chat's folders"). */
 export type PermissionAuto = {
-  reason: "readOnly" | "trustedServer" | "trustedEverywhere" | "remembered" | "toolResults" | "webSearch" | (string & {});
+  reason: "readOnly" | "trustedServer" | "trustedEverywhere" | "remembered" | "toolResults" | "webSearch" | "builtinReadOnly" | (string & {});
   why: string;
 };
 
@@ -609,6 +609,8 @@ export type Entry =
       content: ToolContent[];
       locations: { path: string; line?: number | null }[];
       rawInput: unknown;
+      /** Set on a call made inside a sub-agent: the id of the call that launched it. */
+      parentToolCallId?: string;
     }
   | { type: "plan"; entries: PlanItem[] }
   | {

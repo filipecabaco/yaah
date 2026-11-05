@@ -1,5 +1,6 @@
 // ⌘K palette: jump to any chat or project, and run the commands that apply to
 // the current selection. `@` scopes it to chats and projects, `#` to commands. Rename and delete happen inline as palette pages.
+import { displayTitle } from "@/lib/chat-title";
 import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ArrowRightLeft,
@@ -230,7 +231,7 @@ function PaletteBody({
         : chatOrder.map((c): Entry & { chat: SessionInfo } => ({
             id: `chat-${c.sessionId}`,
             chat: c,
-            label: c.title,
+            label: displayTitle(c.title),
             detail: c.projectId ? (projects.find((p) => p.id === c.projectId)?.name ?? "") : "quick chat",
             onSelect: () => undefined,
           })),

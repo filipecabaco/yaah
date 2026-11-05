@@ -13,6 +13,8 @@ export type TrustView = {
   here: TrustScope;
   offered: TrustScope[];
   servers: { id: string; label: string; scope: TrustScope }[];
+  /** Shell command prefixes ("don't ask again for `pnpm vitest` commands") that run without asking here, with the scope that keeps each. */
+  shellRules: { rule: string; scope: TrustScope }[];
 };
 
 /** trust.rs `PermissionSettings`: Settings → Chat's permission switches and the servers trusted in all chats. */
@@ -34,6 +36,8 @@ export const trustApi = {
   trustScope: (sessionId: string) => invoke<TrustView>("trust_scope", { sessionId }),
   /** "Always allow tools from <server>" in `scope` (one the chat's view offers); its waiting requests are answered. */
   trustMcpServer: (sessionId: string, index: number, scope: TrustScope) => invoke<void>("trust_mcp_server", { sessionId, index, scope }),
+  /** Take back a command rule in `scope`. */
+  forgetShellRule: (sessionId: string, rule: string, scope: TrustScope) => invoke<void>("forget_shell_rule", { sessionId, rule, scope }),
   permissionSettings: () => invoke<PermissionSettings>("permission_settings"),
   setAllowWebSearch: (enabled: boolean) => invoke<void>("set_allow_web_search", { enabled }),
   untrustEverywhere: (server: string) => invoke<PermissionSettings>("untrust_mcp_server_everywhere", { server }),
