@@ -1,6 +1,7 @@
 // A set of images (a folded tool group's screenshots, one card's several images) as a mosaic in
 // a dialog; a click on a tile opens that one image large, with Prev/Next. Esc steps back: from
-// the single image to the mosaic, from the mosaic closes. Images come through `useImageUrl`, the
+// the single image to the mosaic, from the mosaic closes. A set of one has no mosaic: it opens
+// that image, without Back, Prev/Next or a count. Images come through `useImageUrl`, the
 // same loader every thumbnail uses.
 import { useEffect, useRef, useState } from "react";
 import { ChevronLeft, ChevronRight, Grid2x2, ImageOff } from "lucide-react";
@@ -26,12 +27,16 @@ export function ImageGallery({
   items: GalleryItem[];
 }) {
   // `null`: the mosaic. Always starts there.
-  const [index, setIndex] = useState<number | null>(null);
+  const [picked, setIndex] = useState<number | null>(null);
   const [wasOpen, setWasOpen] = useState(open);
   if (wasOpen !== open) {
     setWasOpen(open);
     if (!open) setIndex(null);
   }
+  const total = items.length;
+  // One image: nothing to pick from, so it is the one shown.
+  const alone = total === 1;
+  const index = alone ? 0 : picked;
   // Back in the mosaic, focus goes to the tile the keyboard just left.
   const last = useRef<number | null>(null);
   const body = useRef<HTMLDivElement>(null);
@@ -43,7 +48,6 @@ export function ImageGallery({
     if (index !== null) last.current = index;
   }, [index]);
 
-  const total = items.length;
   const go = (to: number) => setIndex(Math.min(total - 1, Math.max(0, to)));
   const current = index === null ? null : items[index];
   return (
@@ -52,7 +56,8 @@ export function ImageGallery({
         data-slot="image-gallery"
         className="flex h-[92vh] w-[96vw] max-w-none flex-col gap-0 bg-background p-0 sm:max-w-none"
         onEscapeKeyDown={(e) => {
-          if (index === null) return;
+          // Esc steps back to the mosaic; with one image (or in the mosaic) it closes.
+          if (index === null || alone) return;
           e.preventDefault();
           setIndex(null);
         }}
@@ -67,24 +72,28 @@ export function ImageGallery({
         <div className="flex items-center gap-3 border-b px-4 py-2.5 pr-12">
           {current && index !== null ? (
             <>
-              <Button size="sm" variant="ghost" onClick={() => setIndex(null)}>
-                <Grid2x2 /> Back to all
-              </Button>
+              {!alone && (
+                <Button size="sm" variant="ghost" onClick={() => setIndex(null)}>
+                  <Grid2x2 /> Back to all
+                </Button>
+              )}
               <DialogTitle className="min-w-0 truncate text-sm">{current.title}</DialogTitle>
               <DialogDescription className="shrink-0 text-xs text-muted-foreground">{imageFacts(current.image)}</DialogDescription>
-              <div className="ml-auto flex items-center gap-1">
-                <Button size="icon-sm" variant="ghost" disabled={index === 0} onClick={() => go(index - 1)}>
-                  <ChevronLeft />
-                  <span className="sr-only">Previous image</span>
-                </Button>
-                <span aria-live="polite" className="min-w-14 text-center text-xs text-muted-foreground tabular-nums">
-                  {index + 1} of {total}
-                </span>
-                <Button size="icon-sm" variant="ghost" disabled={index === total - 1} onClick={() => go(index + 1)}>
-                  <ChevronRight />
-                  <span className="sr-only">Next image</span>
-                </Button>
-              </div>
+              {!alone && (
+                <div className="ml-auto flex items-center gap-1">
+                  <Button size="icon-sm" variant="ghost" disabled={index === 0} onClick={() => go(index - 1)}>
+                    <ChevronLeft />
+                    <span className="sr-only">Previous image</span>
+                  </Button>
+                  <span aria-live="polite" className="min-w-14 text-center text-xs text-muted-foreground tabular-nums">
+                    {index + 1} of {total}
+                  </span>
+                  <Button size="icon-sm" variant="ghost" disabled={index === total - 1} onClick={() => go(index + 1)}>
+                    <ChevronRight />
+                    <span className="sr-only">Next image</span>
+                  </Button>
+                </div>
+              )}
             </>
           ) : (
             <>
