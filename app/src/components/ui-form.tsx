@@ -58,18 +58,21 @@ const agentFields = (host: FormHost | undefined) =>
 function useField(name: string, initial: unknown) {
   const ctx = useContext(FormContext);
   const init = ctx?.init;
+  // Outside a form a field is still a working input: it keeps its own value instead of rendering locked and empty.
+  const [own, setOwn] = useState<unknown>(initial);
   // Register the field's starting value once per distinct value (callers pass fresh arrays).
   const initialJson = JSON.stringify(initial);
   useEffect(() => {
     if (initialJson !== undefined) init?.(name, JSON.parse(initialJson));
   }, [init, name, initialJson]);
+  if (!ctx) return { value: own, set: (v: unknown) => setOwn(v), locked: false, missing: false, byAgent: false, flash: false };
   return {
-    value: ctx?.values[name],
-    set: (v: unknown) => ctx?.set(name, v),
-    locked: ctx?.locked ?? true,
-    missing: ctx?.missing.has(name) ?? false,
-    byAgent: ctx?.byAgent.has(name) ?? false,
-    flash: ctx?.flash.has(name) ?? false,
+    value: ctx.values[name],
+    set: (v: unknown) => ctx.set(name, v),
+    locked: ctx.locked,
+    missing: ctx.missing.has(name),
+    byAgent: ctx.byAgent.has(name),
+    flash: ctx.flash.has(name),
   };
 }
 

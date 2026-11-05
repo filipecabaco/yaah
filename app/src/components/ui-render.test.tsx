@@ -273,6 +273,18 @@ describe("buttons that send a message", () => {
   });
 });
 
+describe("a field outside a form", () => {
+  it("is an editable input with its default, not a locked empty one", async () => {
+    const user = userEvent.setup();
+    render(<UiTree tree={{ type: "textfield", props: { name: "q", label: "Query", default: "abc" } }} props={{}} />);
+    const box = screen.getByRole("textbox", { name: "Query" });
+    expect(box).toBeEnabled();
+    expect(box).toHaveValue("abc");
+    await user.type(box, "d");
+    expect(box).toHaveValue("abcd");
+  });
+});
+
 describe("a form outside a chat", () => {
   it("shows what was answered, locked", () => {
     render(

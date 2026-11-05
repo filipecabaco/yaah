@@ -62,7 +62,10 @@ describe("a link in an agent's reply", () => {
     await user.keyboard("{Escape}");
 
     const writeText = spyClipboard();
-    const menu = await rightClick(within(log).getByText("cargo test --lib retry"));
+    const menu = await rightClick(
+      // Highlighted, the command is split into coloured spans: find the block by its whole text.
+      await within(log).findByText((_, el) => el?.tagName === "CODE" && el.textContent?.trim() === "cargo test --lib retry"),
+    );
     expect(items(menu)).toContain("Copy code");
     await user.click(within(menu).getByRole("menuitem", { name: "Copy code" }));
     expect(writeText).toHaveBeenCalledWith("cargo test --lib retry");

@@ -16,6 +16,7 @@ import { menuActions } from "@/lib/menu-actions";
 import { changed, hunkRange, type DiffFile, type Hunk } from "@/components/diff/model";
 import { hunkTop, rowsOf, useWrap, WRAP_MAX } from "@/components/diff/lines";
 import { DiffLine, DiffRows, HunkHeader, WrapToggle } from "@/components/diff/rows";
+import { useDiffTokens } from "@/components/diff/use-diff-tokens";
 import { plural } from "@/lib/format";
 import { fuzzyRank } from "@/lib/fuzzy";
 import { scrollBehavior } from "@/lib/motion";
@@ -209,6 +210,7 @@ function AskButton({ onClick }: { onClick: () => void }) {
 function HunkView({ file, hunk, index, wrap }: { file: DiffFile; hunk: Hunk; index: number; wrap: boolean }) {
   const chat = useChat();
   const ask = chat ? () => askAbout(chat, file, hunk) : null;
+  const tokensOf = useDiffTokens(file);
   return (
     // Right-clicking the hunk offers the same in the enclosing menu (e.g. a tool card's).
     <div
@@ -217,7 +219,7 @@ function HunkView({ file, hunk, index, wrap }: { file: DiffFile; hunk: Hunk; ind
     >
       <HunkHeader hunk={hunk} index={index} tools={ask && <AskButton onClick={ask} />} />
       {hunk.lines.map((l, i) => (
-        <DiffLine key={i} line={l} wrap={wrap} />
+        <DiffLine key={i} line={l} wrap={wrap} tokens={tokensOf(l)} />
       ))}
     </div>
   );

@@ -96,7 +96,7 @@ describe("Shift+Tab and the mode label", () => {
     await waitFor(() => expect(label()).toBe("⏵⏵ ask first on (shift+tab to cycle)"));
   });
 
-  it("cycles the safe modes in the agent's order and never lands on bypass or auto", async () => {
+  it("cycles the safe modes and auto in the agent's order and never lands on bypass", async () => {
     const { user, sessionId, sets } = await openChat();
     await user.click(screen.getByRole("combobox", { name: "Message" }));
     const seen: string[] = [];
@@ -105,11 +105,11 @@ describe("Shift+Tab and the mode label", () => {
       await waitFor(() => expect(sets()).toHaveLength(i + 1));
       await waitFor(() => expect(screen.getByRole("combobox", { name: "Message" })).toHaveFocus());
       seen.push((sets()[i] as { value: string }).value);
-      await waitFor(() => expect(label()).toContain("on (shift+tab"));
+      await waitFor(() => expect(label()).toContain("(shift+tab"));
     }
-    expect(seen).toEqual(["acceptEdits", "plan", "default", "acceptEdits", "plan"]);
+    expect(seen).toEqual(["acceptEdits", "auto", "plan", "default", "acceptEdits"]);
     expect(sets().every((s) => (s as { sessionId: string }).sessionId === sessionId)).toBe(true);
-    await waitFor(() => expect(label()).toBe("⏵⏵ plan only on (shift+tab to cycle)"));
+    await waitFor(() => expect(label()).toBe("⏵⏵ accept edits on (shift+tab to cycle)"));
   });
 
   it("describes auto, and keeps an unknown mode's own name", () => {
@@ -139,5 +139,8 @@ describe("Shift+Tab and the mode label", () => {
     expect(nextSafeMode(opt("acceptEdits", all))).toBe("default");
     expect(nextSafeMode(opt("bypassPermissions", all))).toBe("default");
     expect(nextSafeMode(opt("default", ["default", "full-access"]))).toBeNull();
+    // auto is in the cycle
+    expect(nextSafeMode(opt("acceptEdits", ["default", "acceptEdits", "auto", "bypassPermissions"]))).toBe("auto");
+    expect(nextSafeMode(opt("auto", ["default", "acceptEdits", "auto", "bypassPermissions"]))).toBe("default");
   });
 });

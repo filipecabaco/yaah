@@ -219,7 +219,8 @@ describe("a tool card's text", () => {
 
   it("keeps a code block on its lines, scrolling sideways with room for the scrollbar", async () => {
     await open(tool("```ts\nconst veryLongLine = [1, 2, 3].map((n) => n * 2).filter(Boolean).join(', ');\n```", "completed"));
-    const pre = screen.getByText(/const veryLongLine/);
+    // Matched on the block's own text: once highlighted, the line is split into coloured spans.
+    const pre = await screen.findByText((_, el) => el?.tagName === "PRE" && /const veryLongLine/.test(el.textContent ?? ""));
     expect(pre).toHaveAttribute("data-layout", "code");
     expect(pre.className.split(" ")).toContain("whitespace-pre");
     expect(pre.className).toContain("overflow-auto");

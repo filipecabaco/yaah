@@ -5,6 +5,9 @@
 // the rows on screen (windowed), so a 5000-line file opens as fast as a small one.
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { WrapText } from "lucide-react";
+import type { ThemedToken } from "shiki/core";
+import { HighlightedLine } from "@/components/code-block";
+import { useDiffTokens } from "@/components/diff/use-diff-tokens";
 import { Button } from "@/components/ui/button";
 import type { DiffFile, Hunk, Line } from "@/components/diff/model";
 import { OVERSCAN, rowHeight, splitIndent, tabStyle, WRAP_MAX, type Row } from "@/components/diff/lines";
@@ -24,8 +27,33 @@ const GUTTER_TONE: Record<Line["kind"], string | undefined> = {
   " ": undefined,
 };
 
+/** The tokens of a line without its first `n` characters (the indent a wrapped line hangs). */
+function dropChars(tokens: ThemedToken[], n: number): ThemedToken[] {
+  const out: ThemedToken[] = [];
+  for (const t of tokens) {
+    if (n >= t.content.length) n -= t.content.length;
+    else {
+      out.push(n > 0 ? { ...t, content: t.content.slice(n) } : t);
+      n = 0;
+    }
+  }
+  return out;
+}
+
 /** One line: line numbers (sticky when the file scrolls sideways), the +/− mark, the code. */
-export function DiffLine({ line, wrap, fixed, className }: { line: Line; wrap: boolean; fixed?: boolean; className?: string }) {
+export function DiffLine({
+  line,
+  wrap,
+  fixed,
+  className,
+  tokens,
+}: {
+  line: Line;
+  wrap: boolean;
+  fixed?: boolean;
+  className?: string;
+  tokens?: ThemedToken[];
+}) {
   const { indent, rest, cols } = wrap ? splitIndent(line.text) : { indent: "", rest: line.text, cols: 0 };
   return (
     <div
@@ -59,11 +87,13 @@ export function DiffLine({ line, wrap, fixed, className }: { line: Line; wrap: b
               {indent}
             </span>
           )}
-          <span className="min-w-0 flex-1 [overflow-wrap:anywhere] whitespace-pre-wrap">{rest}</span>
+          <span className="min-w-0 flex-1 [overflow-wrap:anywhere] whitespace-pre-wrap">
+            {tokens ? <HighlightedLine tokens={dropChars(tokens, indent.length)} /> : rest}
+          </span>
         </span>
       ) : (
         <span className="pr-4 whitespace-pre" style={tabStyle}>
-          {line.text}
+          {tokens ? <HighlightedLine tokens={tokens} /> : line.text}
         </span>
       )}
     </div>
@@ -126,6 +156,7 @@ export function DiffRows({
   hunkMenu?: (index: number) => MenuAction[] | undefined;
 }) {
   const wrapped = wrap && rows.length <= WRAP_MAX;
+  const tokensOf = useDiffTokens(file);
   // Rows are `--code-row` tall, which follows the code size.
   const row = rowHeight(useCodeScale());
   const box = useRef<HTMLDivElement>(null);
@@ -157,7 +188,7 @@ export function DiffRows({
   const draw = (r: Row, key: number) =>
     r.line ? (
       <div key={key} ref={menus[r.hunk]} className={cn(r.hunk === current && "shadow-[inset_2px_0_0_var(--ring)]")}>
-        <DiffLine line={r.line} wrap={wrapped} fixed={!wrapped} />
+        <DiffLine line={r.line} wrap={wrapped} fixed={!wrapped} tokens={tokensOf(r.line)} />
       </div>
     ) : (
       <div key={key} ref={menus[r.hunk]}>
