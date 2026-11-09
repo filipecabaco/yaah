@@ -48,7 +48,7 @@ pub use trust::{PermissionSettings, TrustView};
 /// Model, effort and the agent's other settings (ACP session config options).
 mod config;
 pub use config::{AgentDefaults, ChatConfig, ConfigOption, summary as config_summary};
-/// Messages sent while a turn runs: kept in order, sent one at a time as turns end.
+/// Messages sent while a turn runs: kept in order, sent together, as one message, as a turn ends.
 mod queue;
 pub use queue::{Edited, MAX_QUEUED, Pause, PauseReason, Queue, Queued, Sent};
 

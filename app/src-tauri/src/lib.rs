@@ -204,6 +204,7 @@ pub fn run() {
             queue_commands::queue_clear,
             queue_commands::queue_resume,
             queue_commands::queue_send_now,
+            queue_commands::queue_merge,
             attachments::describe_drop,
             attachments::stage_attachments,
             attachments::stage_pasted_image,

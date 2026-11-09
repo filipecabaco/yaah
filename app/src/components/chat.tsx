@@ -803,7 +803,14 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
 
   async function send(now = false) {
     const prompt = text.trim();
-    if ((!prompt && !attached.items.length) || attached.pending) return;
+    if ((!prompt && !attached.items.length) || attached.pending) {
+      // Ctrl/⌘+Enter on an empty box joins the queue into one message.
+      if (now && !prompt && !attached.items.length && (session.queue?.items?.length ?? 0) > 0) {
+        setError(null);
+        api.queueMerge(session.sessionId).catch(setError);
+      }
+      return;
+    }
     const own = localCommands(session, pane).find((c) => prompt === c.label);
     if (own) {
       setText("");
@@ -833,7 +840,9 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
     setSending(true);
     try {
       const files = attached.items.map((a) => a.id);
-      await api.sendPrompt(session.sessionId, prompt, paths, files);
+      const sent = await api.sendPrompt(session.sessionId, prompt, paths, files);
+      // Ctrl/⌘+Enter: what is queued, this message included, becomes one message.
+      if (now && sent.status === "queued") await api.queueMerge(session.sessionId);
       setText("");
       setMentions({});
       setPicked({});
