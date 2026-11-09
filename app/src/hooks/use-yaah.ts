@@ -60,7 +60,7 @@ export function useYaah() {
   const panes = useLayout();
   const selection = panes.focused.content;
   const setSelection = panes.select;
-  const { openIn, focusedId, mapContents } = panes;
+  const { openIn, focusedId, mapContents, prune: prunePanes } = panes;
   /** False until the chats have loaded once (a restored pane may name one). */
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   /** Why the first load (agents, projects, chats) failed, if it did. */
@@ -300,7 +300,7 @@ export function useYaah() {
     setSessions((prev) => ({ ...prev, [id]: info }));
   }, []);
 
-  /** Drops the chat; every pane that showed it shows its project (if any) instead. */
+  /** Drops the chat; every pane that showed it shows its project (if any) instead, and its UI panes close. */
   const deleteChat = useCallback(
     async (chat: SessionInfo) => {
       const id = chat.sessionId;
@@ -308,9 +308,10 @@ export function useYaah() {
       setSessions(({ [id]: _, ...rest }) => rest);
       transcripts.remove(id);
       removeDraft(id);
+      prunePanes((c) => !(c?.kind === "ui" && c.chat === id));
       mapContents((c) => (c?.kind === "chat" && c.id === id ? (chat.projectId ? { kind: "project", id: chat.projectId } : null) : c));
     },
-    [transcripts, mapContents],
+    [transcripts, mapContents, prunePanes],
   );
 
   const orderedProjects = useMemo(() => sortProjects(projects), [projects]);

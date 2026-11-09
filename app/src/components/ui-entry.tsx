@@ -1,9 +1,10 @@
 // Transcript entries the agent puts up through yaah's UI server: rendered UI
-// (with Expand, a large dialog showing the same UI), and a request to add
-// folders to the chat (`ui_request_folders`).
+// (with Expand, a large dialog showing the same UI, and Open in a side pane,
+// which moves it out of the chat into a pane: ui-pane.tsx), and a request to
+// add folders to the chat (`ui_request_folders`).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { FolderPlus, LayoutPanelTop, Loader2, Maximize2 } from "lucide-react";
+import { FolderPlus, LayoutPanelTop, Loader2, Maximize2, PanelRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -12,14 +13,16 @@ import { ErrorText } from "@/components/error-text";
 import { useChat } from "@/components/chat-context";
 import { UiTree } from "@/components/ui-render";
 import type { FormHost } from "@/components/ui-form-host";
+import { useUiPanes } from "@/components/ui-panes-context";
 import { UiViewContext, type UiView } from "@/components/ui-view";
 import { api, type Entry } from "@/lib/api";
-import { openComponent } from "@/lib/app-events";
+import { openComponent, openUiPane } from "@/lib/app-events";
 import { compactPath } from "@/lib/format";
 import { uiTitle } from "@/lib/ui-title";
 import { cn } from "@/lib/utils";
 
 type Of<T extends Entry["type"]> = Extract<Entry, { type: T }>;
+export type UiEntryData = Of<"ui">;
 
 /** Typing somewhere the F key means a letter, not "expand". */
 const typing = (el: EventTarget | null) => el instanceof HTMLElement && !!el.closest("input, textarea, select, [contenteditable='true']");
@@ -42,7 +45,7 @@ function focusFirst(root: HTMLElement) {
  * React, so the dialog shows the very same UI (its live readings, form values, viewed
  * ticks, selected file and scroll), never a copy that would poll its sources again.
  */
-function useMovable(expanded: boolean) {
+function useMovable(expanded: boolean, shown = true) {
   const [host] = useState(() => document.createElement("div"));
   const inline = useRef<HTMLDivElement>(null);
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
@@ -50,7 +53,8 @@ function useMovable(expanded: boolean) {
     const inDialog = expanded && slot != null;
     const target = inDialog ? slot : inline.current;
     if (target) place(host, target, inDialog);
-  }, [expanded, slot, host]);
+    // `shown`: back from a side pane, the inline slot is a new element to put it in.
+  }, [expanded, slot, host, shown]);
   return { host, inline, setSlot };
 }
 
@@ -61,10 +65,12 @@ function place(node: HTMLElement, target: HTMLElement, inDialog: boolean) {
   if (inDialog) focusFirst(node);
 }
 
-export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
-  const sessionId = useChat()?.sessionId;
-  // Forms in this UI answer through its transcript entry (and a waiting ui_ask, if any),
-  // and share their draft with the agent (ui_get_values / ui_set_values).
+/**
+ * A rendered UI's tree, its forms wired to its transcript entry: they answer through it (and a
+ * waiting ui_ask, if any) and share their draft with the agent (ui_get_values / ui_set_values).
+ * The same inline, expanded and in a side pane (ui-pane.tsx), so a form works alike everywhere.
+ */
+export function UiContent({ entry, index, sessionId, view }: { entry: UiEntryData; index: number; sessionId?: string; view: UiView }) {
   const form = useMemo<FormHost>(
     () => ({
       answer: entry.answer,
@@ -76,16 +82,52 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
     }),
     [entry.answer, entry.askId, entry.draft, entry.draftBy, sessionId, index],
   );
+  return (
+    <UiViewContext.Provider value={view}>
+      <UiTree tree={entry.tree} props={entry.props} form={form} />
+    </UiViewContext.Provider>
+  );
+}
+
+/** The caption's badges: waiting on the user, and which component (and version) it is. */
+export function UiBadges({ entry }: { entry: UiEntryData }) {
+  return (
+    <>
+      {entry.askId && entry.answer == null && (
+        <Badge variant="secondary" className="h-4 px-1 text-2xs">
+          waiting for you
+        </Badge>
+      )}
+      {entry.component && entry.version != null && (
+        <Badge variant="outline" className="h-4 px-1 font-mono text-2xs">
+          {entry.component} v{entry.version}
+        </Badge>
+      )}
+    </>
+  );
+}
+
+export function UiEntry({ entry, index }: { entry: UiEntryData; index: number }) {
+  const chat = useChat();
+  const sessionId = chat?.sessionId;
+  // Moved into a side pane: the chat keeps a link to it instead (closing the pane brings it back).
+  const panes = useUiPanes();
+  const inPane = sessionId ? panes.paneOf(sessionId, index) : undefined;
+  const toPane = sessionId ? () => openUiPane({ chat: sessionId, index, pane: chat?.pane }) : undefined;
   const [expanded, setExpanded] = useState(false);
+  // Moved out while expanded: the dialog closes, and stays closed when it comes back.
+  if (inPane && expanded) setExpanded(false);
   const expand = useCallback(() => setExpanded(true), []);
   const name = uiTitle(entry);
   const view = useMemo<UiView>(() => ({ expanded, expand: expanded ? undefined : expand, name }), [expanded, expand, name]);
-  const { host, inline, setSlot } = useMovable(expanded);
+  const { host, inline, setSlot } = useMovable(expanded, !inPane);
 
   // F expands it: with focus inside the entry, or with the pointer over it (unless typing elsewhere).
   const [hovered, setHovered] = useState(false);
+  // The stub that stood in for it never saw the pointer leave.
+  if (inPane && hovered) setHovered(false);
   useEffect(() => {
-    if (!hovered || expanded) return;
+    if (!hovered || expanded || inPane) return;
     const onKey = (e: KeyboardEvent) => {
       if (!isExpandKey(e) || typing(document.activeElement)) return;
       e.preventDefault();
@@ -93,7 +135,28 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [hovered, expanded]);
+  }, [hovered, expanded, inPane]);
+
+  if (inPane) {
+    return (
+      <figure className="flex flex-col gap-1.5">
+        <figcaption className="flex items-center gap-1.5 text-xs text-muted-foreground">
+          <LayoutPanelTop className="size-3" />
+          {name}
+        </figcaption>
+        <div role="note" className="flex flex-wrap items-center gap-x-1.5 rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+          <PanelRight className="size-3.5" aria-hidden />
+          <button type="button" className="hover:text-foreground hover:underline" onClick={() => panes.focus(inPane)}>
+            Shown in a side pane
+          </button>
+          <span aria-hidden>·</span>
+          <button type="button" className="font-medium text-foreground hover:underline" onClick={() => panes.close(inPane)}>
+            Show here
+          </button>
+        </div>
+      </figure>
+    );
+  }
 
   return (
     <div
@@ -108,7 +171,10 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
       <CopyMenu
         act={() => {
           const component = entry.component;
-          return component ? [{ label: "Open in Component library", icon: <LayoutPanelTop />, onSelect: () => openComponent(component) }] : [];
+          return [
+            ...(toPane ? [{ label: "Open in a side pane", icon: <PanelRight />, onSelect: toPane }] : []),
+            ...(component ? [{ label: "Open in Component library", icon: <LayoutPanelTop />, onSelect: () => openComponent(component) }] : []),
+          ];
         }}
         actions={[
           { label: "Copy UI JSON", text: () => JSON.stringify(entry.tree, null, 2) },
@@ -119,20 +185,23 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
           <figcaption className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <LayoutPanelTop className="size-3" />
             {entry.title ?? (entry.component ? null : "UI")}
-            {entry.askId && entry.answer == null && (
-              <Badge variant="secondary" className="h-4 px-1 text-2xs">
-                waiting for you
-              </Badge>
-            )}
-            {entry.component && entry.version != null && (
-              <Badge variant="outline" className="h-4 px-1 font-mono text-2xs">
-                {entry.component} v{entry.version}
-              </Badge>
+            <UiBadges entry={entry} />
+            {toPane && (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="ml-auto"
+                aria-label={`Open ${name} in a side pane`}
+                title="Open in a side pane"
+                onClick={toPane}
+              >
+                <PanelRight />
+              </Button>
             )}
             <Button
               variant="ghost"
               size="icon-xs"
-              className="ml-auto"
+              className={toPane ? undefined : "ml-auto"}
               aria-label={`Expand ${name}`}
               title="Expand (F)"
               aria-pressed={expanded}
@@ -153,12 +222,10 @@ export function UiEntry({ entry, index }: { entry: Of<"ui">; index: number }) {
             </button>
           )}
           {createPortal(
-            <UiViewContext.Provider value={view}>
-              {/* Expanded, the transcript's right-click menu stays out of the dialog. */}
-              <div className="contents" onContextMenu={expanded ? (e) => e.stopPropagation() : undefined}>
-                <UiTree tree={entry.tree} props={entry.props} form={form} />
-              </div>
-            </UiViewContext.Provider>,
+            // Expanded, the transcript's right-click menu stays out of the dialog.
+            <div className="contents" onContextMenu={expanded ? (e) => e.stopPropagation() : undefined}>
+              <UiContent entry={entry} index={index} sessionId={sessionId} view={view} />
+            </div>,
             host,
           )}
         </figure>

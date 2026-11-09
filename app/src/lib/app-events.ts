@@ -1,5 +1,6 @@
 // App-wide requests that cross the component tree without props: a card deep
-// in a chat asking the app to open Settings on a tab, or a component in the library.
+// in a chat asking the app to open Settings on a tab, a component in the library,
+// or one of its UIs in a side pane.
 const OPEN_SETTINGS = "yaah:open-settings";
 
 /** Ask the app to open Settings on a tab (App listens). */
@@ -84,4 +85,19 @@ export function onCycleMode(cb: (request: CycleModeRequest) => void): () => void
   const listener = (e: Event) => cb((e as CustomEvent<CycleModeRequest>).detail);
   window.addEventListener(CYCLE_MODE, listener);
   return () => window.removeEventListener(CYCLE_MODE, listener);
+}
+
+const OPEN_UI_PANE = "yaah:open-ui-pane";
+/** A chat's UI entry (`index` in chat `chat`) to move into a side pane; `pane`: the pane it was asked from. */
+export type UiPaneRequest = { chat: string; index: number; pane?: string };
+
+/** Move a rendered UI into a pane beside its chat, as the agent's `ui_open_pane` does (App listens). */
+export function openUiPane(request: UiPaneRequest) {
+  window.dispatchEvent(new CustomEvent<UiPaneRequest>(OPEN_UI_PANE, { detail: request }));
+}
+
+export function onOpenUiPane(cb: (request: UiPaneRequest) => void): () => void {
+  const listener = (e: Event) => cb((e as CustomEvent<UiPaneRequest>).detail);
+  window.addEventListener(OPEN_UI_PANE, listener);
+  return () => window.removeEventListener(OPEN_UI_PANE, listener);
 }

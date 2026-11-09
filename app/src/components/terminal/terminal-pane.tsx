@@ -8,6 +8,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { baseName, compactPath } from "@/lib/format";
+import { addDropZone, type DragState } from "@/lib/attachments";
+import { dropText } from "@/lib/shell-quote";
 import { clearPaneInfo, setPaneInfo } from "@/lib/pane-info";
 import type { Selection } from "@/lib/layout";
 import { formatKeys, isMac, MOD, SHIFT, SHORTCUTS } from "@/lib/shortcuts";
@@ -76,6 +78,18 @@ export function TerminalPane({
     latest.current = { content, onContent, onClose };
   });
 
+  // Files dropped from the OS (Tauri hands over real paths) and text dragged in are typed at the prompt,
+  // paths escaped, nothing sent: the user presses Enter. The shell's own id is read at drop time.
+  const [drag, setDrag] = useState<DragState | { text: true } | null>(null);
+  const type = useCallback((text: string) => {
+    const id = latest.current.content.id;
+    if (id && text) void terminalApi.write(id, text).catch((e: unknown) => console.error("terminal drop", e));
+  }, []);
+  useEffect(() => {
+    const el = box.current;
+    return el ? addDropZone({ el, onDrag: setDrag, onDrop: (paths) => type(dropText(paths)) }) : undefined;
+  }, [type]);
+
   const launch = useCallback(() => {
     openShell(pane, latest.current.content.cwd, gridFor(box.current)).then(
       // The folder the shell opened in, and its id; the project it belongs to stays.
@@ -143,7 +157,24 @@ export function TerminalPane({
   return (
     <div
       ref={box}
-      className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--terminal-background)]"
+      className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--terminal-background)]"
+      // Text (a dragged selection, a link) in a plain DOM drag; files come through the drop zone above.
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes("text/plain") || e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        setDrag((d) => (d && "items" in d ? d : { text: true }));
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDrag((d) => (d && "items" in d ? d : null));
+      }}
+      onDrop={(e) => {
+        const text = e.dataTransfer.getData("text/plain");
+        setDrag(null);
+        if (!text || e.dataTransfer.files.length) return;
+        e.preventDefault();
+        type(text);
+      }}
       // ⌘⇧Enter (Ctrl+Shift+Enter on Linux), Ghostty's "zoom split" keys: before the shell sees them.
       onKeyDownCapture={(e) => {
         if (!isExpandKey(e.nativeEvent) || !content.id) return;
@@ -233,6 +264,16 @@ export function TerminalPane({
           <Button size="xs" variant="ghost" onClick={onClose}>
             Close pane
           </Button>
+        </div>
+      )}
+      {drag && content.id && (
+        <div
+          role="status"
+          className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-background/70 ring-2 ring-ring ring-inset"
+        >
+          <span className="rounded-md border bg-background px-3 py-1.5 text-sm shadow-sm">
+            {"items" in drag ? `Drop to type ${drag.items.length === 1 ? "its path" : `${drag.items.length} paths`} here` : "Drop to type this here"}
+          </span>
         </div>
       )}
       <Dialog open={expanded && !!content.id} onOpenChange={setExpanded}>

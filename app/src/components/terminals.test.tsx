@@ -14,6 +14,7 @@ import { startAgentTerminal } from "@/dev/mock/terminals";
 import { inProject, originOf } from "@/components/terminal/use-terminals";
 import type { Entry, Project, SessionInfo } from "@/lib/api";
 import { panesOf, type Layout } from "@/lib/layout";
+import { handleDragEvent } from "@/lib/attachments";
 import { isMac } from "@/lib/shortcuts";
 import { renderApp } from "@/test/app";
 import { textEngine } from "@/test/text-engine";
@@ -291,6 +292,19 @@ describe("originOf: where a pane opened from another starts", () => {
     expect(inProject("/h/.yaah/projects/pr", project)).toBe(true);
     expect(inProject("/w/api-billing", project)).toBe(false);
     expect(inProject("/w", project)).toBe(false);
+  });
+});
+
+describe("files dropped on a terminal", () => {
+  it("are typed at the prompt with their paths escaped, and not run", async () => {
+    const { user, mock } = await started();
+    await user.click(screen.getByRole("button", { name: /new terminal/i }));
+    await screen.findByRole("textbox", { name: "Terminal input" });
+    const shell = () => Object.values(mock.terminals).find((t) => !t.agent)!;
+    await waitFor(() => expect(shell()).toBeDefined());
+
+    act(() => handleDragEvent({ type: "drop", paths: ["/Users/me/My Shots/a (1).png", "/tmp/b.txt"], position: { x: 0, y: 0 } }));
+    await waitFor(() => expect(mock.terminalInput[shell().id]?.join("")).toBe("/Users/me/My\\ Shots/a\\ \\(1\\).png /tmp/b.txt "));
   });
 });
 

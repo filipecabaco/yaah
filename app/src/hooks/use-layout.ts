@@ -13,7 +13,9 @@ import {
   mapContents,
   neighbour,
   nextPane,
+  openBeside,
   panesOf,
+  prune,
   setContent,
   setRatio,
   singlePane,
@@ -154,6 +156,21 @@ export function useLayout() {
       /** Every pane the same size along its row or column (Ghostty's "equalize splits"). */
       balance: () => void apply(balance),
       mapContents: (f: (c: Selection) => Selection) => void apply((l) => mapContents(l, f)),
+      /** Close every pane `keep` rejects (a deleted chat's UI panes); a single home pane when none is left. */
+      prune: (keep: (c: Selection) => boolean) => void apply((l) => prune(l, keep)),
+      /**
+       * Show `content` beside pane `from` (layout.ts `openBeside`: the pane already showing it, else a new
+       * split in `dir`); the pane's id, or null when there's no room for another.
+       */
+      openBeside: (from: string, content: Selection, dir: Split["dir"], options?: Parameters<typeof openBeside>[4]) => {
+        let id: string | null = null;
+        apply((l) => {
+          const r = openBeside(l, from, content, dir, options);
+          id = r?.id ?? null;
+          return r?.layout ?? l;
+        });
+        return id;
+      },
       toggleSidebar: () => putSidebar({ ...sidebarNow.current, collapsed: !sidebarNow.current.collapsed }),
       /** Its width in CSS pixels, kept within 220–480. */
       setSidebarWidth: (width: number) => {

@@ -111,6 +111,14 @@ export const createXtermEngine: EngineFactory = (el, o) => {
 
   term.attachCustomKeyEventHandler((e) => {
     if (o.passThrough(e)) return false;
+    // Shift+Enter is a newline that doesn't submit: xterm.js sends the same \r as Enter, so a program that
+    // listens for it (Claude Code, Codex, OpenCode) never sees the difference. A line feed (Ctrl+J) is what
+    // they all take as "newline", and a plain shell reads it as Enter. preventDefault: the keypress would send \r too.
+    if (o.interactive && e.key === "Enter" && e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey && !e.isComposing) {
+      if (e.type === "keydown") o.onData("\n");
+      e.preventDefault();
+      return false;
+    }
     // Copy with a selection; otherwise ⌘C is nothing to a shell on macOS (and Ctrl+Shift+C on Linux).
     const copy = e.type === "keydown" && e.code === "KeyC" && (isMac ? e.metaKey : e.ctrlKey && e.shiftKey);
     if (copy && term.hasSelection()) {

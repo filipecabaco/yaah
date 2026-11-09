@@ -1,6 +1,6 @@
 //! The window's layout, as the user left it: the split panes (a tree of row and
 //! column splits, each pane showing a chat, a project, the component library, the
-//! picker or the home screen) and the sidebar (hidden or not, its width). Saved in
+//! picker, a terminal, a diff, a chat's UI or the home screen) and the sidebar (hidden or not, its width). Saved in
 //! `settings.json` (`layout`, `sidebar`) through `settings.rs`; read back checked,
 //! with the panes on chats or projects deleted since dropped.
 //!
@@ -62,10 +62,19 @@ pub enum Content {
         #[serde(default, rename = "projectId", skip_serializing_if = "Option::is_none")]
         project_id: Option<String>,
     },
+    /// A UI the agent rendered in chat `chat`, moved out of its transcript into a pane
+    /// (`ui_open_pane`, or the entry's own "Open in a side pane"). `index` is the entry's place
+    /// in the transcript. It goes with its chat.
+    Ui {
+        chat: String,
+        index: usize,
+    },
 }
 
 /// A folder path or terminal id longer than this isn't one the UI made.
 const MAX_FIELD: usize = 4096;
+/// Chat ids are yaah's own or an agent's session id (imported sessions keep theirs), so they get more room than pane ids.
+const MAX_CHAT_ID: usize = 256;
 
 /// A project id the UI could have saved (projects.rs makes 16-character tokens).
 fn sane_project(p: Option<&String>) -> bool {
@@ -86,6 +95,7 @@ impl Content {
                     && base.as_ref().is_none_or(|b| b.len() <= MAX_FIELD && !b.contains('\0'))
                     && sane_project(project_id.as_ref())
             }
+            Self::Ui { chat, .. } => !chat.is_empty() && chat.len() <= MAX_CHAT_ID && !chat.chars().any(char::is_control),
             _ => true,
         }
     }
@@ -251,7 +261,7 @@ impl Layout {
             return Err(format!("two panes or splits are called {dup}"));
         }
         if !self.root.sane() {
-            return Err("a terminal or diff pane's folder, id or project isn't one the UI makes".into());
+            return Err("a terminal, diff or UI pane's folder, id, chat or project isn't one the UI makes".into());
         }
         let root = self.root.with_sane_ratios();
         let mut panes = vec![];
@@ -261,12 +271,13 @@ impl Layout {
     }
 
     /// Without the panes on chats or projects that are gone (`chat_exists`,
-    /// `project_exists`), their neighbours taking the space. The home pane when none is left.
+    /// `project_exists`), a chat's UI panes going with it, their neighbours taking the space.
+    /// The home pane when none is left.
     /// A terminal or diff linked to a project that's gone stays, without the link.
     #[must_use]
     pub fn pruned(self, chat_exists: impl Fn(&str) -> bool, project_exists: impl Fn(&str) -> bool) -> Self {
         let keep = |c: Option<&Content>| match c {
-            Some(Content::Chat { id }) => chat_exists(id),
+            Some(Content::Chat { id } | Content::Ui { chat: id, .. }) => chat_exists(id),
             Some(Content::Project { id }) => project_exists(id),
             _ => true,
         };
@@ -439,6 +450,40 @@ mod tests {
         assert_eq!(pruned.pane_ids(), ["p2", "p3"]);
         let long = json!({ "root": pane("p1", json!({ "kind": "diff", "base": "x".repeat(5000) })), "focused": "p1" });
         assert!(from_saved(Some(&long)).is_none());
+    }
+
+    #[test]
+    fn ui_panes_round_trip_and_go_with_their_chat() {
+        let saved = json!({
+            "root": split(
+                "s1",
+                "row",
+                0.5,
+                pane("p1", json!({ "kind": "chat", "id": "c1" })),
+                split("s2", "column", 0.5, pane("p2", json!({ "kind": "ui", "chat": "c1", "index": 4 })), pane("p3", json!({ "kind": "ui", "chat": "c2", "index": 0 }))),
+            ),
+            "focused": "p3",
+        });
+        let l = from_saved(Some(&saved)).expect("valid");
+        assert_eq!(serde_json::to_value(&l).unwrap(), saved, "saved as the UI sent it");
+        // c2 was deleted: its UI pane goes, p2 takes the space and the focus moves to the first pane.
+        let pruned = l.clone().pruned(|c| c == "c1", |_| true);
+        assert_eq!(pruned.pane_ids(), ["p1", "p2"]);
+        assert_eq!(pruned.focused, "p1");
+        assert_eq!(l.pruned(|_| false, |_| true), Layout::home());
+
+        let with = |content: Value| json!({ "root": pane("p1", content), "focused": "p1" });
+        for bad in [
+            json!({ "kind": "ui", "chat": "c1" }),
+            json!({ "kind": "ui", "chat": "c1", "index": -1 }),
+            json!({ "kind": "ui", "chat": "c1", "index": "3" }),
+            json!({ "kind": "ui", "chat": "", "index": 0 }),
+            json!({ "kind": "ui", "chat": "x".repeat(MAX_CHAT_ID + 1), "index": 0 }),
+            json!({ "kind": "ui", "chat": "c\n1", "index": 0 }),
+            json!({ "kind": "ui", "index": 0 }),
+        ] {
+            assert!(from_saved(Some(&with(bad.clone()))).is_none(), "{bad}");
+        }
     }
 
     #[test]

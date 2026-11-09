@@ -831,10 +831,12 @@ function PaneRow({
   const info = usePaneInfo(pane.id);
   const content = pane.content;
   const diff = content?.kind === "diff";
-  const kind = diff ? "Diff" : "Terminal";
+  // A chat's UI moved into a pane: named by the UI, its chat beside it (ui-pane.tsx publishes both).
+  const ui = content?.kind === "ui";
+  const kind = ui ? "UI" : diff ? "Diff" : "Terminal";
   const cwd = content?.kind === "terminal" || content?.kind === "diff" ? content.cwd : undefined;
-  const name = info?.title ?? (cwd ? baseName(cwd) : diff ? "Diff" : "Terminal");
-  const Icon = diff ? GitCompare : SquareTerminal;
+  const name = info?.title ?? (cwd ? baseName(cwd) : kind);
+  const Icon = ui ? LayoutPanelTop : diff ? GitCompare : SquareTerminal;
   return (
     <li>
       <ContextMenu>
@@ -859,7 +861,7 @@ function PaneRow({
             </button>
             <button
               type="button"
-              aria-label={`Close ${kind.toLowerCase()} ${name}`}
+              aria-label={`Close ${ui ? kind : kind.toLowerCase()} ${name}`}
               title="Close the pane"
               onClick={() => onClose(pane.id)}
               className="mr-0.5 grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"

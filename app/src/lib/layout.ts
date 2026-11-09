@@ -1,13 +1,15 @@
 // Split panes: the main area as a tree of row and column splits (Ghostty-style),
-// each leaf a pane showing a chat, a project, the component library, a picker or
-// the home screen. Pure functions over plain data; the app keeps the tree in
+// each leaf a pane showing a chat, a project, the component library, a picker, a
+// terminal, a diff, a chat's UI or the home screen. Pure functions over plain data; the app keeps the tree in
 // use-yaah.ts and Rust saves it (settings.rs `layout`, checked and pruned by layout.rs).
 
 /**
  * What a pane shows; null is the home screen. A terminal is a shell in `cwd` (the default folder
  * when there is none); `id` is its running shell, which a restart leaves naming nothing. A terminal
  * or diff opened from a project's context keeps `projectId`, so the sidebar lists it under that
- * project; Rust drops the link when the project is deleted (layout.rs `pruned`).
+ * project; Rust drops the link when the project is deleted (layout.rs `pruned`). A `ui` pane shows the
+ * UI entry at `index` in chat `chat`'s transcript, moved out of it (the chat shows a link instead);
+ * it goes with its chat.
  */
 export type Selection =
   | { kind: "project"; id: string }
@@ -16,6 +18,7 @@ export type Selection =
   | { kind: "picker" }
   | { kind: "terminal"; cwd?: string; id?: string; projectId?: string }
   | { kind: "diff"; cwd?: string; mode?: DiffMode; base?: string; projectId?: string }
+  | { kind: "ui"; chat: string; index: number }
   | null;
 
 /**
@@ -116,6 +119,51 @@ export function closePane(layout: Layout, id: string): Layout {
   return { root, focused };
 }
 
+/**
+ * The pane already showing what `content` would: the same UI, or a diff of the same folder (its
+ * mode and base can change). Opening it again reuses that pane instead of stacking another.
+ */
+export function showing(layout: Layout, content: Selection): Pane | undefined {
+  const same = (c: Selection) => (content?.kind === "diff" && c?.kind === "diff" ? !!content.cwd && c.cwd === content.cwd : sameContent(c, content));
+  return panesOf(layout.root).find((p) => same(p.content));
+}
+
+/**
+ * Show `content` beside pane `from` (the chat that asked for it): in the pane already showing
+ * it (`showing`), else in a new pane split off `from` in `dir`. When `from` is too small to halve
+ * (each half keeping `MIN_PANE` in a grid `size` pixels big, times `scale`), the largest pane that
+ * can be is split instead; with none, `from` all the same. The focus stays where it was unless
+ * `focus`. Null when there's no room for another pane (`MAX_PANES`).
+ */
+export function openBeside(
+  layout: Layout,
+  from: string,
+  content: Selection,
+  dir: Split["dir"],
+  { size, scale = 1, focus = false }: { size?: { w: number; h: number }; scale?: number; focus?: boolean } = {},
+): { layout: Layout; id: string } | null {
+  const there = showing(layout, content);
+  if (there) {
+    const next = setContent(layout, there.id, content);
+    return { layout: focus ? focusPane(next, there.id) : next, id: there.id };
+  }
+  if (panesOf(layout.root).length >= MAX_PANES) return null;
+  const rects = paneRects(layout.root);
+  const fits = (id: string) => {
+    const r = rects.get(id);
+    if (!r || !size?.w || !size.h) return true;
+    return dir === "row" ? r.w * size.w >= 2 * MIN_PANE.w * scale : r.h * size.h >= 2 * MIN_PANE.h * scale;
+  };
+  const area = (id: string) => {
+    const r = rects.get(id)!;
+    return r.w * r.h;
+  };
+  const start = findPane(layout, from) ? from : layout.focused;
+  const target = fits(start) ? start : ([...rects.keys()].filter(fits).sort((x, y) => area(y) - area(x))[0] ?? start);
+  const split = splitPane(layout, target, dir, content);
+  return { layout: focus ? split.layout : { ...split.layout, focused: layout.focused }, id: split.id };
+}
+
 export function setContent(layout: Layout, id: string, content: Selection): Layout {
   const pane = findPane(layout, id);
   if (!pane || sameContent(pane.content, content)) return layout;
@@ -134,6 +182,15 @@ export function mapContents(layout: Layout, f: (c: Selection) => Selection): Lay
   });
   return changed ? { ...layout, root } : layout;
 }
+
+/** The UI entries shown in panes (`ui` panes), as `uiKey`s, with the pane each is in. */
+export function shownUis(layout: Layout): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const p of panesOf(layout.root)) if (p.content?.kind === "ui") out.set(uiKey(p.content.chat, p.content.index), p.id);
+  return out;
+}
+
+export const uiKey = (chat: string, index: number) => `${index}\u0000${chat}`;
 
 /** The project a terminal or diff pane belongs to, if it was opened from one. */
 export const linkedProject = (c: Selection): string | undefined => (c?.kind === "terminal" || c?.kind === "diff" ? c.projectId : undefined);
@@ -181,6 +238,7 @@ export function sameContent(a: Selection, b: Selection): boolean {
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === "terminal") return b.kind === "terminal" && a.id === b.id && a.cwd === b.cwd && a.projectId === b.projectId;
   if (a.kind === "diff") return b.kind === "diff" && a.cwd === b.cwd && a.mode === b.mode && a.base === b.base && a.projectId === b.projectId;
+  if (a.kind === "ui") return b.kind === "ui" && a.chat === b.chat && a.index === b.index;
   return !("id" in a) || a.id === (b as { id: string }).id;
 }
 

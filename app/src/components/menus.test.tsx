@@ -156,7 +156,7 @@ describe("tool calls and permissions", () => {
     const badge = await within(log).findByText("service-status-overview v1", {}, { timeout: 15_000 });
 
     const menu = await rightClick(badge);
-    expect(items(menu)).toEqual(["Open in Component library", "Copy UI JSON", "Copy props JSON"]);
+    expect(items(menu)).toEqual(["Open in a side pane", "Open in Component library", "Copy UI JSON", "Copy props JSON"]);
     await user.click(within(menu).getByRole("menuitem", { name: "Open in Component library" }));
     expect(await screen.findByRole("heading", { level: 2, name: "service-status-overview" })).toBeInTheDocument();
   });

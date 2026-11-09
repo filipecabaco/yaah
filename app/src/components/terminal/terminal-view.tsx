@@ -212,10 +212,11 @@ export function TerminalView({
 
   return (
     <div className={cn("relative flex min-h-0 min-w-0 flex-col", className)}>
+      {/* The padding is on .xterm, not here: xterm's fit subtracts the padding of its own element, so padding on this one is drawn over by rows. The viewport paints black over that padding unless told not to. */}
       <div
         ref={host}
         data-terminal={terminalId}
-        className="min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--terminal-background)] p-1.5 [&_.xterm]:h-full"
+        className="min-h-0 min-w-0 flex-1 overflow-hidden bg-[var(--terminal-background)] [&_.xterm]:h-full [&_.xterm]:bg-[var(--terminal-background)] [&_.xterm]:px-1.5 [&_.xterm]:pt-1.5 [&_.xterm]:pb-4 [&_.xterm-viewport]:bg-[var(--terminal-background)]!"
       />
       {failed && <p className="px-2 py-1 text-xs text-muted-foreground">This terminal isn't available: {failed}</p>}
       {clip && (
