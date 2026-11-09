@@ -3,7 +3,7 @@
 // the queue is paused and Resume. Rust owns the queue (session/queue.rs): the order, when
 // the next goes and when it pauses. This draws what it sends and asks it for changes.
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowDown, ArrowUp, ChevronRight, Loader2, Pencil, Play, SendHorizontal, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, ChevronRight, Loader2, Merge, Pencil, Play, SendHorizontal, Trash2 } from "lucide-react";
 import { Hint } from "@/components/shortcuts";
 import { ErrorText } from "@/components/error-text";
 import { Badge } from "@/components/ui/badge";
@@ -83,6 +83,7 @@ export function ComposerQueue({ session, pane }: { session: SessionInfo; pane?: 
   // One Send now for the whole queue: it sends the first waiting message (Move up puts another there).
   const next = items.find((x) => !x.sending);
   const sendNow = next ? () => act(() => api.queueSendNow(sessionId, next.id), `Sending next: ${oneLine(next.text)}`) : null;
+  const join = items.length > 1 && next ? () => act(() => api.queueMerge(sessionId), `Joined ${items.length} queued messages into one`) : null;
   const detail = queue?.paused?.detail;
   return (
     <section aria-labelledby={headingId} data-slot="composer-queue" className="@container border-t pt-2 pb-1">
@@ -104,11 +105,18 @@ export function ComposerQueue({ session, pane }: { session: SessionInfo; pane?: 
               </Button>
             </>
           ) : (
-            <span className="text-muted-foreground">{session.running ? "Sent one at a time as each turn ends" : "Sending…"}</span>
+            <span className="text-muted-foreground">{session.running ? "Sent together as one when the turn ends" : "Sending…"}</span>
+          )}
+          {join && (
+            <Hint label="Unite every waiting message into one, so the next send takes them together (Ctrl+Enter in the message box)">
+              <Button size="xs" variant="ghost" className="ml-auto" onClick={join} disabled={items.some((x) => x.sending)}>
+                <Merge /> Join all
+              </Button>
+            </Hint>
           )}
           {sendNow && (
             <Hint label="Stop the running turn and send the first queued message now">
-              <Button size="xs" variant="ghost" className="ml-auto" onClick={sendNow} disabled={items.some((x) => x.sending)}>
+              <Button size="xs" variant="ghost" className={join ? undefined : "ml-auto"} onClick={sendNow} disabled={items.some((x) => x.sending)}>
                 <SendHorizontal /> Send now
               </Button>
             </Hint>

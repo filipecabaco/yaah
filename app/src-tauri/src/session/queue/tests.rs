@@ -135,8 +135,11 @@ fn items_move_and_leave_but_never_the_one_on_its_way() {
     assert_eq!(ids(&q), ["b", "a", "c"]);
     assert!(q.move_to("zz", 0).unwrap_err().contains("isn't queued"));
 
-    let first = q.begin().unwrap();
-    assert_eq!((first.id.as_str(), q.sending(), q.begin()), ("b", true, None), "one at a time");
+    let mut sending = queue(&["x", "y"]);
+    let first = sending.begin().unwrap().id;
+    assert_eq!((first.as_str(), ids(&sending), sending.sending()), ("x", vec!["x"], true), "everything waiting goes as one");
+    assert!(sending.begin().is_none());
+    q.items[0].sending = true;
     assert!(q.take("b").unwrap_err().contains("being sent"));
     assert!(q.move_to("b", 2).unwrap_err().contains("being sent"));
     q.move_to("c", 0).unwrap();
@@ -329,12 +332,12 @@ fn resume_and_send_now_send_from_rust_and_a_failed_send_keeps_the_message() {
     hub.queue_send_now("r", &two).unwrap();
     wait_for("the send fails", || reason(&hub.session_info("r").unwrap().queue) == Some(PauseReason::SendFailed));
     let q = hub.session_info("r").unwrap().queue;
-    assert_eq!(q.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), ["two", "one"]);
+    assert_eq!(q.items.iter().map(|i| i.text.as_str()).collect::<Vec<_>>(), ["two\n\none"]);
     assert!(!q.items[0].sending && q.paused.unwrap().detail.is_some(), "with why");
 
     hub.queue_resume("r").unwrap();
     wait_for("it fails again", || reason(&hub.session_info("r").unwrap().queue) == Some(PauseReason::SendFailed));
-    assert_eq!(hub.session_info("r").unwrap().queue.items.len(), 2, "nothing is lost");
+    assert_eq!(hub.session_info("r").unwrap().queue.items[0].text, "two\n\none", "nothing is lost");
     let _ = std::fs::remove_dir_all(dir);
 }
 

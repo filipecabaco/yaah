@@ -52,6 +52,12 @@ pub fn queue_resume(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<Sess
     hub.queue_resume(&session_id)
 }
 
+/// Join all: unite every waiting message into one, so the next send takes them together.
+#[tauri::command]
+pub fn queue_merge(hub: State<'_, Arc<Hub>>, session_id: String) -> Result<SessionInfo, String> {
+    hub.queue_merge(&session_id)
+}
+
 /// Send now: stop the running turn and send this message next.
 #[tauri::command]
 pub fn queue_send_now(hub: State<'_, Arc<Hub>>, session_id: String, id: String) -> Result<SessionInfo, String> {

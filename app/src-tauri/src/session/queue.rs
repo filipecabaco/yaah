@@ -1,5 +1,5 @@
 //! A chat's message queue: what the user sends while a turn runs waits here and
-//! goes one at a time, in order, as each turn ends. Rust owns it: what is queued,
+//! goes together, as one message, when each turn ends. Rust owns it: what is queued,
 //! the order, when the next one goes and when the queue pauses. The UI only shows
 //! it and asks for changes.
 //!
@@ -190,6 +190,37 @@ impl Queue {
         Ok(())
     }
 
+    /// Unite every message not on its way into the first of them: texts joined by a blank
+    /// line, mentions without repeats, all attachments. Returns that message's id.
+    fn merge_all(&mut self) -> Result<String, String> {
+        let (waiting, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.items).into_iter().partition(|i| !i.sending);
+        let mut waiting = waiting.into_iter();
+        let Some(mut head) = waiting.next() else {
+            self.items = kept;
+            return Err("There is nothing queued.".into());
+        };
+        for item in waiting {
+            if !item.text.is_empty() {
+                if !head.text.is_empty() {
+                    head.text.push_str("\n\n");
+                }
+                head.text.push_str(&item.text);
+            }
+            for m in item.mentions {
+                if !head.mentions.contains(&m) {
+                    head.mentions.push(m);
+                }
+            }
+            head.files.extend(item.files);
+        }
+        head.references = reference_count(&head.text);
+        let id = head.id.clone();
+        // An item on its way stays first.
+        self.items = kept;
+        self.items.push(head);
+        Ok(id)
+    }
+
     /// Everything not on its way; the queue sends again when something is queued.
     fn clear(&mut self) -> Vec<Queued> {
         let (gone, kept) = std::mem::take(&mut self.items).into_iter().partition(|i| !i.sending);
@@ -246,6 +277,8 @@ impl Queue {
         if self.paused.is_some() || self.sending() {
             return None;
         }
+        // Everything waiting goes together, as one message.
+        self.merge_all().ok()?;
         let first = self.items.first_mut()?;
         first.sending = true;
         Some(first.clone())
@@ -457,6 +490,18 @@ impl Hub {
 
     /// "Send now": the item goes next. A running turn is stopped, and the item goes when it ends.
     pub fn queue_send_now(&self, session_id: &str, id: &str) -> Result<SessionInfo, String> {
+        self.send_now(session_id, id)
+    }
+
+    /// "Join all": every waiting message is united into one, so the next send takes them together.
+    pub fn queue_merge(&self, session_id: &str) -> Result<SessionInfo, String> {
+        self.with_queue(session_id, |s| {
+            s.info.queue.merge_all()?;
+            Ok(s.info.clone())
+        })
+    }
+
+    fn send_now(&self, session_id: &str, id: &str) -> Result<SessionInfo, String> {
         let info = self.with_queue(session_id, |s| {
             if s.info.queue.sending() {
                 return Err("A queued message is being sent; try again in a moment.".into());

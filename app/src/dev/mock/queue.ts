@@ -123,6 +123,20 @@ export function mockQueue(m: Mock, { send, cancel }: Hooks) {
         if (!s.running) sendNext(sessionId);
         return s;
       },
+      queue_merge: async ({ sessionId }: { sessionId: string }) => {
+        const s = session(sessionId);
+        const list = items(s);
+        if (!list.length) throw new Error("There is nothing queued.");
+        const [head] = list;
+        const merged = {
+          ...head,
+          text: list.map((i) => i.text).filter(Boolean).join("\n\n"),
+          mentions: [...new Set(list.flatMap((i) => i.mentions ?? []))],
+          files: list.flatMap((i) => i.files ?? []),
+        };
+        setQueue(s, { ...s.queue, items: [merged] });
+        return changed(s);
+      },
       queue_send_now: async ({ sessionId, id }: { sessionId: string; id: string }) => {
         const s = session(sessionId);
         const list = [...items(s)];

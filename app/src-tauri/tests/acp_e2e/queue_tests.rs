@@ -41,17 +41,16 @@ pub fn queued_messages_go_in_order_as_turns_end() {
     f.until(&sid, "the agent logs the first prompt", |_| (!f.requests("session/prompt").is_empty()).then_some(()));
     assert_eq!(f.requests("session/prompt").len(), 1, "nothing more reached the agent while it worked");
 
-    let t = drained(&f, &sid, 3);
-    assert_eq!(user_texts(&t), ["slow 600 first", "echo one", "echo two"]);
-    assert_eq!(agent_texts(&t), ["slow: first", "echo: echo one", "echo: echo two"], "one at a time, each after the last ended");
+    let t = drained(&f, &sid, 2);
+    assert_eq!(user_texts(&t), ["slow 600 first", "echo one\n\necho two"], "what waited goes together as one");
+    assert_eq!(agent_texts(&t), ["slow: first", "echo: echo one\n\necho two"], "sent after the first turn ended");
     assert_eq!(t.info.queue.paused, None);
     let prompts: Vec<String> =
         f.requests("session/prompt").iter().map(|p| p["prompt"].as_array().unwrap().last().unwrap()["text"].as_str().unwrap().to_owned()).collect();
-    assert_eq!(prompts, ["slow 600 first", "echo one", "echo two"]);
-    // The UI heard each one leave the queue.
+    assert_eq!(prompts, ["slow 600 first", "echo one\n\necho two"]);
+    // The UI heard the two wait in the queue.
     let events = f.events.lock().unwrap().clone();
     assert!(events.iter().any(|(n, v)| n == "session-info" && v["queue"]["items"].as_array().is_some_and(|i| i.len() == 2)));
-    assert!(events.iter().any(|(n, v)| n == "session-info" && v["queue"]["lastSent"].is_string()));
 }
 
 pub fn a_stopped_turn_pauses_the_queue_and_send_now_jumps_it() {
@@ -69,18 +68,18 @@ pub fn a_stopped_turn_pauses_the_queue_and_send_now_jumps_it() {
     assert_eq!(f.requests("session/prompt").len(), 1, "a stopped turn sends nothing on");
 
     f.hub.queue_resume(&sid).unwrap();
-    let t = drained(&f, &sid, 3);
-    assert_eq!(user_texts(&t)[1..], ["echo a", "echo b"]);
+    let t = drained(&f, &sid, 2);
+    assert_eq!(user_texts(&t)[1..], ["echo a\n\necho b"]);
 
-    // Send now on the last one: the running turn stops, it goes first, the other follows.
+    // Send now on the last one: the running turn stops, and what waited goes together.
     send(&f, &sid, "wait");
     f.until(&sid, "the deploy request again", |t| super::waiting_permissions(t).first().copied());
     send(&f, &sid, "echo c");
     let Sent::Queued { id, .. } = send(&f, &sid, "echo d") else { panic!("queued") };
     f.hub.queue_send_now(&sid, &id).unwrap();
-    let t = drained(&f, &sid, 6);
-    assert_eq!(user_texts(&t)[3..], ["wait", "echo d", "echo c"]);
-    assert_eq!(last_agent_text(&t), "echo: echo c");
+    let t = drained(&f, &sid, 4);
+    assert_eq!(user_texts(&t)[2..], ["wait", "echo d\n\necho c"]);
+    assert_eq!(last_agent_text(&t), "echo: echo d\n\necho c");
     assert_eq!(t.info.queue.paused, None, "Send now isn't a pause");
 }
 

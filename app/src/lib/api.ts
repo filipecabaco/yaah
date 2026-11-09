@@ -948,6 +948,8 @@ export const api = {
   queueResume: (sessionId: string) => invoke<SessionInfo>("queue_resume", { sessionId }),
   /** Stops the running turn and sends this message next. */
   queueSendNow: (sessionId: string, id: string) => invoke<SessionInfo>("queue_send_now", { sessionId, id }),
+  /** Unites every waiting message into one, so the next send takes them together. */
+  queueMerge: (sessionId: string) => invoke<SessionInfo>("queue_merge", { sessionId }),
   /** The chat's next message goes to `accountId`'s agent, in a fresh session, with the conversation so far. Refused mid-turn. */
   switchAgent: (sessionId: string, accountId: string) => invoke<SessionInfo>("switch_agent", { sessionId, accountId }),
   /** A page of `accountId`'s own sessions (started in its CLI, say), from that profile's agent; optionally only those in `cwd`. */
