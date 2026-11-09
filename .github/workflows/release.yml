@@ -79,7 +79,8 @@ jobs:
       matrix:
         include:
           - platform: macos-arm64
-            runner: macos-14
+            # macos-14 images were retired on 2 Nov 2026 (jobs on it are cancelled before they start); macos-15 is the arm64 image after it.
+            runner: macos-15
           - platform: linux-x86_64
             runner: ubuntu-24.04
           # GitHub's arm64 Linux runner; the same as the local CI container (`release:linux:docker`).

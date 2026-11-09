@@ -235,7 +235,7 @@ mise run release:linux:docker   # both Linux arches in the CI container (arm64 n
 mise run release:checksums      # dist-release/SHA256SUMS
 ```
 
-`.github/workflows/release.yml` runs the same on a `vX.Y.Z` tag (macos-14, ubuntu-24.04, ubuntu-24.04-arm), checks the tag against the version in `tauri.conf.json`, `Cargo.toml` and `package.json`, and publishes the release with `gh release create`. To cut one: bump those three versions, commit, tag `vX.Y.Z` and push the tag. macOS builds are ad-hoc signed (`bundle.macOS.signingIdentity: "-"`); for Developer ID signing and notarisation, add the `APPLE_*` secrets listed at the top of the workflow. `yaah --version` prints the version without starting the UI. See `docs/experiments/2026-11-03-installer/`.
+`.github/workflows/release.yml` runs the same on a `vX.Y.Z` tag (macos-15, ubuntu-24.04, ubuntu-24.04-arm), checks the tag against the version in `tauri.conf.json`, `Cargo.toml` and `package.json`, and publishes the release with `gh release create`. To cut one: bump those three versions, commit, tag `vX.Y.Z` and push the tag. macOS builds are ad-hoc signed (`bundle.macOS.signingIdentity: "-"`); for Developer ID signing and notarisation, add the `APPLE_*` secrets listed at the top of the workflow. `yaah --version` prints the version without starting the UI. See `docs/experiments/2026-11-03-installer/`.
 
 ## Headless check
 
