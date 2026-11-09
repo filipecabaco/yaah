@@ -1257,6 +1257,28 @@ impl Hub {
             .unwrap_or(false)
     }
 
+    /// The transcript index of the UI rendered with `ui_id` (its latest render), or of the chat's
+    /// latest UI when there's no id (`ui_open_pane`). The window addresses entries by index.
+    pub fn ui_index(&self, session_id: &str, ui_id: Option<&str>) -> Result<usize, String> {
+        self.shared.with(session_id, |s| {
+            let found = s.entries.iter().rposition(|e| match (&**e, ui_id) {
+                (Entry::Ui { ui_id: Some(other), .. }, Some(id)) => other == id,
+                (Entry::Ui { .. }, None) => true,
+                _ => false,
+            });
+            found.ok_or_else(|| match ui_id {
+                Some(id) => format!("no UI rendered with id `{id}` in this chat; render it with ui_render and that `id` first"),
+                None => "there's no UI in this chat yet; render it with ui_render first".to_owned(),
+            })
+        })?
+    }
+
+    /// Ask the window to open a side pane beside this chat (`ui_open_pane`). `content` is the
+    /// pane's content as `src/lib/layout.ts` reads it; the window picks where it goes.
+    pub fn open_pane(&self, session_id: &str, direction: &str, content: &Value) {
+        (self.shared.app)("ui-open-pane", json!({ "sessionId": session_id, "direction": direction, "content": content }));
+    }
+
     /// Start a chat. In a project: cwd is its first folder, the other folders and
     /// the project's context folder are additional roots, and its brief goes with
     /// the first prompt. In a folder: a quick chat with just that folder.

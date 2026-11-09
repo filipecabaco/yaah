@@ -17,6 +17,7 @@ import { screenshotChat, takeStaged } from "./attachments";
 import { referenceEntry, referencesIn } from "./references";
 import { mockQueue } from "./queue";
 import type { Attachment } from "@/lib/attachments";
+import type { DiffMode } from "@/lib/layout";
 
 /** A new, empty chat (session.rs `new_session`). */
 export function openChat({ state }: Mock, fields: Pick<SessionInfo, "projectId" | "accountId" | "cwd" | "additionalDirs">): SessionInfo {
@@ -282,6 +283,83 @@ const assembling: Recording = [
   },
   { event: "session-entry", index: 1, entry: renderCall("completed", { title: "Deploys", tree: deployTree }) },
   { event: "session-entry", index: 3, entry: { type: "agent", text: "Here are the deploys: web is still rolling out.", messageId: null } },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
+/**
+ * The agent's `ui_open_pane` (ui_mcp.rs), as the replay sends it: a diff of the chat's folder, or the UI
+ * at a recorded index of this turn. The replay fills in the chat, its folder and the real index.
+ */
+type OpenPaneStep = {
+  event: "ui-open-pane";
+  direction?: "right" | "down";
+  content: { kind: "diff"; mode?: DiffMode } | { kind: "ui"; index: number };
+};
+type MockStep = Recording[number] | OpenPaneStep;
+
+const openPaneCall = (status: "in_progress" | "completed", rawInput: unknown, text?: string): Entry => ({
+  type: "tool",
+  toolCallId: "toolu_open_pane",
+  title: "mcp__yaah-ui__ui_open_pane",
+  kind: "other",
+  status,
+  content: text == null ? [] : [{ type: "content", content: { type: "text", text } }],
+  locations: [],
+  rawInput,
+});
+const deploysLive = {
+  ...deployTree,
+  children: [
+    {
+      type: "table",
+      props: {
+        columns: deployTree.children[0].props.columns,
+        rows: [
+          { service: "api", status: "live" },
+          { service: "web", status: "live" },
+        ],
+      },
+    },
+  ],
+};
+const deploysEntry = (tree: unknown): Entry => ({
+  type: "ui",
+  askId: null,
+  answer: null,
+  title: "Deploys",
+  component: null,
+  version: null,
+  tree,
+  props: {},
+});
+/** "Pin the deploys in a side pane": render, move it into a pane, then update it there (same index, as the same `id` does). */
+const sidePaneUi: readonly MockStep[] = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  { event: "session-entry", index: 1, entry: deploysEntry(deployTree) },
+  { event: "session-entry", index: 2, entry: openPaneCall("in_progress", { what: "ui", id: "deploys" }) },
+  { event: "ui-open-pane", content: { kind: "ui", index: 1 } },
+  {
+    event: "session-entry",
+    index: 2,
+    entry: openPaneCall("completed", { what: "ui", id: "deploys" }, "Moved the UI into a pane to the right of this chat; the chat links to it."),
+  },
+  {
+    event: "session-entry",
+    index: 3,
+    entry: { type: "agent", text: "The deploys are pinned beside the chat; I'll keep them current.", messageId: null },
+  },
+  { event: "session-entry", index: 1, entry: deploysEntry(deploysLive) },
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+/** "Open the diff in a side pane": the chat's folder, every change. */
+const sidePaneDiff: readonly MockStep[] = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  { event: "session-entry", index: 1, entry: openPaneCall("in_progress", { what: "diff" }) },
+  { event: "ui-open-pane", content: { kind: "diff", mode: "all" } },
+  { event: "session-entry", index: 1, entry: openPaneCall("completed", { what: "diff" }, "Opened the diff in a pane to the right of this chat.") },
+  { event: "session-entry", index: 2, entry: { type: "agent", text: "The diff is open beside the chat.", messageId: null } },
   { event: "session-info", running: false, stopReason: "end_turn" },
 ];
 
@@ -756,7 +834,10 @@ const flowGraphsRecording = cardsRecording(
 );
 
 /** Which recording answers a prompt: the first pattern it matches, else the permission chat. */
-const routes: [RegExp, Recording][] = [
+const routes: [RegExp, readonly MockStep[]][] = [
+  // `ui_open_pane` (only when the user asks): a diff, or a UI moved out of the chat.
+  [/(diff|changes) (in|into) a (side )?pane|open (a |the )?diff (pane|beside|next to)/i, sidePaneDiff],
+  [/side pane|pin (it|that|them|the deploys)|move (it|that) (in)?to a pane/i, sidePaneUi],
   [/command output|tool cards/i, commandOutput],
   [/election (dashboard|night)/i, election],
   [/chart gallery/i, gallery],
@@ -884,6 +965,14 @@ export function chatReplies(m: Mock): Replies {
 
     for (const step of recording) {
       if (turn.cancelled) return;
+      if (step.event === "ui-open-pane") {
+        await m.wait(350);
+        const c = step.content;
+        const content =
+          c.kind === "ui" ? { kind: "ui", chat: sessionId, index: offset + c.index } : { kind: "diff", cwd: s.cwd, mode: c.mode ?? "all" };
+        await m.emit("ui-open-pane", { sessionId, direction: step.direction ?? "right", content });
+        continue;
+      }
       if (step.event === "session-info") {
         // A recording can open with the chat as it was created (not running); this turn already runs.
         if (!step.running && rendered.size === 0 && step === recording[0]) continue;

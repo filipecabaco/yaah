@@ -14,6 +14,8 @@ import { preloadSettings } from "@/components/settings/tab-code";
 import { PanePicker } from "@/components/pane-picker";
 import { PaneGrid } from "@/components/panes";
 import { DiffPane } from "@/components/diff/diff-pane";
+import { UiPane } from "@/components/ui-pane";
+import { UiPanesContext } from "@/components/ui-panes-context";
 import { TerminalPane } from "@/components/terminal/terminal-pane";
 import { useTerminals } from "@/components/terminal/use-terminals";
 import { linkedProject, type Pane } from "@/lib/layout";
@@ -23,6 +25,7 @@ import { Button } from "@/components/ui/button";
 import { Kbd } from "@/components/ui/kbd";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useShortcuts } from "@/hooks/use-shortcuts";
+import { chatPane, useSidePanes } from "@/hooks/use-side-panes";
 import { contentKey, useYaah, type Selection } from "@/hooks/use-yaah";
 import { TranscriptsContext } from "@/hooks/use-transcript";
 import { api, canChat, mayListSessions, type AgentProfile, type SessionInfo } from "@/lib/api";
@@ -91,14 +94,16 @@ export default function App() {
   const panes = y.panes;
   // Terminal panes: ⌘T, the home screen, the picker, ⌘K and tool cards' "Open as pane" open them.
   const terminals = useTerminals(y);
+  // Side panes beside a chat (a diff, a UI moved out of it): the agent's `ui_open_pane` and "Open in a side pane".
+  const uiPanes = useSidePanes(y);
   const select = y.setSelection;
-  // Terminal and diff panes, listed in the sidebar: under the project each was opened from, the rest
+  // Terminal, diff and UI panes, listed in the sidebar: under the project each was opened from, the rest
   // beside the chats (a link to a project that's gone counts as none). Stable while the tree and projects are.
   const { openPanes, projectPanes } = useMemo(() => {
     const loose: Pane[] = [];
     const byProject: Record<string, Pane[]> = {};
     for (const p of panes.panes) {
-      if (p.content?.kind !== "terminal" && p.content?.kind !== "diff") continue;
+      if (p.content?.kind !== "terminal" && p.content?.kind !== "diff" && p.content?.kind !== "ui") continue;
       const project = linkedProject(p.content);
       if (project && y.projects.some((x) => x.id === project)) (byProject[project] ??= []).push(p);
       else loose.push(p);
@@ -420,6 +425,10 @@ export default function App() {
           onClose={() => closePaneById(p.id)}
         />
       );
+    } else if (c?.kind === "ui") {
+      const s = y.sessions[c.chat];
+      labels[p.id] = `UI from ${s?.title ?? "a chat"}`;
+      contents[p.id] = <UiPane pane={p.id} content={c} session={s} chatPane={chatPane(panes.layout, c.chat)} onClose={() => closePaneById(p.id)} />;
     } else if (c?.kind === "picker") {
       labels[p.id] = "Open in this pane";
       contents[p.id] = (
@@ -470,125 +479,127 @@ export default function App() {
   return (
     <TooltipProvider delayDuration={400}>
       <TranscriptsContext.Provider value={y.transcripts}>
-        <ChatActionsProvider value={chatActions}>
-          <AppContextMenu>
-            <div className="flex h-screen overflow-hidden bg-background text-foreground">
-              {/* First on the page: past the sidebar's dozen stops to the focused pane (SR-5). */}
-              <a
-                href="#main"
-                className="sr-only rounded-md bg-background text-sm font-medium shadow-md ring-3 ring-ring focus:not-sr-only focus:fixed focus:top-12 focus:left-3 focus:z-[100] focus:px-3 focus:py-2"
-                onClick={(e) => {
-                  e.preventDefault();
-                  focusMain(panes.focusedId());
-                }}
-              >
-                Skip to main content
-              </a>
-              {y.loadError != null && (
-                <div className="fixed inset-x-0 top-0 z-50 border-b bg-background px-4 py-2">
-                  <ErrorText error={y.loadError} prefix="Couldn't load your agents, projects and chats: " />
+        <UiPanesContext.Provider value={uiPanes}>
+          <ChatActionsProvider value={chatActions}>
+            <AppContextMenu>
+              <div className="flex h-screen overflow-hidden bg-background text-foreground">
+                {/* First on the page: past the sidebar's dozen stops to the focused pane (SR-5). */}
+                <a
+                  href="#main"
+                  className="sr-only rounded-md bg-background text-sm font-medium shadow-md ring-3 ring-ring focus:not-sr-only focus:fixed focus:top-12 focus:left-3 focus:z-[100] focus:px-3 focus:py-2"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    focusMain(panes.focusedId());
+                  }}
+                >
+                  Skip to main content
+                </a>
+                {y.loadError != null && (
+                  <div className="fixed inset-x-0 top-0 z-50 border-b bg-background px-4 py-2">
+                    <ErrorText error={y.loadError} prefix="Couldn't load your agents, projects and chats: " />
+                  </div>
+                )}
+                <Sidebar
+                  agents={y.agents}
+                  agentId={y.agentId}
+                  onAgent={y.setAgentId}
+                  onLogin={setLoginFor}
+                  projects={y.orderedProjects}
+                  chatsByProject={y.chatsByProject}
+                  quickChats={y.quickChats}
+                  selection={y.selection}
+                  activeProjectId={project?.id ?? null}
+                  onSelect={selectFromSidebar}
+                  onNewChat={y.newChat}
+                  onProjectChange={y.putProject}
+                  collapsed={panes.sidebar.collapsed}
+                  width={panes.sidebar.width}
+                  onToggle={panes.toggleSidebar}
+                  onWidth={panes.setSidebarWidth}
+                  openPanes={openPanes}
+                  projectPanes={projectPanes}
+                  focusedPaneId={panes.layout.focused}
+                  onFocusPane={focusOpenPane}
+                  onClosePane={closePaneById}
+                  {...sidebar}
+                />
+
+                <div className="flex min-w-0 flex-1 flex-col">
+                  <CollapsedTitleBar shown={panes.sidebar.collapsed} onToggle={panes.toggleSidebar} onPalette={sidebar.onPalette} />
+                  {/* The one main landmark: every pane, whatever it shows (they're sections in it). */}
+                  <main id="main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
+                    <PaneGrid
+                      layout={panes.layout}
+                      contents={contents}
+                      labels={labels}
+                      onFocus={panes.focus}
+                      onResize={panes.resize}
+                      onClose={(id) => {
+                        if (panes.close(id)) focusPaneDom(panes.focusedId());
+                      }}
+                    />
+                  </main>
                 </div>
-              )}
-              <Sidebar
-                agents={y.agents}
-                agentId={y.agentId}
-                onAgent={y.setAgentId}
-                onLogin={setLoginFor}
-                projects={y.orderedProjects}
-                chatsByProject={y.chatsByProject}
-                quickChats={y.quickChats}
-                selection={y.selection}
-                activeProjectId={project?.id ?? null}
-                onSelect={selectFromSidebar}
-                onNewChat={y.newChat}
-                onProjectChange={y.putProject}
-                collapsed={panes.sidebar.collapsed}
-                width={panes.sidebar.width}
-                onToggle={panes.toggleSidebar}
-                onWidth={panes.setSidebarWidth}
-                openPanes={openPanes}
-                projectPanes={projectPanes}
-                focusedPaneId={panes.layout.focused}
-                onFocusPane={focusOpenPane}
-                onClosePane={closePaneById}
-                {...sidebar}
-              />
 
-              <div className="flex min-w-0 flex-1 flex-col">
-                <CollapsedTitleBar shown={panes.sidebar.collapsed} onToggle={panes.toggleSidebar} onPalette={sidebar.onPalette} />
-                {/* The one main landmark: every pane, whatever it shows (they're sections in it). */}
-                <main id="main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
-                  <PaneGrid
-                    layout={panes.layout}
-                    contents={contents}
-                    labels={labels}
-                    onFocus={panes.focus}
-                    onResize={panes.resize}
-                    onClose={(id) => {
-                      if (panes.close(id)) focusPaneDom(panes.focusedId());
-                    }}
-                  />
-                </main>
+                <CommandPalette
+                  page={palette}
+                  onPage={setPalette}
+                  y={y}
+                  onNewProject={() => setCreatingProject("name")}
+                  onNewProjectFromItem={() => setCreatingProject("issue")}
+                  onAddRepos={() => setAddingRepos(true)}
+                  onLogin={setLoginFor}
+                  onAddAgent={() => setSetup({ kind: "add" })}
+                  onManageAgents={() => setSetup({ kind: "manage", id: y.agentId || undefined })}
+                  onIntegrations={(service) => setSetup({ kind: "integrations", service })}
+                  onSettings={(tab) => setSetup({ kind: "settings", tab })}
+                  onHelp={() => setHelp(true)}
+                  terminals={terminals}
+                />
+                <ShortcutsDialog open={help} onClose={() => setHelp(false)} />
+                <Suspense>
+                  {newProjectWanted && (
+                    <NewProjectDialog
+                      open={creatingProject != null}
+                      mode={creatingProject ?? "name"}
+                      agents={y.agents}
+                      agentId={y.agentId}
+                      onClose={() => setCreatingProject(null)}
+                      onCreate={y.createProject}
+                      onStart={async (item, agentId) => {
+                        const started = await y.startFromItem(item, agentId);
+                        setStartNote(started.chatError ? { projectId: started.project.id, message: started.chatError } : null);
+                        return started;
+                      }}
+                      onOpenProject={(id) => y.setSelection({ kind: "project", id })}
+                      onIntegrations={(service) => {
+                        setCreatingProject(null);
+                        setSetup({ kind: "integrations", service });
+                      }}
+                    />
+                  )}
+                  {project && reposWanted && (
+                    <RepoPicker
+                      open={addingRepos}
+                      onClose={() => setAddingRepos(false)}
+                      exclude={project.dirs}
+                      onAdd={async (dirs) => y.putProject(await api.addProjectDirs(project.id, dirs))}
+                    />
+                  )}
+                  {login}
+                </Suspense>
+                <AgentSetupDialog
+                  target={setup}
+                  onClose={() => setSetup(null)}
+                  agents={y.agents}
+                  defaultId={y.defaultAgentId}
+                  onLogin={setLoginFor}
+                  onSaved={(a) => y.setAgentId(a.id)}
+                />
               </div>
-
-              <CommandPalette
-                page={palette}
-                onPage={setPalette}
-                y={y}
-                onNewProject={() => setCreatingProject("name")}
-                onNewProjectFromItem={() => setCreatingProject("issue")}
-                onAddRepos={() => setAddingRepos(true)}
-                onLogin={setLoginFor}
-                onAddAgent={() => setSetup({ kind: "add" })}
-                onManageAgents={() => setSetup({ kind: "manage", id: y.agentId || undefined })}
-                onIntegrations={(service) => setSetup({ kind: "integrations", service })}
-                onSettings={(tab) => setSetup({ kind: "settings", tab })}
-                onHelp={() => setHelp(true)}
-                terminals={terminals}
-              />
-              <ShortcutsDialog open={help} onClose={() => setHelp(false)} />
-              <Suspense>
-                {newProjectWanted && (
-                  <NewProjectDialog
-                    open={creatingProject != null}
-                    mode={creatingProject ?? "name"}
-                    agents={y.agents}
-                    agentId={y.agentId}
-                    onClose={() => setCreatingProject(null)}
-                    onCreate={y.createProject}
-                    onStart={async (item, agentId) => {
-                      const started = await y.startFromItem(item, agentId);
-                      setStartNote(started.chatError ? { projectId: started.project.id, message: started.chatError } : null);
-                      return started;
-                    }}
-                    onOpenProject={(id) => y.setSelection({ kind: "project", id })}
-                    onIntegrations={(service) => {
-                      setCreatingProject(null);
-                      setSetup({ kind: "integrations", service });
-                    }}
-                  />
-                )}
-                {project && reposWanted && (
-                  <RepoPicker
-                    open={addingRepos}
-                    onClose={() => setAddingRepos(false)}
-                    exclude={project.dirs}
-                    onAdd={async (dirs) => y.putProject(await api.addProjectDirs(project.id, dirs))}
-                  />
-                )}
-                {login}
-              </Suspense>
-              <AgentSetupDialog
-                target={setup}
-                onClose={() => setSetup(null)}
-                agents={y.agents}
-                defaultId={y.defaultAgentId}
-                onLogin={setLoginFor}
-                onSaved={(a) => y.setAgentId(a.id)}
-              />
-            </div>
-          </AppContextMenu>
-        </ChatActionsProvider>
+            </AppContextMenu>
+          </ChatActionsProvider>
+        </UiPanesContext.Provider>
       </TranscriptsContext.Provider>
     </TooltipProvider>
   );

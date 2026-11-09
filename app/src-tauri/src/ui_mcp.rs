@@ -33,6 +33,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "ui_guide",
     "ui_get_component",
     "ui_render",
+    "ui_open_pane",
     "source_read",
     "ui_ask",
     "ui_request_folders",
@@ -95,6 +96,9 @@ git diffs, logs and status in this chat's folder, GitHub pull requests and Linea
 after your turn ends; you never see credentials. Look at the data first with source_read. Git sources and \
 diff-review read another of the chat's folders with `repo`; for a repository outside them, call ui_request_folders \
 once, then use `repo`. Never loop shell commands to find or read a repository.
+7. Only when the user asks to open, pin or move something into a side pane, call ui_open_pane: `what` \"diff\" \
+(a working-tree diff of one of the chat's folders) or \"ui\" (UI you rendered, by its `id`; it moves out of the chat into the pane, \
+and re-rendering with that id updates it there). Never open panes unasked.
 
 Validation errors say exactly what to fix; fix and call again.";
 
@@ -108,6 +112,7 @@ const NO_PROMPT_TOOLS: &[&str] = &[
     "ui_guide",
     "ui_get_component",
     "ui_render",
+    "ui_open_pane",
     "ui_ask",
     "ui_request_folders",
     "ui_get_values",
@@ -672,6 +677,67 @@ fn request_folders(host: &UiHost, session_id: &str, args: &Value) -> Result<Stri
     })
 }
 
+/// What a diff pane compares (layout.ts `DiffMode`).
+const DIFF_MODES: &[&str] = &["all", "staged", "unstaged", "branch"];
+
+/// `ui_open_pane`: a diff of one of the chat's folders, or a UI already in the chat, in a pane
+/// beside it. The window places it (layout.ts `openBeside`); this checks what the agent asked for
+/// and resolves it to a pane's content: the folder canonical and the chat's own, the UI by index.
+fn open_pane(host: &UiHost, session_id: &str, args: &Value) -> Result<String, Vec<String>> {
+    let one_of = |key: &str, allowed: &[&str], default: &'static str| -> Result<String, String> {
+        match &args[key] {
+            Value::Null => Ok(default.to_owned()),
+            Value::String(s) if allowed.contains(&s.as_str()) => Ok(s.clone()),
+            other => Err(format!("`{key}` must be one of {allowed:?}, got {other}")),
+        }
+    };
+    let direction = one_of("direction", &["right", "down"], "right").map_err(|e| vec![e])?;
+    let side = if direction == "right" { "to the right of" } else { "below" };
+    match args["what"].as_str() {
+        Some("diff") => {
+            let base = match &args["base"] {
+                Value::Null => None,
+                Value::String(b) => Some(crate::sources::git::valid_rev(b.trim()).map_err(|e| vec![format!("`base`: {e}")])?.to_owned()),
+                other => return Err(vec![format!("`base` must be a branch name, got {other}")]),
+            };
+            // A base means comparing against a branch, unless another mode was asked for.
+            let mode = one_of("mode", DIFF_MODES, if base.is_some() { "branch" } else { "all" }).map_err(|e| vec![e])?;
+            if base.is_some() && mode != "branch" {
+                return Err(vec![format!("`base` goes with mode \"branch\", not \"{mode}\"")]);
+            }
+            let roots = host.hub.session_roots(session_id);
+            let dir = crate::sources::git::folder("ui_open_pane", &json!({ "repo": args["repo"] }), &roots).map_err(|e| {
+                vec![if e.contains(crate::sources::git::NOT_A_CHAT_FOLDER) {
+                    format!("{e}. Ask the user once with ui_request_folders, then open it with `repo`")
+                } else {
+                    e
+                }]
+            })?;
+            let cwd = dir.to_string_lossy().into_owned();
+            let mut content = json!({ "kind": "diff", "cwd": cwd, "mode": mode });
+            if let Some(b) = &base {
+                content["base"] = json!(b);
+            }
+            host.hub.open_pane(session_id, &direction, &content);
+            Ok(format!("Opened the diff of {cwd} ({mode}) in a pane {side} this chat. The user sees it now; don't describe it."))
+        }
+        Some("ui") => {
+            let id = match &args["id"] {
+                Value::Null => None,
+                Value::String(s) if !s.trim().is_empty() => Some(s.trim()),
+                other => return Err(vec![format!("`id` must be the id you rendered the UI with, got {other}")]),
+            };
+            let index = host.hub.ui_index(session_id, id).map_err(|e| vec![e])?;
+            host.hub.open_pane(session_id, &direction, &json!({ "kind": "ui", "chat": session_id, "index": index }));
+            let again = id.map_or_else(String::new, |id| format!(" Rendering again with id `{id}` updates it there."));
+            Ok(format!("Moved the UI into a pane {side} this chat; the chat links to it.{again}"))
+        }
+        other => {
+            Err(vec![format!("`what` must be \"diff\" or \"ui\", got {}", other.map_or_else(|| args["what"].to_string(), |s| format!("\"{s}\"")))])
+        }
+    }
+}
+
 fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) -> Value {
     // Only reachable before session/new returns, which no agent should render during.
     let session_id = session_id.unwrap_or_default();
@@ -690,6 +756,7 @@ fn call_tool(host: &UiHost, session_id: Option<&str>, name: &str, args: &Value) 
         // Git sources read the chat's folders, from the session: `repo` can only pick one of them.
         "source_read" => read_source(host, session_id, &args["source"]).map_err(|e| vec![e]),
         "ui_request_folders" => request_folders(host, session_id, args),
+        "ui_open_pane" => open_pane(host, session_id, args),
         "ui_guide" => guide_topic(lib, args["topic"].as_str().unwrap_or("ui")),
         "ui_get_component" => match lib.get(args["name"].as_str().unwrap_or_default()) {
             Ok(Some(c)) => Ok(serde_json::to_string(&c).unwrap_or_default()),
@@ -784,8 +851,30 @@ fn tools() -> Value {
     if let Some(list) = all.as_array_mut() {
         let at = list.iter().position(|t| t["name"] == "ui_ask").map_or(list.len(), |i| i + 1);
         list.insert(at, request_folders_tool());
+        let at = list.iter().position(|t| t["name"] == "ui_render").map_or(list.len(), |i| i + 1);
+        list.insert(at, open_pane_tool());
     }
     all
+}
+
+/// `ui_open_pane`: a diff, or a UI already in the chat, in a side pane beside it.
+fn open_pane_tool() -> Value {
+    json!({
+        "name": "ui_open_pane",
+        "description": "Open a side pane beside this chat, ONLY when the user asks to open, pin or move something into a pane. `what`: \"diff\" shows the working-tree changes of one of the chat's folders (`repo`, default the chat's own; `mode`; `base` for a branch); \"ui\" moves UI you already rendered in this chat (by its `id`, default the latest) out of the transcript into the pane, where re-rendering with that id keeps updating it. An open pane of the same thing is reused.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "what": { "type": "string", "enum": ["diff", "ui"] },
+                "repo": { "type": "string", "description": "diff: one of this chat's folders (absolute or ~/…); default the chat's own." },
+                "mode": { "type": "string", "enum": ["all", "staged", "unstaged", "branch"], "description": "diff: what to compare. Default all (the working tree against HEAD); branch with `base`." },
+                "base": { "type": "string", "description": "diff: the branch to compare against (mode branch)." },
+                "id": { "type": "string", "description": "ui: the id you rendered the UI with. Default the latest UI in this chat." },
+                "direction": { "type": "string", "enum": ["right", "down"], "description": "Where the pane opens. Default right." }
+            },
+            "required": ["what"]
+        }
+    })
 }
 
 /// `ui_request_folders`: ask to add folders to the chat, and wait.
@@ -1109,6 +1198,11 @@ mod tests {
     /// The UI server with two chats in `cwd` (restored from disk, as at startup):
     /// `s1` at `/mcp/tok` and `s2` at `/mcp/tok2`.
     fn serve_chat(cwd: &Path) -> (Arc<Hub>, Arc<UiHost>, u16) {
+        serve_chat_with(cwd, Arc::new(|_: &str, _: Value| {}))
+    }
+
+    /// [`serve_chat`], with the events the hub sends the window going to `app`.
+    fn serve_chat_with(cwd: &Path, app: crate::session::Emit) -> (Arc<Hub>, Arc<UiHost>, u16) {
         let dir = temp_dir("app");
         std::fs::create_dir_all(dir.join("sessions")).unwrap();
         for id in ["s1", "s2"] {
@@ -1135,7 +1229,7 @@ mod tests {
             };
             std::fs::write(dir.join(format!("sessions/{id}.json")), json!({ "info": info, "entries": [] }).to_string()).unwrap();
         }
-        let hub = Arc::new(Hub::with_store(Arc::new(|_: &str, _: Value| {}), dir.join("sessions")));
+        let hub = Arc::new(Hub::with_store(app, dir.join("sessions")));
         let library = Arc::new(Library::with_sources(vec![Box::new(Bundled::new()), Box::new(LocalDir::new(dir.join("components")))]));
         let sources = Arc::new(crate::sources::Sources::with_connections_file(dir.join("connections.json")));
         let host = Arc::new(UiHost::new(hub.clone(), library, sources));
@@ -1183,7 +1277,7 @@ mod tests {
         assert_eq!(init["result"]["protocolVersion"], PROTOCOL_VERSIONS[0], "an unknown version gets the newest");
         let (_, list) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }));
         let names: Vec<&str> = list["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-        assert_eq!(names.len(), 10);
+        assert_eq!(names.len(), 11);
         assert!(names.contains(&"ui_ask") && names.contains(&"source_read") && names.contains(&"ui_guide"));
         let (_, nope) = rpc(port, &json!({ "jsonrpc": "2.0", "id": 3, "method": "sampling/createMessage" }));
         assert_eq!(nope["error"]["code"], -32601);
@@ -1356,6 +1450,60 @@ mod tests {
         hub.cancel("s1").unwrap();
         assert!(asking.join().unwrap().0.contains("cancelled"));
         assert_eq!(entries(&hub)[index]["answer"], "cancelled");
+    }
+
+    #[test]
+    fn ui_open_pane_resolves_a_diff_or_a_ui_and_tells_the_window() {
+        let cwd = temp_dir("cwd");
+        let sent: Arc<Mutex<Vec<(String, Value)>>> = Arc::default();
+        let log = sent.clone();
+        let (hub, _, port) = serve_chat_with(&cwd, Arc::new(move |name: &str, v: Value| log.lock().unwrap().push((name.to_owned(), v))));
+        let panes = || -> Vec<Value> { sent.lock().unwrap().iter().filter(|(n, _)| n == "ui-open-pane").map(|(_, v)| v.clone()).collect() };
+
+        // Refused before anything opens: what, direction, mode and base checked; a folder outside the chat, or no UI yet.
+        let refused = |args: Value, says: &str| {
+            let (text, err) = call(port, "ui_open_pane", &args);
+            assert!(err && text.contains(says), "{args}: {text}");
+        };
+        refused(json!({}), "`what` must be \"diff\" or \"ui\"");
+        refused(json!({ "what": "browser" }), "got \"browser\"");
+        refused(json!({ "what": "diff", "direction": "left" }), "`direction` must be one of");
+        refused(json!({ "what": "diff", "mode": "everything" }), "`mode` must be one of");
+        refused(json!({ "what": "diff", "base": "-rf" }), "isn't a revision");
+        refused(json!({ "what": "diff", "mode": "staged", "base": "main" }), "goes with mode \"branch\"");
+        refused(json!({ "what": "diff", "repo": temp_dir("elsewhere") }), "ui_request_folders");
+        refused(json!({ "what": "ui" }), "no UI in this chat yet");
+        refused(json!({ "what": "ui", "id": 3 }), "`id` must be");
+        assert!(panes().is_empty(), "nothing opened");
+
+        // A diff: the chat's own folder by default, `all` unless a base asks for a branch.
+        let (text, err) = call(port, "ui_open_pane", &json!({ "what": "diff" }));
+        assert!(!err && text.contains("to the right of this chat"), "{text}");
+        let (text, _) = call(port, "ui_open_pane", &json!({ "what": "diff", "repo": cwd, "base": "main", "direction": "down" }));
+        assert!(text.contains("below this chat"), "{text}");
+        let canon = std::fs::canonicalize(&cwd).unwrap().to_string_lossy().into_owned();
+        assert_eq!(
+            panes(),
+            [
+                json!({ "sessionId": "s1", "direction": "right", "content": { "kind": "diff", "cwd": cwd.to_string_lossy(), "mode": "all" } }),
+                json!({ "sessionId": "s1", "direction": "down", "content": { "kind": "diff", "cwd": canon, "mode": "branch", "base": "main" } }),
+            ]
+        );
+
+        // A UI: by the id it was rendered with (its latest render), else the latest UI; by index for the window.
+        let badge = |text: &str| json!({ "type": "badge", "props": { "text": text } });
+        call(port, "ui_render", &json!({ "tree": badge("one"), "id": "status" }));
+        call(port, "ui_render", &json!({ "tree": badge("two") }));
+        refused(json!({ "what": "ui", "id": "nope" }), "no UI rendered with id `nope`");
+        let (text, err) = call(port, "ui_open_pane", &json!({ "what": "ui", "id": "status" }));
+        assert!(!err && text.contains("Moved the UI") && text.contains("id `status` updates it there"), "{text}");
+        call(port, "ui_open_pane", &json!({ "what": "ui" }));
+        let ui: Vec<Value> = panes().into_iter().skip(2).map(|p| p["content"].clone()).collect();
+        assert_eq!(ui, [json!({ "kind": "ui", "chat": "s1", "index": 0 }), json!({ "kind": "ui", "chat": "s1", "index": 1 })]);
+        // Another chat's UI isn't this one's to move.
+        let (text, err, _) = call_full(port, "tok2", "ui_open_pane", &json!({ "what": "ui", "id": "status" }));
+        assert!(err && text.contains("no UI rendered with id `status`"), "{text}");
+        assert_eq!(entries(&hub).len(), 2, "opening a pane adds nothing to the transcript");
     }
 
     fn wait_for_ask(hub: &Hub) -> usize {

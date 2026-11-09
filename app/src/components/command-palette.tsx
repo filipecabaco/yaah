@@ -13,6 +13,7 @@ import {
   CircleDot,
   Columns2,
   PanelLeft,
+  PanelRight,
   Plug,
   Rows2,
   X,
@@ -40,7 +41,7 @@ import {
 import { focusComposer } from "@/components/chat-context";
 import { focusPaneDom } from "@/lib/pane-focus";
 import { terminalActions, type Terminals } from "@/components/terminal/palette-actions";
-import { openAddRepos, openComposerConfig } from "@/lib/app-events";
+import { openAddRepos, openComposerConfig, openUiPane } from "@/lib/app-events";
 import { choiceName, configOption } from "@/lib/composer-config";
 import { ErrorText } from "@/components/error-text";
 import { connectionReady } from "@/components/settings/form-state";
@@ -407,6 +408,10 @@ function PaletteBody({
   } else {
     const ready = canChat(account);
     const manyPanes = y.panes.panes.length > 1;
+    // The chat's latest rendered UI (as far as it has loaded), for "Open the latest UI in a side pane".
+    const entries = chat ? (y.transcripts.get(chat.sessionId)?.entries ?? []) : [];
+    let lastUi = entries.length - 1;
+    while (lastUi >= 0 && entries[lastUi]?.type !== "ui") lastUi--;
     // A project's chats start with its own agent.
     const projectAgent = project ? y.agents.find((a) => a.id === y.agentFor(project.id)) : undefined;
     const actions: (Entry | false | null | undefined)[] = [
@@ -471,6 +476,14 @@ function PaletteBody({
         detail: chat.projectId ? `to ${projectName(chat.projectId)}` : "to this chat",
         onSelect: () => close(() => openAddRepos(chat.sessionId, y.panes.focusedId())),
       },
+      chat &&
+        lastUi >= 0 && {
+          id: "ui-side-pane",
+          icon: <PanelRight />,
+          label: "Open the latest UI in a side pane",
+          detail: "moves it out of the chat",
+          onSelect: () => close(() => openUiPane({ chat: chat.sessionId, index: lastUi, pane: y.panes.focusedId() })),
+        },
       // The composer's pickers, when the chat's agent offers them (components/composer-config.tsx); not mid-turn.
       ...(["model", "effort"] as const).map((role) => {
         const o = chat && !chat.running ? configOption(chat, role) : undefined;

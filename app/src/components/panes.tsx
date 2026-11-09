@@ -34,7 +34,7 @@ export function PaneGrid({
   onFocus: (id: string) => void;
   /** A divider's new ratio, once the drag ends (or per key). */
   onResize: (splitId: string, ratio: number) => void;
-  /** The close button on a pane (there are several, and it isn't a terminal, which has its own). */
+  /** The close button on a pane (there are several, and it isn't a terminal, diff or UI, which have their own). */
   onClose: (id: string) => void;
 }) {
   const grid = useRef<HTMLDivElement>(null);
@@ -76,8 +76,8 @@ export function PaneGrid({
             onFocusCapture={() => onFocus(p.id)}
           >
             {contents[p.id]}
-            {/* Top-right of the pane, over its header row (chats leave room for it). Terminals and diffs carry their own. */}
-            {many && p.content?.kind !== "terminal" && p.content?.kind !== "diff" && (
+            {/* Top-right of the pane, over its header row (chats leave room for it). Terminals, diffs and UIs carry their own. */}
+            {many && p.content?.kind !== "terminal" && p.content?.kind !== "diff" && p.content?.kind !== "ui" && (
               <Hint label="Close this pane" shortcut="closePane">
                 <Button
                   data-pane-close

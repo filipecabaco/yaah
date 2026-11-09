@@ -1,7 +1,7 @@
 // Typed bindings to the Rust core. Mirrors `src-tauri/src/{agents,projects,login,session}.rs`.
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Layout } from "@/lib/layout";
+import type { Layout, Selection } from "@/lib/layout";
 import type { Attachment, ImageBlock } from "@/lib/attachments";
 
 /** A login method an agent offers (ACP `authMethods`). */
@@ -328,6 +328,16 @@ export type Repo = {
 export type StartStage = "agent" | "mcpServers" | "session";
 
 export type SessionStartingEvent = { startId: string; stage: StartStage; servers: string[] };
+
+/**
+ * The agent asked for a side pane beside its chat (`ui_open_pane`, ui_mcp.rs): a diff of one of the
+ * chat's folders, or a UI entry of the chat (by index) moved out of its transcript.
+ */
+export type UiOpenPaneEvent = {
+  sessionId: string;
+  direction: "right" | "down";
+  content: Extract<Selection, { kind: "diff" } | { kind: "ui" }>;
+};
 
 export type SessionInfo = {
   sessionId: string;
@@ -1000,6 +1010,8 @@ export const events = {
   sessionInfo: (cb: (info: SessionInfo) => void) => on("session-info", cb),
   /** How far a new chat started with a `startId` got. */
   sessionStarting: (cb: (e: SessionStartingEvent) => void) => on("session-starting", cb),
+  /** The agent asked for a side pane beside a chat (`ui_open_pane`). */
+  uiOpenPane: (cb: (e: UiOpenPaneEvent) => void) => on("ui-open-pane", cb),
   accountsChanged: (cb: () => void) => on("accounts-changed", cb),
   loginOutput: (cb: (e: { accountId: string; line: string }) => void) => on("login-output", cb),
   loginUrl: (cb: (e: { accountId: string; url: string }) => void) => on("login-url", cb),

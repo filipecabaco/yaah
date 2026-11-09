@@ -24,6 +24,7 @@ import { workItemReplies } from "./mock/work-items";
 import { referenceReplies } from "./mock/references";
 import { terminalReplies } from "./mock/terminals";
 import { flushTranscripts } from "@/lib/transcripts";
+import type { UiOpenPaneEvent } from "@/lib/api";
 
 export type BrowserMockOptions = {
   /** Multiplies every artificial wait (default 1). 0: no waiting, only a macrotask between events. */
@@ -98,6 +99,10 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
 
   // The performance harness applies queued transcript events at once instead of waiting for a frame.
   (window as { __yaahFlush?: () => void }).__yaahFlush = flushTranscripts;
+  // What the agent's `ui_open_pane` sends (ui_mcp.rs), by hand: e.g. from the console or a browser tool,
+  // `__yaahOpenPane({ sessionId: "replay-1", direction: "right", content: { kind: "ui", chat: "replay-1", index: 1 } })`.
+  // Prompts with "side pane" or "diff in a pane" make the mock agent do it itself (mock/chats.ts).
+  (window as { __yaahOpenPane?: (e: UiOpenPaneEvent) => Promise<void> }).__yaahOpenPane = (e) => m.emit("ui-open-pane", e);
   mockWindows("main");
   mockIPC(
     async (cmd, args) => {
