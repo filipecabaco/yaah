@@ -130,7 +130,10 @@ export function mockQueue(m: Mock, { send, cancel }: Hooks) {
         const [head] = list;
         const merged = {
           ...head,
-          text: list.map((i) => i.text).filter(Boolean).join("\n\n"),
+          text: list
+            .map((i) => i.text)
+            .filter(Boolean)
+            .join("\n\n"),
           mentions: [...new Set(list.flatMap((i) => i.mentions ?? []))],
           files: list.flatMap((i) => i.files ?? []),
         };
