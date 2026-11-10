@@ -3,6 +3,7 @@
 // goes to Rust (`set_chat_config`) and the chat shows what comes back, locked while
 // a turn runs, reachable from ⌘K, and Settings → Agents "New chats start with".
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { openPalette } from "@/test/palette";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import App from "@/App";
@@ -84,7 +85,7 @@ describe("the composer's model and effort", () => {
     expect(model).toHaveAttribute("title", expect.stringMatching(/Wait for the turn to end/));
     await expect(api.setChatConfig(sessionId, "model", "haiku")).rejects.toThrow(/Wait for the turn to end/);
 
-    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await openPalette();
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
     await user.type(within(palette).getByRole("combobox"), "change model");
     expect(within(palette).queryByRole("option", { name: /Change model…/ })).toBeNull();
@@ -93,7 +94,7 @@ describe("the composer's model and effort", () => {
   it("opens from ⌘K on the chat's picker, and a long list is searchable", async () => {
     const { user, sessionId } = await openChat("opencode-openrouter");
     const calls = setCalls();
-    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await openPalette();
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
     await user.type(within(palette).getByRole("combobox"), "change model");
     await user.click(await within(palette).findByRole("option", { name: /Change model….*Claude Sonnet 4\.5/ }));

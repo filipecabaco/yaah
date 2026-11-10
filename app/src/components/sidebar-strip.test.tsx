@@ -18,17 +18,13 @@ describe("with the traffic lights showing", () => {
 
     fireEvent.keyDown(window, { key: "b", code: "KeyB", metaKey: isMac, ctrlKey: !isMac });
     // Hidden: no strip at all. The main area's title bar takes the lights' row: 80 px of gutter,
-    // then Show sidebar, the logo and Search, 52 px tall like the sidebar's first row (12 + 28 + 12),
+    // then Show sidebar, 52 px tall like the sidebar's first row (12 + 28 + 12),
     // so the lights are centred in it.
     const bar = await screen.findByRole("banner", { name: "Title bar" });
     expect(bar).toHaveClass("pl-[80px]", "h-[52px]", "items-center");
-    const [show, logo, search] = [
-      within(bar).getByRole("button", { name: "Show the sidebar" }),
-      within(bar).getByRole("img", { name: "yaah" }),
-      within(bar).getByRole("button", { name: /^Search/ }),
-    ];
-    expect(show.compareDocumentPosition(logo) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(logo.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: "Show the sidebar" })).toBeInTheDocument();
+    expect(within(bar).queryByRole("img", { name: "yaah" })).toBeNull();
+    expect(within(bar).queryByRole("button", { name: /^Search/ })).toBeNull();
     await waitFor(() => expect(screen.queryByRole("complementary", { name: "Sidebar" })).toBeNull());
   });
 });

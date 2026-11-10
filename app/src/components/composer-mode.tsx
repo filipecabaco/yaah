@@ -3,7 +3,7 @@
 // that stops asking altogether (bypass / full access) is never preselected or saved as a default,
 // asks for a confirmation per chat and shows a red label in the composer while it is on.
 import { useEffect, useState } from "react";
-import { ChevronDown, Loader2, ShieldAlert } from "lucide-react";
+import { ChevronDown, Loader2, Shield, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Command, CommandGroup, CommandItem, CommandList } from "@/components/ui/command";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -91,11 +91,17 @@ export function ComposerMode({ session, pane, onError }: { session: SessionInfo;
             data-unrestricted={unrestricted || undefined}
             className={unrestricted ? "shrink-0 font-medium text-destructive" : "shrink-0 text-muted-foreground"}
           >
-            {saving != null ? <Loader2 className="animate-spin" aria-hidden /> : unrestricted && <ShieldAlert aria-hidden />}
-            <span className="shrink-0" aria-hidden>
+            {saving != null ? (
+              <Loader2 className="animate-spin" aria-hidden />
+            ) : unrestricted ? (
+              <ShieldAlert aria-hidden />
+            ) : (
+              <Shield aria-hidden className="@xl:hidden" />
+            )}
+            <span className="hidden shrink-0 @xl:inline" aria-hidden>
               {unrestricted ? (isAuto(option.current) ? "Agent decides:" : "Not asking:") : "Permissions"}
             </span>
-            <span className={unrestricted ? "truncate" : "truncate text-foreground"}>
+            <span className={unrestricted ? "truncate @max-md:hidden" : "truncate text-foreground @max-md:hidden"}>
               {saving != null ? modeText(option, saving).name : current.name}
             </span>
             <ChevronDown aria-hidden className="hidden @sm:block" />

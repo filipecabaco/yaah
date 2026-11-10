@@ -2,6 +2,7 @@
 // and the header's folder menu, the picker's copy for a quick chat and a project chat, and the
 // transcript's notice. Against the real App and the browser mock.
 import { screen, waitFor, within } from "@testing-library/react";
+import { openPalette } from "@/test/palette";
 import { describe, expect, it, vi } from "vitest";
 import { renderApp, sendInQuickChat } from "@/test/app";
 
@@ -33,7 +34,7 @@ describe("adding repositories to a quick chat", () => {
     await screen.findByRole("button", { name: "Send" });
     expect(folders()).toHaveAccessibleName(/^1 folder in this chat/);
 
-    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await openPalette();
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
     await user.type(within(palette).getByRole("combobox"), "add repositories");
     await user.click(await within(palette).findByRole("option", { name: /Add repositories….*to this chat/ }));

@@ -3,6 +3,7 @@
 // the statement of work written into the brief, and the Add repos list driven
 // from its search box.
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { openPalette } from "@/test/palette";
 import type userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isMac } from "@/lib/shortcuts";
@@ -127,7 +128,7 @@ describe("a project's agent", () => {
 
   it("is the one picked when starting from an issue", async () => {
     const { user, mock } = renderApp();
-    await user.click(await screen.findByRole("button", { name: /^Search/ }));
+    await openPalette();
     await user.keyboard("from an issue");
     await user.click(await screen.findByRole("option", { name: /New project from an issue/ }));
     const dialog = await screen.findByRole("dialog", { name: "New project" });
@@ -172,7 +173,7 @@ describe("quick chats", () => {
     await waitFor(() => expect(quick()).toEqual(["work", "default"]));
 
     // The palette's "New quick chat with…".
-    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await openPalette();
     await user.keyboard("quick chat with");
     await user.click(await screen.findByRole("option", { name: /New quick chat with…/ }));
     await user.click(await screen.findByRole("option", { name: /^Claude \(work\)/ }));

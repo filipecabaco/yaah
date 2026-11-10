@@ -51,7 +51,7 @@ export function ComposerShell({
     >
       <div className={carrying ? "flex flex-col gap-1.5 px-2 pt-2" : "contents"}>{carries}</div>
       {children}
-      <div className="flex min-w-0 items-center gap-1 px-1.5 pb-1.5">{toolbar}</div>
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-1 px-1.5 pb-1.5">{toolbar}</div>
     </div>
   );
 }
@@ -65,14 +65,14 @@ export function TriggerHint() {
   const pair = (key: string, word: string) => (
     <span className="inline-flex items-center gap-1">
       <Kbd>{key}</Kbd>
-      <span className="hidden @2xl:inline">{word}</span>
+      <span className="hidden @4xl:inline">{word}</span>
     </span>
   );
   return (
     <span
       aria-hidden
       title="/ for commands, @ to mention a file, # for an issue or pull request"
-      className="hidden items-center gap-1 text-xs text-muted-foreground @md:inline-flex @2xl:gap-2.5"
+      className="hidden items-center gap-1 text-xs text-muted-foreground @2xl:inline-flex @4xl:gap-2.5"
     >
       {pair("/", "commands")}
       {pair("@", "files")}
