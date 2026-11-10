@@ -2,6 +2,7 @@
 // pane's picker, the agent step, search, importing a session with its history, a session
 // already in yaah opening its chat, and agents that can't list.
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { openPalette } from "@/test/palette";
 import { describe, expect, it } from "vitest";
 import { isMac } from "@/lib/shortcuts";
 import { renderApp } from "@/test/app";
@@ -15,7 +16,7 @@ async function started(options: Parameters<typeof renderApp>[0] = {}, setup?: (m
 
 /** ⌘K → "Resume a session…". */
 async function openFromPalette(user: Awaited<ReturnType<typeof started>>["user"]) {
-  await user.click(screen.getByRole("button", { name: /^Search/ }));
+  await openPalette();
   const dialog = await screen.findByRole("dialog", { name: "Command palette" });
   await user.type(within(dialog).getByRole("combobox"), "resume a session");
   await user.click(await within(dialog).findByRole("option", { name: /^Resume a session…/ }));

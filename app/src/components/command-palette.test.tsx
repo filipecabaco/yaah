@@ -1,6 +1,7 @@
 // The ⌘K palette with hundreds of chats: ranked once per keystroke, top results
 // only, best group first; and nothing built while it's closed.
 import { render, screen, waitFor, within } from "@testing-library/react";
+import { openPalette } from "@/test/palette";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import App from "@/App";
@@ -34,7 +35,7 @@ describe("the palette with 300 chats", () => {
     }
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("button", { name: /^Search/ }));
+    await openPalette();
     return { user, dialog: await screen.findByRole("dialog", { name: "Command palette" }) };
   }
   const chatItems = (dialog: HTMLElement) =>
@@ -121,7 +122,7 @@ describe("the palette with 300 chats", () => {
     Object.assign(mock.sessions[d.sessionId], { title: "split notes", createdAt: 1001 });
     const user = userEvent.setup();
     render(<App />);
-    await user.click(await screen.findByRole("button", { name: /^Search/ }));
+    await openPalette();
     const dialog = await screen.findByRole("dialog", { name: "Command palette" });
     const input = within(dialog).getByRole("combobox");
     await user.type(input, "keyboard shortcuts");
@@ -135,7 +136,7 @@ describe("the palette with 300 chats", () => {
   it("builds nothing while it's closed", async () => {
     installBrowserMock({ delay: 0 });
     render(<App />);
-    await screen.findByRole("button", { name: /^Search/ });
+    await screen.findByRole("button", { name: "Hide the sidebar" });
     expect(document.querySelector("[cmdk-root]")).toBeNull();
   });
 });

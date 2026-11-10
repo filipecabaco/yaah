@@ -1,6 +1,7 @@
 // Tool cards as a coding turn makes them (the mock's "command output" replay), and
 // switching a chat's agent for its next message, against the real App and the browser mock.
 import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { openPalette } from "@/test/palette";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import { Elapsed, TranscriptEntry } from "@/components/entries";
@@ -154,7 +155,7 @@ describe("switching a chat's agent", () => {
     const log = await sendInQuickChat(user, "write hello.txt please");
     await screen.findByRole("group", { name: "Permission requested" });
 
-    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await openPalette();
     let dialog = await screen.findByRole("dialog", { name: "Command palette" });
     await user.type(within(dialog).getByRole("combobox"), "switch agent");
     await user.click(await within(dialog).findByRole("option", { name: /Switch agent….*this chat: Claude/ }));
@@ -163,7 +164,7 @@ describe("switching a chat's agent", () => {
     await user.keyboard("{Escape}");
 
     await answerPermissionsUntil(user, log, "Yes", () => !!screen.queryByRole("button", { name: "Send" }));
-    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await openPalette();
     dialog = await screen.findByRole("dialog", { name: "Command palette" });
     await user.type(within(dialog).getByRole("combobox"), "switch agent");
     await user.click(await within(dialog).findByRole("option", { name: /Switch agent…/ }));

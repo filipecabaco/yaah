@@ -20,7 +20,6 @@ import {
   PanelLeftOpen,
   Pencil,
   Plus,
-  Search,
   Settings2,
   Trash2,
   X,
@@ -28,7 +27,6 @@ import {
 } from "lucide-react";
 import { openInTerminalApp } from "@/lib/terminal-api";
 import { AgentMenu } from "@/components/agent-choice";
-import { Mark, Wordmark } from "@/components/brand/mark";
 import { ChatMenu, ChatRowActions, CopyMenuItem, ROW_ACTION } from "@/components/menus";
 import { Hint } from "@/components/shortcuts";
 import { Badge } from "@/components/ui/badge";
@@ -93,7 +91,6 @@ type Props = {
   activeProjectId: string | null;
   onSelect: (s: Selection) => void;
   onNewProject: () => void;
-  onPalette: () => void;
   onNewChat: (projectId: string) => Promise<unknown>;
   onProjectChange: (p: Project) => void;
   /** Opens the project page with its name ready to edit. */
@@ -144,16 +141,14 @@ export const Sidebar = memo(function Sidebar(props: Props) {
       >
         <aside aria-label="Sidebar" className="@container/sidebar flex h-full flex-col border-r bg-sidebar text-sidebar-foreground" style={{ width }}>
           <div className="flex flex-col gap-2 p-3">
-            {/* Row 1 drags the window and, on macOS, holds the traffic lights; the logo follows them and Hide stays inside the edge. */}
+            {/* Row 1 drags the window and, on macOS, holds the traffic lights; the Agent label follows them and Hide stays inside the edge, in line with Manage agents below. */}
             <div data-tauri-drag-region="deep" className={cn("flex h-7 min-w-0 items-center justify-between gap-2", trafficLights && "pl-[68px]")}>
-              <span data-tauri-drag-region="false" className="inline-flex min-w-0">
-                <Wordmark className="px-1 text-sm" />
-              </span>
+              <span className="px-1 text-xs text-muted-foreground">Agent</span>
               <Hint label="Hide the sidebar" shortcut="toggleSidebar">
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  className="shrink-0 text-muted-foreground"
+                  className="-mr-0.5 shrink-0 text-muted-foreground"
                   onClick={props.onToggle}
                   aria-label="Hide the sidebar"
                 >
@@ -161,11 +156,6 @@ export const Sidebar = memo(function Sidebar(props: Props) {
                 </Button>
               </Hint>
             </div>
-            <Button variant="outline" size="sm" className="h-7 w-full justify-start gap-2 px-2 text-muted-foreground" onClick={props.onPalette}>
-              <Search /> Search
-              <Kbd className="ml-auto">{formatKeys(SHORTCUTS.palette.keys)}</Kbd>
-            </Button>
-            <span className="px-1 text-xs text-muted-foreground">Agent</span>
             <div className="flex gap-1.5">
               <Select value={agentId} onValueChange={props.onAgent}>
                 {/* The email is clipped in a narrow sidebar or at a large interface size: the tooltip has it whole (LV-2). */}
@@ -186,7 +176,7 @@ export const Sidebar = memo(function Sidebar(props: Props) {
                 </SelectContent>
               </Select>
               <Hint label="Manage agents">
-                <Button variant="outline" size="icon" onClick={props.onManageAgents} aria-label="Manage agents">
+                <Button variant="outline" size="icon" className="-mr-0.5 w-7" onClick={props.onManageAgents} aria-label="Manage agents">
                   <Settings2 />
                 </Button>
               </Hint>
@@ -398,11 +388,11 @@ function ResizeEdge({ width, onDrag, onDone }: { width: number; onDrag: (w: numb
 
 /**
  * With the sidebar hidden (⌘B), the main area's top row is the title bar, as in Finder or Notes:
- * on macOS a gutter for the traffic lights, then Show sidebar, the logo and Search. It drags the
+ * on macOS a gutter for the traffic lights, then Show sidebar, and nothing else. It drags the
  * window (its buttons stay buttons). Always rendered, so it grows and fades in as the sidebar slides
  * away instead of jumping; 52 px tall, like the sidebar's own first row, so the lights sit centred in it.
  */
-export function CollapsedTitleBar({ shown, onToggle, onPalette }: { shown: boolean; onToggle: () => void; onPalette: () => void }) {
+export function CollapsedTitleBar({ shown, onToggle }: { shown: boolean; onToggle: () => void }) {
   const trafficLights = useTrafficLights();
   return (
     <div
@@ -425,11 +415,6 @@ export function CollapsedTitleBar({ shown, onToggle, onPalette }: { shown: boole
               <PanelLeftOpen />
             </Button>
           </Hint>
-          <Mark className="size-4 text-foreground" title="yaah" />
-          <Button variant="outline" size="sm" className="ml-2 h-7 gap-2 px-2 text-muted-foreground" onClick={onPalette}>
-            <Search /> Search
-            <Kbd>{formatKeys(SHORTCUTS.palette.keys)}</Kbd>
-          </Button>
         </header>
       </div>
     </div>

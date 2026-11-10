@@ -2,6 +2,7 @@
 // (src/dev/mock/work-items.ts): the "From an issue" picker, starting a project
 // with its prompt drafted (never sent), and the linked item on the project page.
 import { screen, waitFor, within } from "@testing-library/react";
+import { openPalette } from "@/test/palette";
 import type userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/lib/api";
@@ -19,7 +20,7 @@ function ipcCalls() {
 
 /** ⌘K → "New project from an issue…": the dialog on its picker, once the queue is in. */
 async function openPicker(user: User) {
-  await user.click(await screen.findByRole("button", { name: /^Search/ }));
+  await openPalette();
   await user.keyboard("from an issue");
   await user.click(await screen.findByRole("option", { name: /New project from an issue/ }));
   const dialog = await screen.findByRole("dialog", { name: "New project" });

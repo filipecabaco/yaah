@@ -32,10 +32,9 @@ describe("the hidden sidebar's title bar", () => {
     expect(bar.closest("[data-shown]")).not.toBeNull();
     expect(bar.closest("[inert]")).toBeNull();
     expect(inDragRegion(pathOf(bar))).toBe(true);
-    // The logo inside it drags too; the buttons stay buttons.
-    expect(inDragRegion(pathOf(bar.querySelector("svg.yaah-mark")!))).toBe(true);
+    // The buttons stay buttons.
     const buttons = within(bar).getAllByRole("button");
-    expect(buttons.map((b) => b.textContent || b.getAttribute("aria-label"))).toEqual(["Show the sidebar", expect.stringContaining("Search")]);
+    expect(buttons.map((b) => b.textContent || b.getAttribute("aria-label"))).toEqual(["Show the sidebar"]);
     for (const b of buttons) {
       expect(inDragRegion(pathOf(b))).toBe(false);
       expect(inDragRegion(pathOf(b.firstElementChild ?? b))).toBe(false);
@@ -72,8 +71,6 @@ describe("the hidden sidebar's title bar", () => {
     expect(row).toHaveAttribute("data-tauri-drag-region", "deep");
     expect(inDragRegion(pathOf(row))).toBe(true);
     expect(inDragRegion(pathOf(hide))).toBe(false);
-    // The logo opts out (it's text to select), the rest of the row drags.
-    expect(inDragRegion(pathOf(within(row).getByText("yaah")))).toBe(false);
     const bar = screen.getByLabelText("Title bar", { selector: "header" });
     expect(bar.closest("[inert]")).not.toBeNull();
   });

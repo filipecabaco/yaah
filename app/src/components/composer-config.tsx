@@ -4,7 +4,7 @@
 // the agent and emits what the agent answers; this only renders that. Disabled
 // while a turn runs: a change applies to the next message.
 import { useEffect, useId, useRef, useState } from "react";
-import { ChevronDown, Loader2 } from "lucide-react";
+import { ChevronDown, Cpu, Gauge, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -111,14 +111,16 @@ function ConfigPicker({
           title={title}
           data-config={role}
           // In a narrow pane the model's long name gives way; effort levels are a word, kept whole.
-          className={role === "model" ? "max-w-[16rem] min-w-0 shrink text-muted-foreground" : "max-w-[16rem] shrink-0 text-muted-foreground"}
+          className={role === "model" ? "max-w-[16rem] min-w-[6.5rem] shrink text-muted-foreground" : "max-w-[16rem] shrink-0 text-muted-foreground"}
         >
           {/* "Model" and "Effort" in words, at every width: icons alone didn't say which was which. */}
           {saving != null && <Loader2 className="animate-spin" aria-hidden />}
-          <span className="shrink-0" aria-hidden>
+          {/* The word when the pane is wide, an icon in its place when it's medium, and the value goes too when it's narrow (the title and label say them whole). */}
+          <span className="hidden shrink-0 @xl:inline" aria-hidden>
             {label}
           </span>
-          <span className="truncate text-foreground">{saving != null ? (option.choices.find((c) => c.value === saving)?.name ?? saving) : name}</span>
+          {role === "model" ? <Cpu aria-hidden className="@xl:hidden" /> : <Gauge aria-hidden className="@xl:hidden" />}
+          <span className="truncate text-foreground @max-md:hidden">{saving != null ? (option.choices.find((c) => c.value === saving)?.name ?? saving) : name}</span>
           <ChevronDown aria-hidden className="hidden @sm:block" />
         </Button>
       </PopoverTrigger>

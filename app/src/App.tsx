@@ -137,7 +137,6 @@ export default function App() {
     onNewQuickChatWith: useCallback((id: string) => withAgent(() => newQuickChat(undefined, id), id), [withAgent, newQuickChat]),
     onNewChatInFolder: useCallback(() => withAgent(() => newChatInFolder()), [withAgent, newChatInFolder]),
     onNewProject: useCallback(() => setCreatingProject("name"), []),
-    onPalette: useCallback(() => setPalette({ kind: "root" }), []),
     onRenameProject: useCallback(
       (id: string) => {
         select({ kind: "project", id });
@@ -525,7 +524,7 @@ export default function App() {
                 />
 
                 <div className="flex min-w-0 flex-1 flex-col">
-                  <CollapsedTitleBar shown={panes.sidebar.collapsed} onToggle={panes.toggleSidebar} onPalette={sidebar.onPalette} />
+                  <CollapsedTitleBar shown={panes.sidebar.collapsed} onToggle={panes.toggleSidebar} />
                   {/* The one main landmark: every pane, whatever it shows (they're sections in it). */}
                   <main id="main" tabIndex={-1} className="flex min-h-0 min-w-0 flex-1 flex-col outline-none">
                     <PaneGrid

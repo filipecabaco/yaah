@@ -3,6 +3,7 @@
 // above the composer, its count and announcements; Edit, Remove, Move, Send now; a stop
 // pauses the queue and Resume sends it in order; ⌘K "Clear queue".
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { openPalette } from "@/test/palette";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import App from "@/App";
@@ -139,14 +140,14 @@ describe("queued messages", () => {
     const { user, mock, sessionId } = await openChat((s) =>
       Object.assign(s, { running: true, queue: { items: [item("a", "alpha"), item("b", "beta")] } }),
     );
-    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await openPalette();
     const palette = await screen.findByRole("dialog", { name: "Command palette" });
     await user.type(within(palette).getByRole("combobox"), "clear queue");
     await user.click(await within(palette).findByRole("option", { name: /Clear queue.*2 queued/ }));
     await waitFor(() => expect(queueList()).toBeNull());
     expect(mock.sessions[sessionId].queue?.items ?? []).toEqual([]);
 
-    await user.click(screen.getByRole("button", { name: /^Search/ }));
+    await openPalette();
     const again = await screen.findByRole("dialog", { name: "Command palette" });
     await user.type(within(again).getByRole("combobox"), "clear queue");
     expect(within(again).queryByRole("option", { name: /Clear queue/ })).toBeNull();

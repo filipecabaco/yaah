@@ -410,15 +410,12 @@ describe("the sidebar", () => {
     expect(wrapper).toHaveAttribute("inert");
     await waitFor(() => expect(mock.sidebar.collapsed).toBe(true));
 
-    // The title bar: Show sidebar, the logo and Search ⌘K, and it drags the window. No traffic-light gutter outside macOS's app.
+    // The title bar: Show sidebar only, and it drags the window. No traffic-light gutter outside macOS's app.
     const bar = screen.getByRole("banner", { name: "Title bar" });
     expect(bar).toHaveAttribute("data-tauri-drag-region", "deep");
     expect(bar).not.toHaveClass("pl-[80px]");
-    expect(within(bar).getByRole("img", { name: "yaah" })).toBeInTheDocument();
-    expect(within(bar).getByRole("button", { name: /^Search/ })).toHaveTextContent(/K$/);
-    await user.click(within(bar).getByRole("button", { name: /^Search/ }));
-    expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
-    await user.keyboard("{Escape}");
+    expect(within(bar).queryByRole("img", { name: "yaah" })).toBeNull();
+    expect(within(bar).queryByRole("button", { name: /^Search/ })).toBeNull();
 
     await user.click(within(bar).getByRole("button", { name: "Show the sidebar" }));
     const sidebar = await screen.findByRole("complementary", { name: "Sidebar" });
@@ -436,18 +433,15 @@ describe("the sidebar", () => {
     await waitFor(() => expect(mock.sidebar.collapsed).toBe(false));
   });
 
-  it("keeps its top row inside its edge: the logo, then Hide at the right, and Search on a row of its own", async () => {
+  it("keeps its top row inside its edge: Hide alone at the right, with no logo or Search", async () => {
     await started();
     const sidebar = screen.getByRole("complementary", { name: "Sidebar" });
     const hide = within(sidebar).getByRole("button", { name: "Hide the sidebar" });
-    const search = within(sidebar).getByRole("button", { name: /^Search/ });
     const row = hide.parentElement!;
     expect(row).toHaveClass("flex", "justify-between", "min-w-0");
     expect(hide).toHaveClass("shrink-0");
-    expect(row).toContainElement(within(sidebar).getByText("yaah"));
-    expect(row).not.toContainElement(search);
-    expect(search).toHaveClass("w-full");
-    expect(search).toHaveTextContent(/K$/);
+    expect(within(sidebar).queryByText("yaah")).toBeNull();
+    expect(within(sidebar).queryByRole("button", { name: /^Search/ })).toBeNull();
     // Nothing in the sidebar is laid out past its width: no fixed widths in that row.
     expect(row.className).not.toMatch(/(^|\s)w-\d/);
   });
