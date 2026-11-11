@@ -69,35 +69,49 @@ export function useTerminals(y: Yaah) {
       focusPaneDom(panes.split("row", content));
     }
   }, []);
-  // The pane and folder the agent was last worked in, so the terminal shortcut can go there and back.
-  const lastAgent = useRef<{ pane: string; origin: Origin } | null>(null);
+  // The folder the agent was last worked in, for a pane that has no folder of its own (the home screen).
+  const lastOrigin = useRef<Origin | null>(null);
   useEffect(() => {
     const here = y.panes.focused;
-    if (here.content?.kind === "chat") lastAgent.current = { pane: here.id, origin: originOf(here.content, y) };
+    if (here.content?.kind === "chat") lastOrigin.current = originOf(here.content, y);
   });
+  // What each pane showed before it was switched to its terminal, and the terminal it was switched to:
+  // the same pane swaps between them, so the layout stays as it is and the shell keeps running.
+  const swapped = useRef(new Map<string, { chat: Selection; terminal?: Selection }>());
   /**
-   * Switch between the agent and its terminal: from a chat, to a terminal in the folder it works in (the one
-   * already open there, else a new split); from a terminal, back to the chat that was last worked in.
+   * Switch this pane between the agent and a terminal in its folder, and back. The chat is kept
+   * (draft, scroll, running turn) while the terminal shows, and the shell while the chat does.
    */
   const toggleTerminal = useCallback(() => {
     const { panes } = latest.current;
-    const go = (id: string) => {
-      panes.focus(id);
-      focusPaneDom(id);
-    };
     const here = panes.focused;
+    const id = here.id;
+    // Panes that are gone take their stash with them (a new pane may reuse an id).
+    for (const k of swapped.current.keys()) if (!panes.panes.some((p) => p.id === k)) swapped.current.delete(k);
+    const stash = swapped.current.get(id);
     if (here.content?.kind === "terminal") {
-      const chats = panes.panes.filter((p) => p.content?.kind === "chat");
-      const back = chats.find((p) => p.id === lastAgent.current?.pane) ?? chats[0];
-      if (back) go(back.id);
+      // Back: the terminal is kept (with its shell's id) for the next switch.
+      if (!stash) {
+        // A terminal opened on its own has no chat to go back to in this pane: go to one beside it.
+        const chat = panes.panes.find((p) => p.content?.kind === "chat");
+        if (chat) {
+          panes.focus(chat.id);
+          focusPaneDom(chat.id);
+        }
+        return;
+      }
+      swapped.current.set(id, { ...stash, terminal: here.content });
+      panes.setPaneContent(id, stash.chat);
+      focusPaneDom(id);
       return;
     }
     const origin = originOf(here.content, latest.current);
-    const target = origin.cwd ? origin : (lastAgent.current?.origin ?? {});
-    const open = panes.panes.find((p) => p.content?.kind === "terminal" && !!target.cwd && p.content.cwd === target.cwd);
-    if (open) go(open.id);
-    else show({ kind: "terminal", ...target }, "split");
-  }, [show]);
+    const target = origin.cwd ? origin : (lastOrigin.current ?? {});
+    const kept = stash?.terminal?.kind === "terminal" && (!target.cwd || stash.terminal.cwd === target.cwd) ? stash.terminal : null;
+    swapped.current.set(id, { chat: here.content, terminal: undefined });
+    panes.setPaneContent(id, kept ?? { kind: "terminal", ...target });
+    focusPaneDom(id);
+  }, []);
   const focusedOrigin = useCallback(() => originOf(latest.current.panes.focused.content, latest.current), []);
   const open = useCallback((target: TerminalTarget, where: Where) => show({ kind: "terminal", ...target }, where), [show]);
   /** A diff pane of the repository `cwd` is in (none: the pane asks which folder). */
