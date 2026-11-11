@@ -13,6 +13,8 @@ import { mdxBlocks, openTags, prepareMdx, scanJsx, splitFrontmatter } from "@/li
 const draw = (text: string) => render(<Markdown>{text}</Markdown>).container;
 const html = (el: React.ReactElement) => {
   const { container, unmount } = render(el);
+  // A fenced block's Copy button is drawn around its `pre`; these tests are about the text's own markup.
+  container.querySelectorAll("[data-code-copy]").forEach((w) => w.replaceWith(...Array.from(w.children).filter((c) => c.tagName === "PRE")));
   // React ids (Radix tabs) differ from one render to the next.
   const out = container.innerHTML.replace(/_r_[a-z0-9]+_/g, "_r_");
   unmount();

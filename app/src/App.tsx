@@ -7,6 +7,8 @@ import { focusComposer } from "@/components/chat-context";
 import { ErrorText } from "@/components/error-text";
 import { CommandPalette, type PalettePage } from "@/components/command-palette";
 import { AgentSetupDialog, FirstRunSetup, type SettingsTab, type SettingsTarget } from "@/components/agent-setup";
+import { CopiedNote } from "@/components/copied-note";
+import { installCopyOnSelect } from "@/lib/clipboard";
 import { AppContextMenu, ChatActionsProvider } from "@/components/menus";
 import { ShortcutsDialog } from "@/components/shortcuts";
 import type { NewProjectMode } from "@/components/new-project-dialog";
@@ -160,6 +162,8 @@ export default function App() {
     ),
   };
 
+  /** A chat's project link: its own pane shows the project. Stable, so chats aren't redrawn for each other's changes. */
+  const openProjectIn = useCallback((pane: string, id: string) => setPaneContent(pane, { kind: "project", id }), [setPaneContent]);
   /** Close pane `id` (the last one goes home instead); the keyboard stays in the pane that remains. */
   const closePaneById = useCallback(
     (id: string) => {
@@ -187,6 +191,8 @@ export default function App() {
     if (target) openChat(target.sessionId);
   }
 
+  // Text selected in a transcript is copied (Settings → Chat turns that off).
+  useEffect(() => installCopyOnSelect(), []);
   // Cards in a chat (e.g. MCP notices) can open Settings on a tab.
   useEffect(() => onOpenSettings((tab) => setSetup({ kind: "settings", tab: tab as SettingsTab })), []);
   // A chat's agent badge and its /agent command open the agent picker for that chat.
@@ -245,6 +251,7 @@ export default function App() {
     },
     toggleSidebar: panes.toggleSidebar,
     newTerminal: terminals.openHere,
+    toggleTerminal: terminals.toggleTerminal,
     sizeUp: () => void stepFontSize(1),
     sizeDown: () => void stepFontSize(-1),
     sizeReset: () => void stepFontSize(0),
@@ -350,14 +357,7 @@ export default function App() {
       const own = s?.projectId ? (y.projects.find((x) => x.id === s.projectId) ?? null) : null;
       labels[p.id] = `Chat: ${s?.title ?? "loading"}`;
       contents[p.id] = s ? (
-        <Chat
-          session={s}
-          agents={y.agents}
-          project={own}
-          onOpenProject={(id) => setPaneContent(p.id, { kind: "project", id })}
-          onLogin={loginById}
-          pane={p.id}
-        />
+        <Chat session={s} agents={y.agents} project={own} onOpenProject={openProjectIn} onLogin={loginById} pane={p.id} />
       ) : y.sessionsLoaded ? (
         home
       ) : (
@@ -600,6 +600,7 @@ export default function App() {
           </ChatActionsProvider>
         </UiPanesContext.Provider>
       </TranscriptsContext.Provider>
+      <CopiedNote />
     </TooltipProvider>
   );
 }
