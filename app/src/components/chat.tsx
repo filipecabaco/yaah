@@ -34,7 +34,6 @@ import {
 } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { ComposerConfig } from "@/components/composer-config";
-import { ModeStatus } from "@/components/composer-mode";
 import { COMPOSER_INPUT, ComposerShell, TRIGGER_HELP, TriggerHint } from "@/components/composer-shell";
 import { CommandDialog } from "@/components/command-dialog";
 import { commandOf, runCommand } from "@/lib/slash-commands";
@@ -1155,7 +1154,6 @@ function Composer({ session, agentLabel, pane }: { session: SessionInfo; agentLa
         <p id={hintId} className="sr-only">
           {TRIGGER_HELP}
         </p>
-        <ModeStatus session={session} />
         <ErrorText error={error} className="mt-1.5" />
         <ErrorText error={configError} className="mt-1.5" />
       </div>
