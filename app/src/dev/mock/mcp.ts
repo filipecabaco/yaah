@@ -8,6 +8,7 @@ import {
   type McpServer,
   type McpServerDraft,
   type McpServerInfo,
+  type McpStatus,
   type McpTestReport,
 } from "@/lib/api";
 import { home, need, type Mock, type Replies } from "./context";
@@ -177,6 +178,9 @@ function fromDraft(d: McpServerDraft): McpServer {
   };
 }
 
+/** Servers the mock has logged in to. */
+const logins = new Set<string>();
+
 export function mcpReplies(m: Mock): Replies {
   const { state } = m;
   const taken = (name: string) => state.mcpServers.some((s) => s.name === name);
@@ -227,6 +231,45 @@ export function mcpReplies(m: Mock): Replies {
         ],
       };
     },
+    // What `/mcp` shows: every HTTP server wants a login until it has one (the mock's login takes a moment).
+    mcp_status: async (): Promise<McpStatus[]> => {
+      await new Promise((r) => setTimeout(r, 400));
+      return state.mcpServers.map((s) => {
+        const loggedIn = logins.has(s.name);
+        const state_ = !s.enabled
+          ? "disabled"
+          : s.name.includes("fail")
+            ? "failed"
+            : s.transport === "http" && !loggedIn
+              ? "needs-login"
+              : "connected";
+        return {
+          name: s.name,
+          transport: s.transport,
+          state: state_,
+          tools:
+            state_ === "connected"
+              ? [
+                  { name: "list_things", description: null },
+                  { name: "get_thing", description: null },
+                ]
+              : [],
+          detail:
+            state_ === "needs-login"
+              ? "HTTP 401 Unauthorized (it wants a login: use Log in in `/mcp`, or add an Authorization header)"
+              : state_ === "failed"
+                ? "the server didn't answer within 20s"
+                : null,
+          loggedIn,
+          enabled: s.enabled,
+        };
+      });
+    },
+    mcp_login: async ({ name }: { name: string }) => {
+      await new Promise((r) => setTimeout(r, 1200));
+      logins.add(name);
+    },
+    mcp_logout: ({ name }: { name: string }) => void logins.delete(name),
     mcp_import_candidates: (): McpImportCandidate[] => candidates.map((c) => ({ ...c, alreadyAdded: c.alreadyAdded || taken(c.name) })),
     import_mcp_servers: ({ picks }: { picks: { source: string; original: string }[] }): McpServerInfo[] =>
       picks.map((p) => {

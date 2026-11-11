@@ -19,6 +19,7 @@ mod json_file;
 pub mod keychain;
 pub mod layout;
 pub mod login;
+pub mod mcp_oauth;
 pub mod mcp_servers;
 pub mod path_env;
 mod permission_commands;
@@ -65,6 +66,8 @@ pub fn run() {
         .manage(attachments::Staging::default())
         .setup(|app| {
             let hub = Arc::new(Hub::with_store(commands::emitter(app.handle().clone()), accounts::home().join(".yaah/sessions")));
+            // OAuth logins of MCP servers are renewed before they run out (mcp_oauth.rs).
+            mcp_oauth::keep_fresh();
             // Queued messages go on their own as turns end (session/queue.rs).
             hub.start_queues();
             // What permission requests yaah may answer itself (session/permissions.rs): the setting, and each project's trusted MCP servers.
@@ -161,6 +164,9 @@ pub fn run() {
             data_commands::set_mcp_server_enabled,
             data_commands::test_mcp_server,
             data_commands::mcp_import_candidates,
+            data_commands::mcp_status,
+            data_commands::mcp_login,
+            data_commands::mcp_logout,
             data_commands::import_mcp_servers,
             data_commands::list_providers,
             data_commands::save_provider,

@@ -194,7 +194,16 @@ impl Server {
                 let command = agents::which(&self.command).ok_or_else(|| format!("`{}` isn't on your PATH", self.command))?;
                 Ok(json!({ "name": self.name, "command": command, "args": self.args, "env": pairs(&self.env) }))
             }
-            t => Ok(json!({ "type": t.as_str(), "name": self.name, "url": self.url, "headers": pairs(&self.headers) })),
+            t => {
+                let mut headers = pairs(&self.headers);
+                // A server yaah logged in to (`/mcp` → Log in) gets its token, unless the user set an Authorization header.
+                if !self.headers.keys().any(|k| k.eq_ignore_ascii_case("authorization"))
+                    && let Some(token) = crate::mcp_oauth::bearer(&self.name, &self.url)
+                {
+                    headers.push(json!({ "name": "Authorization", "value": format!("Bearer {token}") }));
+                }
+                Ok(json!({ "type": t.as_str(), "name": self.name, "url": self.url, "headers": headers }))
+            }
         }
     }
 }
@@ -1046,13 +1055,21 @@ fn header_map(server: &Server) -> Result<reqwest::header::HeaderMap, String> {
         let value = reqwest::header::HeaderValue::from_str(v).map_err(|_| format!("header `{k}` has an invalid value"))?;
         map.insert(name, value);
     }
+    // The login `/mcp` made, unless the user set an Authorization header themselves.
+    if !map.contains_key(reqwest::header::AUTHORIZATION)
+        && let Some(token) = crate::mcp_oauth::bearer(&server.name, &server.url)
+        && let Ok(mut value) = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+    {
+        value.set_sensitive(true);
+        map.insert(reqwest::header::AUTHORIZATION, value);
+    }
     Ok(map)
 }
 
 async fn http_error(resp: reqwest::Response) -> String {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
-    let hint = if status.as_u16() == 401 { " (it wants authorization: the test can't do OAuth; add an Authorization header)" } else { "" };
+    let hint = if status.as_u16() == 401 { " (it wants a login: use Log in in `/mcp`, or add an Authorization header)" } else { "" };
     if body.trim().is_empty() { format!("HTTP {status}{hint}") } else { format!("HTTP {status}{hint}: {}", short(&body)) }
 }
 
