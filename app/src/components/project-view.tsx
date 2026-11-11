@@ -25,6 +25,9 @@ type Props = {
   onChange: (p: Project) => void;
   onDelete: (id: string) => Promise<void>;
   onOpenChat: (id: string) => void;
+  /** The pane each chat is open in (a chat in no pane isn't listed); "Open agents" jumps to it. */
+  openIn?: Record<string, string>;
+  onFocusPane?: (pane: string) => void;
   /** A chat in the project, with `agentId` when the user picked one for it. */
   onNewChat: (projectId: string, agentId?: string) => Promise<unknown>;
   onLogin: (agent: AgentProfile) => void;
@@ -49,6 +52,8 @@ export function ProjectView({
   onChange,
   onDelete,
   onOpenChat,
+  openIn = {},
+  onFocusPane,
   onNewChat,
   onLogin,
   onNewTerminal,
@@ -148,6 +153,8 @@ export function ProjectView({
     }
   }
 
+  /** The agents at work or on screen: a chat running (even out of sight) or open in a pane. */
+  const opened = chats.filter((c) => c.running || openIn[c.sessionId]);
   return (
     <div className="min-w-0 flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-8 px-6 py-8">
@@ -162,33 +169,70 @@ export function ProjectView({
             className="h-9 min-w-48 flex-1 border-transparent px-1 text-lg font-semibold shadow-none hover:border-input focus-visible:border-input"
             aria-label="Project name"
           />
-          {agents.length > 0 && (
-            <AgentSelect
-              agents={agents}
-              value={account?.id ?? ""}
-              onChange={(id) => run(async () => onChange(await api.setProjectAgent(project.id, id)))}
-              label="Agent for new chats in this project"
-              className="w-44 shrink-0"
-            />
-          )}
-          <Select value={project.status} onValueChange={(s) => run(async () => onChange(await api.setProjectStatus(project.id, s as ProjectStatus)))}>
-            <SelectTrigger className="w-32 shrink-0" aria-label="Project status">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PROJECT_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>
-                  {s}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {/* One group, so the selects and the delete icon wrap together rather than one by one. */}
+          <div className="flex flex-wrap items-center gap-2">
+            {agents.length > 0 && (
+              <AgentSelect
+                agents={agents}
+                value={account?.id ?? ""}
+                onChange={(id) => run(async () => onChange(await api.setProjectAgent(project.id, id)))}
+                label="Agent for new chats in this project"
+                className="w-44 shrink-0"
+              />
+            )}
+            <Select
+              value={project.status}
+              onValueChange={(s) => run(async () => onChange(await api.setProjectStatus(project.id, s as ProjectStatus)))}
+            >
+              <SelectTrigger className="w-32 shrink-0" aria-label="Project status">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PROJECT_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {s}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Hint label="Delete project">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hover:text-destructive aria-expanded:text-destructive"
+                aria-label="Delete project"
+                aria-expanded={confirmDelete}
+                onClick={() => setConfirmDelete((c) => !c)}
+              >
+                <Trash2 />
+              </Button>
+            </Hint>
+          </div>
         </header>
 
         {project.link && (
           <div className="-mt-6 flex min-w-0 px-1">
             <ProjectLinkPill link={project.link} />
           </div>
+        )}
+
+        {/* Under the link pill, which belongs with the name; scrolled to with the header still in sight. */}
+        {confirmDelete && (
+          <section
+            ref={deleteSection}
+            aria-label="Delete project"
+            className="-mt-4 flex scroll-mt-40 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2"
+          >
+            <span className="min-w-48 flex-1 text-sm">Delete “{project.name}” and its brief? Your folders are not touched.</span>
+            <div className="flex gap-2">
+              <Button variant="destructive" size="sm" onClick={() => run(() => onDelete(project.id))}>
+                <Trash2 /> Delete
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
+                Keep
+              </Button>
+            </div>
+          </section>
         )}
 
         <ErrorText error={error} className="-mt-4 text-sm whitespace-pre-wrap" />
@@ -202,6 +246,36 @@ export function ProjectView({
             beforeBriefChange={flushBrief}
             onBriefChanged={() => setBriefVersion((v) => v + 1)}
           />
+        )}
+
+        {opened.length > 0 && (
+          <section className="flex flex-col gap-2" aria-labelledby="project-open-agents">
+            <h2 id="project-open-agents" className="text-sm font-medium">
+              Open agents
+            </h2>
+            <ul className="flex flex-col divide-y overflow-hidden rounded-lg border">
+              {opened.map((c) => {
+                const pane = openIn[c.sessionId];
+                return (
+                  <li key={c.sessionId}>
+                    <button
+                      onClick={() => (pane && onFocusPane ? onFocusPane(pane) : onOpenChat(c.sessionId))}
+                      title={pane ? "Go to its pane" : "Open the chat"}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset"
+                    >
+                      <span className="min-w-0 flex-1 truncate">{displayTitle(c.title)}</span>
+                      <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+                        {c.running && <Loader2 className="size-3.5 animate-spin" aria-hidden />}
+                        {c.running ? "working" : "idle"}
+                        {pane ? " · in a pane" : ""}
+                      </span>
+                      <Badge variant="outline">{c.accountId}</Badge>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
         )}
 
         <section className="flex flex-col gap-2">
@@ -252,13 +326,13 @@ export function ProjectView({
           {chats.length === 0 ? (
             <p className="text-sm text-muted-foreground">No chats in this project yet.</p>
           ) : (
-            <ul className="flex flex-col divide-y rounded-lg border">
+            <ul className="flex flex-col divide-y overflow-hidden rounded-lg border">
               {chats.map((c) => (
                 <li key={c.sessionId}>
                   <ChatMenu chat={c} onOpen={() => onOpenChat(c.sessionId)}>
                     <button
                       onClick={() => onOpenChat(c.sessionId)}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted data-[state=open]:bg-muted"
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:ring-inset data-[state=open]:bg-muted"
                     >
                       <span className="min-w-0 flex-1 truncate">{displayTitle(c.title)}</span>
                       {c.running && <Loader2 className="size-3.5 animate-spin text-muted-foreground" />}
@@ -373,24 +447,6 @@ export function ProjectView({
           <p className="text-xs text-muted-foreground">
             Attached to the first message of every new chat. Stored in <code>{compactPath(project.contextDir)}/project.md</code>.
           </p>
-        </section>
-
-        <section ref={deleteSection} className="flex items-center gap-2 border-t pt-6">
-          {confirmDelete ? (
-            <>
-              <span className="text-sm">Delete “{project.name}” and its brief? Your folders are not touched.</span>
-              <Button variant="destructive" size="sm" onClick={() => run(() => onDelete(project.id))}>
-                Delete
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setConfirmDelete(false)}>
-                Keep
-              </Button>
-            </>
-          ) : (
-            <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setConfirmDelete(true)}>
-              <Trash2 /> Delete project
-            </Button>
-          )}
         </section>
       </div>
     </div>

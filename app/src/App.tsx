@@ -371,6 +371,12 @@ export default function App() {
     } else if (c?.kind === "project") {
       const pr = y.projects.find((x) => x.id === c.id);
       labels[p.id] = `Project: ${pr?.name ?? "loading"}`;
+      // The chats of this project that are open in a pane, and which pane.
+      const openIn: Record<string, string> = {};
+      for (const chat of (pr && y.chatsByProject[pr.id]) || []) {
+        const pane = chatPane(panes.layout, chat.sessionId);
+        if (pane) openIn[chat.sessionId] = pane;
+      }
       contents[p.id] = pr ? (
         <Suspense fallback={blank}>
           <ProjectView
@@ -381,6 +387,8 @@ export default function App() {
             onChange={y.putProject}
             onDelete={y.deleteProject}
             onOpenChat={(id) => setPaneContent(p.id, { kind: "chat", id })}
+            openIn={openIn}
+            onFocusPane={focusOpenPane}
             onNewChat={(id, agentId) => {
               setStartNote(null);
               return y.newChat(id, agentId);
