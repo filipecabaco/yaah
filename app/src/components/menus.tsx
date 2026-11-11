@@ -28,6 +28,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { api, type SessionInfo } from "@/lib/api";
+import { copyQuietly } from "@/lib/clipboard";
 import { isWebUrl, openExternal } from "@/lib/links";
 import { openInTerminalApp } from "@/lib/terminal-api";
 import { actionsAt, type MenuAction } from "@/lib/menu-actions";
@@ -35,9 +36,7 @@ import { formatKeys, isMac, MOD, SHORTCUTS } from "@/lib/shortcuts";
 
 const COPY_KEYS = formatKeys([MOD, "C"]);
 
-function copyText(text: string) {
-  navigator.clipboard.writeText(text).catch((e: unknown) => console.error("Copy failed:", e));
-}
+const copyText = (text: string) => copyQuietly(text);
 
 /** A menu item that copies `text`. */
 export function CopyMenuItem({ text, children }: { text: string; children: ReactNode }) {

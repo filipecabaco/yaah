@@ -69,6 +69,35 @@ export function useTerminals(y: Yaah) {
       focusPaneDom(panes.split("row", content));
     }
   }, []);
+  // The pane and folder the agent was last worked in, so the terminal shortcut can go there and back.
+  const lastAgent = useRef<{ pane: string; origin: Origin } | null>(null);
+  useEffect(() => {
+    const here = y.panes.focused;
+    if (here.content?.kind === "chat") lastAgent.current = { pane: here.id, origin: originOf(here.content, y) };
+  });
+  /**
+   * Switch between the agent and its terminal: from a chat, to a terminal in the folder it works in (the one
+   * already open there, else a new split); from a terminal, back to the chat that was last worked in.
+   */
+  const toggleTerminal = useCallback(() => {
+    const { panes } = latest.current;
+    const go = (id: string) => {
+      panes.focus(id);
+      focusPaneDom(id);
+    };
+    const here = panes.focused;
+    if (here.content?.kind === "terminal") {
+      const chats = panes.panes.filter((p) => p.content?.kind === "chat");
+      const back = chats.find((p) => p.id === lastAgent.current?.pane) ?? chats[0];
+      if (back) go(back.id);
+      return;
+    }
+    const origin = originOf(here.content, latest.current);
+    const target = origin.cwd ? origin : (lastAgent.current?.origin ?? {});
+    const open = panes.panes.find((p) => p.content?.kind === "terminal" && !!target.cwd && p.content.cwd === target.cwd);
+    if (open) go(open.id);
+    else show({ kind: "terminal", ...target }, "split");
+  }, [show]);
   const focusedOrigin = useCallback(() => originOf(latest.current.panes.focused.content, latest.current), []);
   const open = useCallback((target: TerminalTarget, where: Where) => show({ kind: "terminal", ...target }, where), [show]);
   /** A diff pane of the repository `cwd` is in (none: the pane asks which folder). */
@@ -100,9 +129,11 @@ export function useTerminals(y: Yaah) {
       openForProject,
       /** ⌘T and "New terminal here": a new split to the right, in the focused pane's folder and project. */
       openHere: () => open(focusedOrigin(), "split"),
+      /** ⌘J: from the agent to a terminal in its folder, and from the terminal back. */
+      toggleTerminal,
       /** The focused pane's folder and project, if it has them. */
       focusedOrigin,
     }),
-    [open, openDiff, openForProject, focusedOrigin],
+    [open, openDiff, openForProject, focusedOrigin, toggleTerminal],
   );
 }

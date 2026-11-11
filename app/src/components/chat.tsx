@@ -1,4 +1,17 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  lazy,
+  memo,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { displayTitle } from "@/lib/chat-title";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
@@ -85,13 +98,14 @@ type Props = {
   session: SessionInfo;
   agents: AgentProfile[];
   project: Project | null;
-  onOpenProject: (id: string) => void;
+  /** Stable, so a memoised chat is not redrawn with every change elsewhere: it names its own pane. */
+  onOpenProject: (pane: string, id: string) => void;
   onLogin: (accountId: string) => void;
   /** The split pane it is shown in: drafts from its transcript land in its own composer. */
-  pane?: string;
+  pane: string;
 };
 
-export function Chat({ session, agents, project, onOpenProject, onLogin, pane }: Props) {
+export const Chat = memo(function Chat({ session, agents, project, onOpenProject, onLogin, pane }: Props) {
   const agent = agents.find((a) => a.id === session.accountId);
   const roots = [session.cwd, ...session.additionalDirs.filter((d) => d !== project?.contextDir)];
   // Only what deep components need; a stable object, so they don't re-render on every entry.
@@ -119,14 +133,17 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
     // `@container/chat`: the header drops what matters least as its pane narrows (in rem, so it follows the interface size).
     <div ref={dropRoot} {...dropHandlers} data-chat-root className="@container/chat relative flex h-full min-w-0 flex-1 flex-col">
       {/* Drags the window (its buttons stay buttons): there's no title bar on macOS. */}
-      <header data-tauri-drag-region="deep" className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:pr-11">
+      <header
+        data-tauri-drag-region="deep"
+        className="flex items-center gap-2 border-b px-4 py-2.5 text-sm group-data-[many]/pane:py-1.5 group-data-[many]/pane:pr-11"
+      >
         {project && (
           <>
             <button
               type="button"
               className="max-w-[40%] min-w-0 shrink truncate text-muted-foreground hover:text-foreground"
               title={project.name}
-              onClick={() => onOpenProject(project.id)}
+              onClick={() => onOpenProject(pane, project.id)}
             >
               {project.name}
             </button>
@@ -154,7 +171,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
         {agent?.report && !agent.report.mcpHttp && (
           <Badge
             variant="secondary"
-            className="hidden text-muted-foreground @md/chat:inline-flex"
+            className="hidden text-muted-foreground @md/chat:inline-flex group-data-[many]/pane:@md/chat:hidden"
             title={`${agent.label} can't connect to HTTP MCP servers, so this chat has no UI tools (forms, tables, charts). Chatting works as usual.`}
           >
             no UI tools
@@ -162,7 +179,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
         )}
         <FolderMenu path={session.cwd}>
           <span
-            className="ml-auto hidden min-w-0 shrink-[4] truncate font-mono text-xs text-muted-foreground @lg/chat:block"
+            className="ml-auto hidden min-w-0 shrink-[4] truncate font-mono text-xs text-muted-foreground @lg/chat:block group-data-[many]/pane:@lg/chat:hidden"
             title={roots.map((r) => compactPath(r)).join("\n")}
           >
             {compactPath(session.cwd)}
@@ -182,7 +199,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
                     : api.untrustChatMcpServer(session.sessionId, server)
             }
             onForgetRule={(rule, scope) => trustApi.forgetShellRule(session.sessionId, rule, scope)}
-            onManage={project ? () => onOpenProject(project.id) : undefined}
+            onManage={project ? () => onOpenProject(pane, project.id) : undefined}
           />
         )}
       </header>
@@ -211,7 +228,7 @@ export function Chat({ session, agents, project, onOpenProject, onLogin, pane }:
       <DropOverlay drag={drag} agent={agent?.label ?? "This agent"} report={agent?.report} />
     </div>
   );
-}
+});
 
 /**
  * The MCP servers trusted here (this chat's, its project's or quick chats', and all chats'), each with
@@ -487,7 +504,14 @@ function Transcript({ sessionId, running, onLogin }: { sessionId: string; runnin
             Show earlier messages
           </button>
         )}
-        <div ref={column} className="chat-column flex flex-col gap-3 py-6" role="log" aria-label="Conversation" aria-busy={running || !transcript}>
+        <div
+          ref={column}
+          data-copy-on-select
+          className="chat-column flex flex-col gap-3 py-6 group-data-[many]/pane:gap-2 group-data-[many]/pane:py-3"
+          role="log"
+          aria-label="Conversation"
+          aria-busy={running || !transcript}
+        >
           {transcript?.error ? (
             <TranscriptEntry
               entry={{ type: "error", message: transcript.error, loginAccount: null }}

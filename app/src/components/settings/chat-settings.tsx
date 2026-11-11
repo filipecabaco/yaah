@@ -14,6 +14,7 @@ import { api, type AgentGuide } from "@/lib/api";
 import { onTrustChanged, trustApi, type PermissionSettings } from "@/lib/trust-api";
 import { cn } from "@/lib/utils";
 import { cardKeyLabel, saveCardRule, setCardRules, useCardRules, type CardMode } from "@/lib/tool-cards";
+import { setCopyOnSelect, useCopyOnSelect } from "@/lib/clipboard";
 import { setGroupToolCalls } from "@/lib/tool-groups";
 
 const MODES: { id: CardMode; label: string }[] = [
@@ -234,6 +235,22 @@ function PermissionsSection() {
   );
 }
 
+/** "Copy on select": selected text in a chat or a terminal goes to the clipboard. */
+function CopySection() {
+  const on = useCopyOnSelect();
+  return (
+    <Section
+      title="Copying"
+      about="Selected text can go to the clipboard as soon as you select it, in chats and in terminals. Every message and code block also has a Copy button."
+    >
+      <div className="flex items-center gap-3">
+        <Switch id="copy-on-select" checked={on} onCheckedChange={setCopyOnSelect} />
+        <Label htmlFor="copy-on-select">Copy text when I select it</Label>
+      </div>
+    </Section>
+  );
+}
+
 export function ChatSettings() {
   const rules = useCardRules();
   const [defaults, setDefaults] = useState<Record<string, string>>({});
@@ -266,6 +283,7 @@ export function ChatSettings() {
   return (
     <Page>
       <AgentGuideSection />
+      <CopySection />
       <PermissionsSection />
       <Section
         title="Tool calls"

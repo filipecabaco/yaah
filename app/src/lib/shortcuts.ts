@@ -23,6 +23,7 @@ export type ShortcutId =
   | "closePane"
   | "balancePanes"
   | "newTerminal"
+  | "toggleTerminal"
   | "focusPane"
   | "toggleSidebar"
   | "sizeUp"
@@ -48,6 +49,7 @@ export const SHORTCUTS: Record<ShortcutId, Shortcut> = {
   // Ghostty's "equalize splits" keys; matched in shortcutFor, since it takes both modifiers.
   balancePanes: { label: "Balance the panes: every pane the same size", keys: isMac ? [CTRL, MOD, "="] : [MOD, CTRL, "="] },
   newTerminal: { label: "New terminal to the right, in this pane's folder", keys: [MOD, "T"], code: "KeyT" },
+  toggleTerminal: { label: "Switch between the agent and a terminal in its folder", keys: [MOD, "J"], code: "KeyJ" },
   focusPane: { label: "Move to the next pane over", keys: [MOD, ALT, "←↑↓→"] },
   toggleSidebar: { label: "Show or hide the sidebar", keys: [MOD, "B"], code: "KeyB" },
   // ⌘+ (⌘⇧=) and the keypad's + and − count too; matched in shortcutFor.
@@ -111,6 +113,7 @@ const IN_TERMINAL = new Set<ShortcutId>([
   "splitDown",
   "closePane",
   "newTerminal",
+  "toggleTerminal",
   "focusPane",
   "balancePanes",
   "sizeUp",

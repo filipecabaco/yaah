@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api, type SessionInfo } from "@/lib/api";
 import { isFocusedPane } from "@/components/chat-context";
+import { cn } from "@/lib/utils";
 import { onCycleMode } from "@/lib/app-events";
 import { isAuto, isUnrestricted, modeOption, modeText, nextSafeMode } from "@/lib/permission-modes";
 
@@ -25,11 +26,15 @@ export function ModeStatus({ session }: { session: SessionInfo }) {
       data-slot="mode-status"
       role="status"
       title={t.description}
-      className={unrestricted ? "mt-1 truncate text-xs font-medium text-destructive" : "mt-1 truncate text-xs text-muted-foreground"}
+      className={cn(
+        "mt-1 truncate text-xs",
+        // Several panes: the mode shows in the toolbar; this line stays only to warn that nothing is asked first.
+        unrestricted ? "font-medium text-destructive" : "text-muted-foreground group-data-[many]/pane:hidden",
+      )}
     >
       <span aria-hidden>⏵⏵ </span>
-      {unrestricted ? (isAuto(option.current) ? "auto: agent decides" : `${t.name.toLowerCase()}: not asking`) : `${t.name.toLowerCase()} on`} ({hint}
-      )
+      {unrestricted ? (isAuto(option.current) ? "auto: agent decides" : `${t.name.toLowerCase()}: not asking`) : `${t.name.toLowerCase()} on`}{" "}
+      <span className="group-data-[many]/pane:hidden">({hint})</span>
     </p>
   );
 }

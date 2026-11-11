@@ -10,6 +10,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { WebglAddon } from "@xterm/addon-webgl";
 import "@xterm/xterm/css/xterm.css";
 import type { EngineFactory, TerminalEngine, TerminalTheme } from "./engine";
+import { copyQuietly, isCopyOnSelect } from "@/lib/clipboard";
 import { isMac } from "@/lib/shortcuts";
 
 const toXterm = (t: TerminalTheme): ITheme => {
@@ -130,7 +131,20 @@ export const createXtermEngine: EngineFactory = (el, o) => {
     if (e.type === "keydown" && e.code === "KeyV" && (isMac ? e.metaKey : e.ctrlKey && e.shiftKey)) return false;
     return true;
   });
-  const subs = [term.onData((d) => o.interactive && o.onData(d)), term.onResize(({ cols, rows }) => o.onResize(cols, rows))];
+  // Copy on select: once the selection stops changing (the drag is over), as Ghostty and iTerm do.
+  let selecting: ReturnType<typeof setTimeout> | undefined;
+  const subs = [
+    term.onData((d) => o.interactive && o.onData(d)),
+    term.onResize(({ cols, rows }) => o.onResize(cols, rows)),
+    term.onSelectionChange(() => {
+      clearTimeout(selecting);
+      if (!isCopyOnSelect() || !term.hasSelection()) return;
+      selecting = setTimeout(() => {
+        const text = term.getSelection();
+        if (text.trim()) copyQuietly(text);
+      }, 250);
+    }),
+  ];
 
   // Writes collected over a frame go to xterm as one.
   let queue: Uint8Array[] = [];
@@ -203,6 +217,7 @@ export const createXtermEngine: EngineFactory = (el, o) => {
     },
     dispose() {
       disposed = true;
+      clearTimeout(selecting);
       if (frame) cancelAnimationFrame(frame);
       for (const f of dones) f();
       subs.forEach((s) => s.dispose());

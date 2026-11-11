@@ -14,6 +14,7 @@
 // Text is drawn block by block (lib/markdown-blocks.ts): each top-level block is
 // parsed once and kept, so a streamed reply re-parses only its last block, and
 // reopening a chat reuses blocks parsed before.
+import { COPY_CORNER_CODE, CopyButton } from "@/components/copy-button";
 import { Fragment, memo, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -88,18 +89,21 @@ function HighlightedFence({ text, className }: { text: string; className?: strin
   const lang = detectLanguage({ language: /(?:^|\s)language-(\S+)/.exec(className ?? "")?.[1], text });
   const tokens = useTokens(text, lang);
   return (
-    <pre data-highlight={tokens ? (lang ?? "") : undefined}>
-      <code className={className}>
-        {tokens
-          ? tokens.map((line, i) => (
-              <Fragment key={i}>
-                {i > 0 && "\n"}
-                <HighlightedLine tokens={line} />
-              </Fragment>
-            ))
-          : text}
-      </code>
-    </pre>
+    <div data-code-copy className="group/code relative">
+      <pre data-highlight={tokens ? (lang ?? "") : undefined}>
+        <code className={className}>
+          {tokens
+            ? tokens.map((line, i) => (
+                <Fragment key={i}>
+                  {i > 0 && "\n"}
+                  <HighlightedLine tokens={line} />
+                </Fragment>
+              ))
+            : text}
+        </code>
+      </pre>
+      <CopyButton text={text.replace(/\n$/, "")} label="Copy code" className={COPY_CORNER_CODE} />
+    </div>
   );
 }
 

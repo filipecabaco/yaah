@@ -92,7 +92,7 @@ export function PaneGrid({
               </Hint>
             )}
             {/* Which pane the keyboard and the sidebar act on, once there are several. */}
-            {many && focused && <div aria-hidden className="pointer-events-none absolute inset-0 z-20 ring-2 ring-ring/45 ring-inset" />}
+            {many && focused && <div aria-hidden className="pointer-events-none absolute inset-0 z-20 ring-1 ring-ring/50 ring-inset" />}
           </section>
         );
       })}

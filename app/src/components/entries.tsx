@@ -35,6 +35,7 @@ import { Markdown, PlainMarkdown } from "@/components/markdown";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { COPY_CORNER, CopyButton } from "@/components/copy-button";
 import { CopyMenu, type MenuAction } from "@/components/menus";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
 import { PatchView, TextDiff } from "@/components/ui-render";
@@ -124,14 +125,16 @@ function UserMessage({ entry }: { entry: Of<"user"> }) {
           {entry.references?.length ? (
             // `github#o/r#9` and the like as chips linking to the item (components/references.tsx);
             // that path draws the text as written.
-            <div className="max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">
+            <div className="group/copy relative max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere] whitespace-pre-wrap">
               <ReferenceText text={entry.text} references={entry.references} />
+              <CopyButton text={entry.text} label="Copy message" className={COPY_CORNER} />
             </div>
           ) : (
             // What the user wrote, as plain CommonMark/GFM (never MDX: their text is not rewritten);
             // `.user-message` keeps their single line breaks.
-            <div className="user-message max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere]">
+            <div className="user-message group/copy relative max-w-full rounded-lg bg-muted px-3 py-2 [overflow-wrap:anywhere]">
               <PlainMarkdown>{entry.text}</PlainMarkdown>
+              <CopyButton text={entry.text} label="Copy message" className={COPY_CORNER} />
             </div>
           )}
         </CopyMenu>
@@ -174,9 +177,10 @@ function AgentMessage({ entry }: { entry: Of<"agent"> }) {
       >
         <div
           data-align="start"
-          className="agent-reply w-fit max-w-[min(140ch,100%)] rounded-lg bg-muted/50 px-4 py-3 text-sm leading-relaxed [overflow-wrap:anywhere]"
+          className="agent-reply group/copy relative w-fit max-w-[min(140ch,100%)] rounded-lg bg-muted/50 px-4 py-3 text-sm leading-relaxed [overflow-wrap:anywhere]"
         >
           <Markdown>{entry.text}</Markdown>
+          <CopyButton text={entry.text} label="Copy reply" className={COPY_CORNER} />
         </div>
       </CopyMenu>
       <ImageStrip sessionId={chat?.sessionId} images={images} alt="Image from the agent" className="mt-2" />
