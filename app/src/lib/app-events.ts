@@ -27,6 +27,18 @@ export function onOpenComponent(cb: (name: string) => void): () => void {
   return () => window.removeEventListener(OPEN_COMPONENT, listener);
 }
 
+const OPEN_MCP = "yaah:open-mcp";
+
+/** Ask the app to open the MCP server manager (`/mcp`). */
+export function openMcpManager() {
+  window.dispatchEvent(new Event(OPEN_MCP));
+}
+
+export function onOpenMcpManager(cb: () => void): () => void {
+  window.addEventListener(OPEN_MCP, cb);
+  return () => window.removeEventListener(OPEN_MCP, cb);
+}
+
 const SWITCH_AGENT = "yaah:switch-agent";
 
 /** Ask the app to show the agent picker for a chat's next message (App opens the ⌘K palette on it). */

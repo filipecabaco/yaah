@@ -58,7 +58,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { api, type AgentProfile, type Entry, type FileMatch, type Project, type SessionInfo, type SlashCommand } from "@/lib/api";
 import { openInTerminalApp } from "@/lib/terminal-api";
 import { SCOPE_WORDS, trustApi, useTrustView, type TrustScope, type TrustView } from "@/lib/trust-api";
-import { onOpenAddRepos, openAddRepos, openAgentSwitch } from "@/lib/app-events";
+import { onOpenAddRepos, openAddRepos, openAgentSwitch, openMcpManager } from "@/lib/app-events";
 import { baseName, compactPath, elapsedText, plural, startingText } from "@/lib/format";
 import { errorMessage } from "@/lib/narrow";
 import type { Starting } from "@/hooks/use-yaah";
@@ -648,6 +648,15 @@ const localCommands = (session: SessionInfo, pane?: string): (Suggestion & { nam
     detail: "Switch the agent for the next message",
     insert: "",
     local: () => openAgentSwitch(session.sessionId),
+  },
+  {
+    id: "yaah:mcp",
+    name: "mcp",
+    label: "/mcp",
+    detail: "Manage MCP servers: connect, log in, turn on or off",
+    insert: "",
+    icon: <Plug />,
+    local: openMcpManager,
   },
   {
     id: "yaah:repos",

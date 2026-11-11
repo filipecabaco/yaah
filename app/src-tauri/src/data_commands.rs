@@ -10,7 +10,7 @@ use crate::session::{ChatTarget, Hub};
 use crate::ui_libraries::{LibraryExport, LibraryInfo, LibraryPreview, LibrarySource, LibraryUpdate, Manifest};
 use crate::ui_library::{Component, Library, Prepared};
 use crate::work_items::{self, Started, WorkItem, WorkQueue};
-use crate::{agents, integrations, mcp_servers, path_env, providers, repos, settings, skills, sources};
+use crate::{agents, integrations, mcp_oauth, mcp_servers, path_env, providers, repos, settings, skills, sources};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
@@ -449,6 +449,67 @@ pub fn remove_mcp_server(name: String) -> Result<(), String> {
 #[tauri::command]
 pub fn set_mcp_server_enabled(name: String, enabled: bool) -> Result<mcp_servers::ServerInfo, String> {
     mcp_servers::Store::user().set_enabled(&name, enabled).map(mcp_servers::info_now)
+}
+
+/// One server as `/mcp` shows it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStatus {
+    pub name: String,
+    pub transport: mcp_servers::Transport,
+    /// `connected`, `needs-login`, `failed` or `disabled`.
+    pub state: &'static str,
+    pub tools: Vec<mcp_servers::Tool>,
+    pub detail: Option<String>,
+    /// Whether yaah holds a login for it (HTTP servers only).
+    pub logged_in: bool,
+    pub enabled: bool,
+}
+
+/// Connect to every saved server (in parallel, each within the test's time limit) and say how it went.
+#[tauri::command]
+pub async fn mcp_status() -> Vec<McpStatus> {
+    mcp_oauth::refresh_due().await;
+    let mut set = tokio::task::JoinSet::new();
+    for (i, server) in mcp_servers::Store::user().list().into_iter().enumerate() {
+        set.spawn(async move {
+            let logged_in = server.transport == mcp_servers::Transport::Http && mcp_oauth::logged_in(&server.name, &server.url);
+            let (state, tools, detail) = if server.enabled {
+                match mcp_servers::test(&server).await {
+                    Ok(r) => ("connected", r.tools, None),
+                    Err(e) if e.contains("HTTP 401") && server.transport == mcp_servers::Transport::Http => ("needs-login", vec![], Some(e)),
+                    Err(e) => ("failed", vec![], Some(e)),
+                }
+            } else {
+                ("disabled", vec![], None)
+            };
+            (i, McpStatus { name: server.name, transport: server.transport, state, tools, detail, logged_in, enabled: server.enabled })
+        });
+    }
+    let mut all = vec![];
+    while let Some(Ok(one)) = set.join_next().await {
+        all.push(one);
+    }
+    all.sort_by_key(|(i, _)| *i);
+    all.into_iter().map(|(_, s)| s).collect()
+}
+
+/// Log in to an HTTP MCP server: the browser opens on its authorization page; resolves when it is done.
+#[tauri::command]
+pub async fn mcp_login(app: AppHandle, name: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let server = mcp_servers::Store::user().list().into_iter().find(|s| s.name == name).ok_or("That server isn't saved any more.")?;
+    if server.transport != mcp_servers::Transport::Http {
+        return Err("Only HTTP servers can log in.".into());
+    }
+    mcp_oauth::login(&server.name, &server.url, |url| app.opener().open_url(url, None::<&str>).map_err(|e| format!("couldn't open the browser: {e}")))
+        .await
+}
+
+/// Forget the login of an HTTP MCP server.
+#[tauri::command]
+pub fn mcp_logout(name: String) -> Result<(), String> {
+    mcp_oauth::logout(&name)
 }
 
 /// Connect to a (possibly unsaved) server and list its tools.

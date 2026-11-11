@@ -1084,6 +1084,17 @@ export type McpTestReport = {
   protocolVersion: string | null;
   tools: { name: string; description: string | null }[];
 };
+/** One saved server as `/mcp` shows it, after connecting to it. */
+export type McpStatus = {
+  name: string;
+  transport: McpTransport;
+  state: "connected" | "needs-login" | "failed" | "disabled";
+  tools: { name: string; description: string | null }[];
+  detail: string | null;
+  /** yaah holds a login for it (HTTP servers). */
+  loggedIn: boolean;
+  enabled: boolean;
+};
 /** A server found in another tool's config. Carries no env or header values. */
 export type McpImportCandidate = {
   source: string;
@@ -1107,6 +1118,11 @@ export const mcpApi = {
   setEnabled: (name: string, enabled: boolean) => invoke<McpServerInfo>("set_mcp_server_enabled", { name, enabled }),
   /** Connect (20s limit), initialize, list tools. Works on unsaved drafts. */
   test: (draft: McpServerDraft) => invoke<McpTestReport>("test_mcp_server", { draft }),
+  /** Connects to every saved server and says how it went (a few seconds). */
+  status: () => invoke<McpStatus[]>("mcp_status"),
+  /** Opens the browser on the server's login page; resolves when the login is done (or fails, or times out after 3 minutes). */
+  login: (name: string) => invoke<void>("mcp_login", { name }),
+  logout: (name: string) => invoke<void>("mcp_logout", { name }),
   importCandidates: () => invoke<McpImportCandidate[]>("mcp_import_candidates"),
   import: (picks: { source: string; original: string }[]) => invoke<McpServerInfo[]>("import_mcp_servers", { picks }),
 };

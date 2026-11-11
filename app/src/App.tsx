@@ -31,7 +31,7 @@ import { chatPane, useSidePanes } from "@/hooks/use-side-panes";
 import { contentKey, useYaah, type Selection } from "@/hooks/use-yaah";
 import { TranscriptsContext } from "@/hooks/use-transcript";
 import { api, canChat, mayListSessions, type AgentProfile, type SessionInfo } from "@/lib/api";
-import { onOpenAgentSwitch, onOpenComponent, onOpenSettings } from "@/lib/app-events";
+import { onOpenAgentSwitch, onOpenComponent, onOpenMcpManager, onOpenSettings } from "@/lib/app-events";
 import { baseName } from "@/lib/format";
 import { formatKeys, SHORTCUTS } from "@/lib/shortcuts";
 import { stepFontSize } from "@/lib/fonts";
@@ -40,6 +40,7 @@ import { preloadable, preloadAll, whenIdle } from "@/lib/preload";
 // Not needed at startup, so not in the main chunk: fetched once the app is idle.
 const ComponentsView = preloadable(() => import("@/components/components-view").then((m) => m.ComponentsView));
 const ProjectView = preloadable(() => import("@/components/project-view").then((m) => m.ProjectView));
+const McpManager = preloadable(() => import("@/components/mcp-manager").then((m) => m.McpManager));
 const LoginDialog = preloadable(() => import("@/components/login-dialog").then((m) => m.LoginDialog));
 const NewProjectDialog = preloadable(() => import("@/components/new-project-dialog").then((m) => m.NewProjectDialog));
 const RepoPicker = preloadable(() => import("@/components/repo-picker").then((m) => m.RepoPicker));
@@ -65,6 +66,7 @@ export default function App() {
   const [addingRepos, setAddingRepos] = useState(false);
   const [palette, setPalette] = useState<PalettePage | null>(null);
   const [help, setHelp] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
   // Project whose delete confirmation the sidebar menu asked for.
   const [askDelete, setAskDelete] = useState<string | null>(null);
   // Project whose name the sidebar menu's Rename… asked to edit.
@@ -195,6 +197,8 @@ export default function App() {
   useEffect(() => installCopyOnSelect(), []);
   // Cards in a chat (e.g. MCP notices) can open Settings on a tab.
   useEffect(() => onOpenSettings((tab) => setSetup({ kind: "settings", tab: tab as SettingsTab })), []);
+  // `/mcp` opens the MCP server manager.
+  useEffect(() => onOpenMcpManager(() => setMcpOpen(true)), []);
   // A chat's agent badge and its /agent command open the agent picker for that chat.
   useEffect(() => onOpenAgentSwitch((sessionId) => setPalette({ kind: "chatAgent", sessionId })), []);
   // A rendered UI's menu can open its component in the library.
@@ -273,6 +277,7 @@ export default function App() {
     [],
   );
   const loginWanted = useOnceOn(loginFor != null);
+  const mcpWanted = useOnceOn(mcpOpen);
   const newProjectWanted = useOnceOn(creatingProject != null);
   const reposWanted = useOnceOn(addingRepos);
 
@@ -586,6 +591,7 @@ export default function App() {
                     />
                   )}
                   {login}
+                  {mcpWanted && <McpManager open={mcpOpen} onClose={() => setMcpOpen(false)} />}
                 </Suspense>
                 <AgentSetupDialog
                   target={setup}
