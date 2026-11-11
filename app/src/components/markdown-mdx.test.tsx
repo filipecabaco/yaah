@@ -15,6 +15,13 @@ const html = (el: React.ReactElement) => {
   const { container, unmount } = render(el);
   // A fenced block's Copy button is drawn around its `pre`; these tests are about the text's own markup.
   container.querySelectorAll("[data-code-copy]").forEach((w) => w.replaceWith(...Array.from(w.children).filter((c) => c.tagName === "PRE")));
+  // A table sits in its own scrolling box with a resize handle on each header cell.
+  container.querySelectorAll("[data-col-resize]").forEach((h) => h.remove());
+  container.querySelectorAll("[data-md-table]").forEach((w) => w.replaceWith(...Array.from(w.children)));
+  container.querySelectorAll("table[data-fixed], table[style]").forEach((t) => {
+    t.removeAttribute("style");
+    t.removeAttribute("data-fixed");
+  });
   // React ids (Radix tabs) differ from one render to the next.
   const out = container.innerHTML.replace(/_r_[a-z0-9]+_/g, "_r_");
   unmount();

@@ -416,15 +416,56 @@
   padding-left: 0.75rem;
   color: var(--muted-foreground);
 }
-.markdown table {
-  border-collapse: collapse;
-  display: block;
+/* Tables sit in their own box (`.md-table`, components/markdown.tsx) that scrolls sideways, so a wide
+   table keeps readable columns instead of squeezing them. Columns size to their text (a cell wraps
+   at about 48 characters) until the user drags a header edge; then they are fixed (`data-fixed`). */
+.markdown .md-table {
   overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+.markdown table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.925em;
+  line-height: 1.45;
+  /* The reply bubble breaks anywhere to keep long strings inside it; a column must not. */
+  overflow-wrap: normal;
+  word-break: normal;
 }
 .markdown th,
 .markdown td {
-  border: 1px solid var(--border);
-  padding: 0.25rem 0.5rem;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  vertical-align: top;
+  border-top: 1px solid var(--border);
+}
+.markdown thead th {
+  position: relative;
+  border-top: 0;
+  background: color-mix(in oklab, var(--muted) 70%, transparent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.markdown td {
+  min-width: 8ch;
+  max-width: 48ch;
+  overflow-wrap: break-word;
+}
+.markdown tbody tr:nth-child(even) td {
+  background: color-mix(in oklab, var(--muted) 30%, transparent);
+}
+.markdown table[data-fixed] {
+  table-layout: fixed;
+}
+.markdown table[data-fixed] td {
+  max-width: none;
+}
+.markdown table[data-fixed] thead th {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* The agent's reply bubble (entries.tsx) is long-form reading: more room between paragraphs and
    list items, and code blocks set on the page colour so they stand out from the muted fill. */
