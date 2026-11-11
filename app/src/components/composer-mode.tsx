@@ -10,34 +10,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { api, type SessionInfo } from "@/lib/api";
 import { isFocusedPane } from "@/components/chat-context";
-import { cn } from "@/lib/utils";
 import { onCycleMode } from "@/lib/app-events";
 import { isAuto, isUnrestricted, modeOption, modeText, nextSafeMode } from "@/lib/permission-modes";
-
-/** The always-visible line under the message box, like the CLI's status line; it also says how to cycle. */
-export function ModeStatus({ session }: { session: SessionInfo }) {
-  const option = modeOption(session);
-  if (!option) return null;
-  const t = modeText(option, option.current);
-  const unrestricted = isUnrestricted(option.current);
-  const hint = session.running ? "change it when the turn ends" : "shift+tab to cycle";
-  return (
-    <p
-      data-slot="mode-status"
-      role="status"
-      title={t.description}
-      className={cn(
-        "mt-1 truncate text-xs",
-        // Several panes: the mode shows in the toolbar; this line stays only to warn that nothing is asked first.
-        unrestricted ? "font-medium text-destructive" : "text-muted-foreground group-data-[many]/pane:hidden",
-      )}
-    >
-      <span aria-hidden>⏵⏵ </span>
-      {unrestricted ? (isAuto(option.current) ? "auto: agent decides" : `${t.name.toLowerCase()}: not asking`) : `${t.name.toLowerCase()} on`}{" "}
-      <span className="group-data-[many]/pane:hidden">({hint})</span>
-    </p>
-  );
-}
 
 export function ComposerMode({ session, pane, onError }: { session: SessionInfo; pane?: string; onError: (e: unknown) => void }) {
   const option = modeOption(session);
@@ -81,7 +55,9 @@ export function ComposerMode({ session, pane, onError }: { session: SessionInfo;
     else void apply(value);
   }
 
-  const title = busy ? `Permissions: ${current.name}. Wait for the turn to end to change it.` : `${current.description}. Applies to this chat only.`;
+  const title = busy
+    ? `Permissions: ${current.name}. Wait for the turn to end to change it.`
+    : `${current.description}. Applies to this chat only. Shift+Tab cycles it.`;
   return (
     <>
       <Popover open={open && !busy} onOpenChange={setOpen}>

@@ -79,7 +79,8 @@ describe("the composer's permission mode", () => {
     expect(badge).toHaveAttribute("data-unrestricted");
     expect(badge).toHaveTextContent("Agent decides:");
     await waitFor(() => expect(sets()).toEqual([{ sessionId, configId: "mode", value: "auto" }]));
-    expect(document.querySelector('[data-slot="mode-status"]')?.textContent).toContain("auto: agent decides");
+    // The toolbar says it once; there is no second line under the message box.
+    expect(document.querySelector('[data-slot="mode-status"]')).toBeNull();
   });
 
   it("flags only the modes that stop asking", () => {
@@ -89,11 +90,12 @@ describe("the composer's permission mode", () => {
 });
 
 describe("Shift+Tab and the mode label", () => {
-  const label = () => document.querySelector('[data-slot="mode-status"]')?.textContent;
+  const label = () => document.querySelector('[data-config="mode"]')?.getAttribute("aria-label");
 
   it("always shows the current mode, like the CLI's status line", async () => {
     await openChat();
-    await waitFor(() => expect(label()).toBe("⏵⏵ ask first on (shift+tab to cycle)"));
+    await waitFor(() => expect(label()).toBe("Permissions: Ask first"));
+    expect(document.querySelector('[data-config="mode"]')).toHaveAttribute("title", expect.stringContaining("Shift+Tab cycles it"));
   });
 
   it("cycles the safe modes and auto in the agent's order and never lands on bypass", async () => {
@@ -105,11 +107,10 @@ describe("Shift+Tab and the mode label", () => {
       await waitFor(() => expect(sets()).toHaveLength(i + 1));
       await waitFor(() => expect(screen.getByRole("combobox", { name: "Message" })).toHaveFocus());
       seen.push((sets()[i] as { value: string }).value);
-      await waitFor(() => expect(label()).toContain("(shift+tab"));
     }
     expect(seen).toEqual(["acceptEdits", "auto", "plan", "default", "acceptEdits"]);
     expect(sets().every((s) => (s as { sessionId: string }).sessionId === sessionId)).toBe(true);
-    await waitFor(() => expect(label()).toBe("⏵⏵ accept edits on (shift+tab to cycle)"));
+    await waitFor(() => expect(label()).toBe("Permissions: Accept edits"));
   });
 
   it("describes auto, and keeps an unknown mode's own name", () => {
