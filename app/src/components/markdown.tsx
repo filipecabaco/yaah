@@ -14,8 +14,10 @@
 // Text is drawn block by block (lib/markdown-blocks.ts): each top-level block is
 // parsed once and kept, so a streamed reply re-parses only its last block, and
 // reopening a chat reuses blocks parsed before.
+import { ResizeHandle } from "@/components/column-resize";
+import { useColumnResize, type ColumnResize } from "@/hooks/use-column-resize";
 import { COPY_CORNER_CODE, CopyButton } from "@/components/copy-button";
-import { Fragment, memo, useMemo, useState, type ComponentProps, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ImageOff } from "lucide-react";
@@ -115,9 +117,44 @@ function Pre({ children }: ComponentProps<"pre">) {
   return <HighlightedFence text={text} className={code?.props?.className} />;
 }
 
+// Tables: scroll sideways inside their own box instead of squeezing their columns, and the user can
+// drag a column's edge (components/column-resize.tsx). The box and the handles are `data-md-table` /
+// `data-col-resize`, so tests can read the table as plain Markdown draws it.
+const TableResize = createContext<ColumnResize | null>(null);
+
+function MdTable({ children }: ComponentProps<"table">) {
+  const resize = useColumnResize();
+  return (
+    <div data-md-table className="md-table">
+      <TableResize.Provider value={resize}>
+        <table data-fixed={resize.widths ? "" : undefined} style={resize.tableStyle}>
+          {children}
+        </table>
+      </TableResize.Provider>
+    </div>
+  );
+}
+
+function MdTh({ children, style, node: _node, ...props }: ComponentProps<"th"> & { node?: unknown }) {
+  const resize = useContext(TableResize);
+  const cell = useRef<HTMLTableCellElement>(null);
+  const [index, setIndex] = useState(-1);
+  // Which column this is: read from the DOM once the row exists (a header cell knows no index of its own).
+  useLayoutEffect(() => setIndex(cell.current?.cellIndex ?? -1), []);
+  const width = resize && index >= 0 ? resize.widthOf(index) : undefined;
+  return (
+    <th ref={cell} {...props} style={{ ...style, ...(width ? { width } : null) }}>
+      {children}
+      {resize && index >= 0 && <ResizeHandle resize={resize} index={index} label={`column ${index + 1}`} />}
+    </th>
+  );
+}
+
 const components: Components = {
   a: Link,
   pre: Pre,
+  table: MdTable,
+  th: MdTh,
   img: ({ src, alt }) => <SafeImage src={src} alt={alt} />,
   h1: heading(1),
   h2: heading(2),

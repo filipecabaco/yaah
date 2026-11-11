@@ -12,6 +12,8 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { ArrowDown, ArrowUp, ChevronsUpDown, Search } from "lucide-react";
+import { ResizeHandle } from "@/components/column-resize";
+import { useColumnResize } from "@/hooks/use-column-resize";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -58,6 +60,7 @@ export default function UiDataTable({
   const [sorting, setSorting] = useState<SortingState>([]);
   const [filter, setFilter] = useFind(find);
   const { expanded } = useUiView();
+  const resize = useColumnResize();
 
   // Numbers line up on the right unless the column says otherwise (query results don't).
   const right = useMemo(
@@ -125,18 +128,19 @@ export default function UiDataTable({
         </div>
       )}
       <div {...growAttr(expanded, false)} className={cn("overflow-x-auto rounded-md border", growClass(expanded, "", false))}>
-        <Table>
+        <Table style={resize.tableStyle}>
           <TableHeader>
             {table.getHeaderGroups().map((g) => (
               <TableRow key={g.id}>
-                {g.headers.map((h) => {
+                {g.headers.map((h, index) => {
                   const end = right.has(h.column.id);
                   const sorted = h.column.getIsSorted();
                   const Icon = sorted === "asc" ? ArrowUp : sorted === "desc" ? ArrowDown : ChevronsUpDown;
                   return (
                     <TableHead
                       key={h.id}
-                      className={cn(end && "text-right")}
+                      style={resize.widthOf(index) ? { width: resize.widthOf(index) } : undefined}
+                      className={cn("relative", end && "text-right", resize.widths && "overflow-hidden text-ellipsis")}
                       aria-sort={sorted === "asc" ? "ascending" : sorted === "desc" ? "descending" : "none"}
                     >
                       <button
@@ -147,6 +151,7 @@ export default function UiDataTable({
                         {flexRender(h.column.columnDef.header, h.getContext())}
                         <Icon aria-hidden className={cn("size-3", !sorted && "opacity-40")} />
                       </button>
+                      <ResizeHandle resize={resize} index={index} label={`${h.column.columnDef.header as string} column`} />
                     </TableHead>
                   );
                 })}
@@ -164,7 +169,11 @@ export default function UiDataTable({
               pageRows.map((r) => (
                 <TableRow key={r.id}>
                   {r.getVisibleCells().map((c) => (
-                    <TableCell key={c.id} className={cn(right.has(c.column.id) && "text-right tabular-nums")}>
+                    <TableCell
+                      key={c.id}
+                      className={cn(right.has(c.column.id) && "text-right tabular-nums", resize.widths && "overflow-hidden text-ellipsis")}
+                      title={resize.widths ? show(c.getValue()) : undefined}
+                    >
                       {flexRender(c.column.columnDef.cell, c.getContext())}
                     </TableCell>
                   ))}
