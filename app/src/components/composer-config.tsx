@@ -120,7 +120,9 @@ function ConfigPicker({
             {label}
           </span>
           {role === "model" ? <Cpu aria-hidden className="@xl:hidden" /> : <Gauge aria-hidden className="@xl:hidden" />}
-          <span className="truncate text-foreground @max-md:hidden">{saving != null ? (option.choices.find((c) => c.value === saving)?.name ?? saving) : name}</span>
+          <span className="truncate text-foreground @max-md:hidden">
+            {saving != null ? (option.choices.find((c) => c.value === saving)?.name ?? saving) : name}
+          </span>
           <ChevronDown aria-hidden className="hidden @sm:block" />
         </Button>
       </PopoverTrigger>
