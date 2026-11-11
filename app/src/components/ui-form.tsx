@@ -374,7 +374,7 @@ export function UiChoice({
 
   return (
     <Field label={label} missing={f.missing} byAgent={f.byAgent} flash={f.flash}>
-      <div ref={group} role={multiple ? "group" : "radiogroup"} aria-label={label} onKeyDown={onKeyDown} className="grid gap-2 sm:grid-cols-2">
+      <div ref={group} role={multiple ? "group" : "radiogroup"} aria-label={label} onKeyDown={onKeyDown} className="flex flex-col gap-1.5">
         {options.map((o) => {
           const on = picked.has(o.value);
           const isRight = graded && right.has(o.value);
@@ -390,7 +390,7 @@ export function UiChoice({
               disabled={f.locked}
               onClick={() => toggle(o.value)}
               className={cn(
-                "flex items-start gap-2.5 rounded-md border p-2.5 text-left text-sm transition-colors enabled:hover:bg-muted disabled:cursor-default",
+                "flex items-start gap-2.5 rounded-md border px-3 py-2 text-left text-sm transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 enabled:hover:bg-muted disabled:cursor-default",
                 on && "border-primary bg-primary/5",
                 isRight && "border-green-600 bg-green-500/10",
                 isWrong && "border-destructive bg-destructive/10",
