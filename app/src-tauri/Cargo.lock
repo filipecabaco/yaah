@@ -5967,7 +5967,7 @@ dependencies = [
 
 [[package]]
 name = "yaah"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "base64 0.22.1",
  "fontdb",
