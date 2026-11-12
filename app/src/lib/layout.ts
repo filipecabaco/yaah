@@ -16,7 +16,8 @@ export type Selection =
   | { kind: "chat"; id: string }
   | { kind: "components" }
   | { kind: "picker" }
-  | { kind: "terminal"; cwd?: string; id?: string; projectId?: string }
+  /** `chatId`: the chat this terminal was switched to from with ⌘J, in the same pane; it stands in for that chat. */
+  | { kind: "terminal"; cwd?: string; id?: string; projectId?: string; chatId?: string }
   | { kind: "diff"; cwd?: string; mode?: DiffMode; base?: string; projectId?: string }
   | { kind: "ui"; chat: string; index: number }
   | null;

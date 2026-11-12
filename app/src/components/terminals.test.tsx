@@ -132,6 +132,40 @@ describe("terminal panes", () => {
   });
 });
 
+describe("⌘J: the agent and its terminal in one pane", () => {
+  const sidebar = () => screen.getByRole("complementary", { name: "Sidebar" });
+  const chatRow = () => within(sidebar()).getByRole("button", { name: /^New chat/ });
+
+  it("switches the pane, keeps the chat current in the sidebar, and comes back the same three ways", async () => {
+    const { user } = await withChat();
+    press("j", "KeyJ");
+
+    // The same pane, now a terminal: not a new one in Open panes, and the chat stays the open one.
+    await waitFor(() => expect(terminalPanes()).toHaveLength(1));
+    expect(paneEls()).toHaveLength(1);
+    expect(within(sidebar()).queryByRole("region", { name: "Open panes" })).toBeNull();
+    expect(chatRow()).toHaveAttribute("aria-current", "true");
+
+    // Back with the header's button.
+    await user.click(within(terminalPanes()[0]).getByRole("button", { name: /^New chat/ }));
+    await screen.findByRole("combobox", { name: "Message" });
+    expect(terminalPanes()).toHaveLength(0);
+
+    // Again, and back from the terminal with ⌘J.
+    press("j", "KeyJ");
+    await waitFor(() => expect(terminalPanes()).toHaveLength(1));
+    pressInTerminal("j", "KeyJ");
+    await screen.findByRole("combobox", { name: "Message" });
+
+    // Again, and back by picking the chat in the sidebar.
+    press("j", "KeyJ");
+    await waitFor(() => expect(terminalPanes()).toHaveLength(1));
+    await user.click(chatRow());
+    await screen.findByRole("combobox", { name: "Message" });
+    expect(paneEls()).toHaveLength(1);
+  });
+});
+
 describe("a terminal opened from a project", () => {
   const sidebar = () => screen.getByRole("complementary", { name: "Sidebar" });
   const projectList = (name: string) => within(sidebar()).queryByRole("list", { name: `Open panes in ${name}` });
