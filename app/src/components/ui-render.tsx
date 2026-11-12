@@ -4,7 +4,7 @@
 // primitives. It runs no agent code; everything here is data mapped onto
 // shadcn, and every prop is read from `unknown` through lib/narrow.
 import { Component, Suspense, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { ArrowDownRight, ArrowRight, ArrowUpRight, ChevronRight, ExternalLink, RotateCw } from "lucide-react";
+import { ArrowDownRight, ArrowRight, ArrowUpRight, ChevronRight, ExternalLink, Globe, RotateCw } from "lucide-react";
 import { CodeBlock } from "@/components/code-block";
 import { Markdown, SafeImage } from "@/components/markdown";
 import { draftIntoComposer, useChat } from "@/components/chat-context";
@@ -674,10 +674,20 @@ const originOf = (src: string) => (isWebUrl(src) ? new URL(src).origin : src);
  * a secret in the URL, and framing it on render would send it with no one
  * looking. The click covers this exact URL for as long as this entry is on
  * screen; a new `src` from the agent asks again.
+ *
+ * yaah's own previews load at once but only from their folder: no CDN
+ * scripts, fonts or images, since any web load could carry what the user typed
+ * into the page off the machine. "Allow web loads" re-serves this one page
+ * under a URL only the app knows (see `allow_web` in ui_mcp.rs); a new `src`
+ * from the agent is local-only again.
  */
 function BrowserFrame({ src, title, height }: { src: string; title?: string; height: number }) {
+  const session = useChat()?.sessionId;
   const [reloads, setReloads] = useState(0);
   const [allowed, setAllowed] = useState<string | null>(null);
+  const [web, setWeb] = useState<{ for: string; url: string } | null>(null);
+  const [webError, setWebError] = useState<string | null>(null);
+  const webUrl = web?.for === src ? web.url : null;
   // A frame swallows the wheel (its page scrolls, or not, and the transcript never hears of it), so
   // it is inert until clicked and inert again once the pointer leaves.
   const [engaged, setEngaged] = useState(false);
@@ -699,6 +709,29 @@ function BrowserFrame({ src, title, height }: { src: string; title?: string; hei
         >
           {title ? `${title} — ${shown}` : shown}
         </span>
+        {preview && session && (
+          <Button
+            variant="ghost"
+            size="xs"
+            className="text-muted-foreground"
+            title={
+              webUrl
+                ? "This page may load scripts, styles, fonts and images from the web"
+                : "Only this page's own files load. Allow it to load scripts, styles, fonts and images from the web (CDNs); anything typed into it could then be sent off this machine."
+            }
+            disabled={!!webUrl}
+            onClick={() => {
+              setWebError(null);
+              api.allowPreviewWeb(session, src).then(
+                (url) => setWeb({ for: src, url }),
+                (e: unknown) => setWebError(String(e)),
+              );
+            }}
+          >
+            <Globe />
+            {webUrl ? "Web loads on" : "Allow web loads"}
+          </Button>
+        )}
         <Button variant="ghost" size="icon-xs" title="Reload" aria-label="Reload" disabled={!loaded} onClick={() => setReloads((n) => n + 1)}>
           <RotateCw />
         </Button>
@@ -711,9 +744,10 @@ function BrowserFrame({ src, title, height }: { src: string; title?: string; hei
           {!engaged && (
             <div data-slot="frame-shield" className="absolute inset-0 z-10" title="Click to interact" onPointerDown={() => setEngaged(true)} />
           )}
+          {webError && <p className="border-b px-3 py-1 text-xs text-destructive">{webError}</p>}
           <iframe
             key={reloads}
-            src={src}
+            src={webUrl ?? src}
             title={title ?? "Page preview"}
             style={{ height }}
             className="block w-full bg-white"

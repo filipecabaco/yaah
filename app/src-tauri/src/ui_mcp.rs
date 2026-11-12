@@ -149,35 +149,63 @@ pub struct UiHost {
 
 /// One chat's preview origin: a listener on 127.0.0.1 of its own, serving the
 /// folders of the pages that chat previewed (random id → folder).
+///
+/// The chat frames a second listener (`port`), which serves only a wrapper
+/// page that frames the real one from `content_port`. The wrapper's policy lets
+/// its frame go nowhere but `content_port`, so a page can't navigate itself to
+/// `https://elsewhere/?typed=…` (no policy of the page's own can stop that, and
+/// the app's must allow `https:` frames for pages the user loads). It is a
+/// different origin from the page, so the page can't script it either.
 struct PreviewSite {
+    /// The wrapper's listener: the URL the chat frames.
     port: u16,
-    server: Arc<Server>,
-    folders: Arc<Mutex<HashMap<String, PathBuf>>>,
+    servers: [Arc<Server>; 2],
+    folders: Arc<Mutex<HashMap<String, Served>>>,
+}
+
+/// A folder a preview id serves, and whether the user let that id load from the web.
+#[derive(Clone)]
+struct Served {
+    dir: PathBuf,
+    /// Set only by the user (`UiHost::allow_web`), on an id of its own the agent never sees.
+    web: bool,
 }
 
 impl PreviewSite {
     fn open() -> Result<Self, String> {
-        let server = Arc::new(Server::http("127.0.0.1:0").map_err(|e| format!("preview server: {e}"))?);
-        let port = server.server_addr().to_ip().map(|a| a.port()).ok_or("preview server has no TCP port")?;
-        let folders: Arc<Mutex<HashMap<String, PathBuf>>> = Arc::default();
-        let (srv, dirs) = (server.clone(), folders.clone());
-        std::thread::Builder::new()
-            .name("yaah-ui-preview".into())
-            .spawn(move || {
-                // Ends when the site is closed (`unblock`); the listener goes with the last handle.
-                for req in srv.incoming_requests() {
-                    let dirs = dirs.clone();
-                    std::thread::spawn(move || serve_preview(&dirs, req));
-                }
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(Self { port, server, folders })
+        let listen = || -> Result<(Arc<Server>, u16), String> {
+            let server = Arc::new(Server::http("127.0.0.1:0").map_err(|e| format!("preview server: {e}"))?);
+            let port = server.server_addr().to_ip().map(|a| a.port()).ok_or("preview server has no TCP port")?;
+            Ok((server, port))
+        };
+        let ((content, content_port), (frame, port)) = (listen()?, listen()?);
+        let folders: Arc<Mutex<HashMap<String, Served>>> = Arc::default();
+        let serve = |srv: Arc<Server>, handle: Arc<dyn Fn(Request) + Send + Sync>| {
+            std::thread::Builder::new()
+                .name("yaah-ui-preview".into())
+                .spawn(move || {
+                    // Ends when the site is closed (`unblock`); the listener goes with the last handle.
+                    for req in srv.incoming_requests() {
+                        let handle = handle.clone();
+                        std::thread::spawn(move || handle(req));
+                    }
+                })
+                .map(drop)
+                .map_err(|e| e.to_string())
+        };
+        let dirs = folders.clone();
+        serve(content.clone(), Arc::new(move |req| serve_preview(&dirs, req)))?;
+        let dirs = folders.clone();
+        serve(frame.clone(), Arc::new(move |req| serve_frame(&dirs, content_port, req)))?;
+        Ok(Self { port, servers: [frame, content], folders })
     }
 }
 
 impl Drop for PreviewSite {
     fn drop(&mut self) {
-        self.server.unblock();
+        for server in &self.servers {
+            server.unblock();
+        }
     }
 }
 
@@ -230,15 +258,36 @@ impl UiHost {
             std::collections::hash_map::Entry::Vacant(e) => e.insert(PreviewSite::open()?),
         };
         let mut folders = site.folders.lock().unwrap_or_else(PoisonError::into_inner);
-        let id = if let Some((id, _)) = folders.iter().find(|(_, d)| **d == dir) {
+        let id = if let Some((id, _)) = folders.iter().find(|(_, s)| !s.web && s.dir == dir) {
             id.clone()
         } else {
             let id = crate::session::random_token();
-            folders.insert(id.clone(), dir);
+            folders.insert(id.clone(), Served { dir, web: false });
             id
         };
         let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Ok(format!("http://127.0.0.1:{}/preview/{id}/{}", site.port, encode_path(&name)))
+    }
+
+    /// The user chose "Allow web loads" on a preview of this chat: the same
+    /// page under a new id whose files may load from the web. Only the app
+    /// calls this (a Tauri command, never an MCP tool or the preview server),
+    /// and the agent never sees the new id, so a page it renders again is
+    /// local-only until the user allows it again.
+    pub fn allow_web(&self, session_id: &str, url: &str) -> Result<String, String> {
+        let not_preview = || "not a preview of this chat".to_owned();
+        let previews = self.previews.lock().unwrap_or_else(PoisonError::into_inner);
+        let site = previews.get(session_id).ok_or_else(not_preview)?;
+        let rest = url.strip_prefix(&format!("http://127.0.0.1:{}/preview/", site.port)).ok_or_else(not_preview)?;
+        let (id, page) = rest.split_once('/').ok_or_else(not_preview)?;
+        let mut folders = site.folders.lock().unwrap_or_else(PoisonError::into_inner);
+        let served = folders.get(id).cloned().ok_or_else(not_preview)?;
+        if served.web {
+            return Ok(url.to_owned());
+        }
+        let web_id = crate::session::random_token();
+        folders.insert(web_id.clone(), Served { dir: served.dir, web: true });
+        Ok(format!("http://127.0.0.1:{}/preview/{web_id}/{page}", site.port))
     }
 
     /// Stop serving a chat's previews: its origin's listener is closed. The
@@ -1011,11 +1060,19 @@ fn inline_files(host: &UiHost, session_id: &str, tree: &mut Value, props: &mut V
     crate::ui_files::inline(tree, props, &roots, &|p: &Path| host.preview_url(session_id, p))
 }
 
-/// A previewed page may load what it likes from the web (CDN scripts, styles,
-/// fonts, images) but only talk to its own folder: no fetch, XHR or WebSocket
-/// elsewhere, no form posts, no popups or top-level navigation (`sandbox`
-/// without `allow-popups`/`allow-top-navigation`; the same flags as the iframe in the chat).
-const PREVIEW_CSP: &str = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; connect-src 'self'; form-action 'none'; \
+/// A previewed page loads only from its own folder (and `data:`/`blob:` URLs): no
+/// scripts, styles, fonts, images or frames from the web. Every web load is a
+/// URL the page chooses, so allowing any would let a page the agent wrote send
+/// what the user types into it (a key, a password) off the machine. No fetch,
+/// XHR or WebSocket elsewhere, no form posts, no popups or top-level navigation
+/// (`sandbox` without `allow-popups`/`allow-top-navigation`; the same flags as
+/// the iframe in the chat).
+const PREVIEW_CSP: &str = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src 'self'; form-action 'none'; \
+    frame-ancestors *; sandbox allow-scripts allow-forms allow-modals allow-same-origin";
+
+/// The policy once the user chose "Allow web loads" for a preview: CDN scripts,
+/// styles, fonts and images load, but the page still only talks to its own folder.
+const PREVIEW_WEB_CSP: &str = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; connect-src 'self'; form-action 'none'; \
     frame-ancestors *; sandbox allow-scripts allow-forms allow-modals allow-same-origin";
 
 /// The file `rest` names inside the preview folder `dir`: never outside it (no
@@ -1032,7 +1089,7 @@ fn preview_file(dir: &Path, rest: &str) -> Option<PathBuf> {
 }
 
 /// GET /preview/<id>/<path>: a file from one of the chat's preview folders.
-fn serve_preview(folders: &Mutex<HashMap<String, PathBuf>>, req: Request) {
+fn serve_preview(folders: &Mutex<HashMap<String, Served>>, req: Request) {
     if *req.method() != Method::Get {
         let _ = req.respond(Response::empty(405).with_header(header("Allow", "GET")));
         return;
@@ -1044,19 +1101,69 @@ fn serve_preview(folders: &Mutex<HashMap<String, PathBuf>>, req: Request) {
     let url = req.url().split(['?', '#']).next().unwrap_or_default().to_owned();
     let mut parts = url.trim_start_matches("/preview/").splitn(2, '/');
     let (id, rest) = (parts.next().unwrap_or_default(), decode_path(parts.next().unwrap_or_default()));
-    let dir = url.starts_with("/preview/").then(|| folders.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned()).flatten();
-    let file = dir.and_then(|dir| preview_file(&dir, &rest)).and_then(|path| std::fs::File::open(&path).ok().map(|f| (path, f)));
+    let served = url.starts_with("/preview/").then(|| folders.lock().unwrap_or_else(PoisonError::into_inner).get(id).cloned()).flatten();
+    let file = served.and_then(|s| {
+        let path = preview_file(&s.dir, &rest)?;
+        std::fs::File::open(&path).ok().map(|f| (path, f, if s.web { PREVIEW_WEB_CSP } else { PREVIEW_CSP }))
+    });
     let _ = match file {
         // Streamed, not read whole.
-        Some((path, f)) => req.respond(
+        Some((path, f, csp)) => req.respond(
             Response::from_file(f)
                 .with_header(header("Content-Type", content_type(&path)))
                 .with_header(header("Cache-Control", "no-store"))
-                .with_header(header("Content-Security-Policy", PREVIEW_CSP))
+                .with_header(header("Content-Security-Policy", csp))
                 .with_header(header("X-Content-Type-Options", "nosniff")),
         ),
         None => req.respond(Response::from_string("not found").with_status_code(404)),
     };
+}
+
+/// GET /preview/<id>/<path> on the wrapper's listener: a page with no script
+/// that frames the same path and query from the page's own origin, and may
+/// frame nothing else.
+fn serve_frame(folders: &Mutex<HashMap<String, Served>>, content_port: u16, req: Request) {
+    if *req.method() != Method::Get {
+        let _ = req.respond(Response::empty(405).with_header(header("Allow", "GET")));
+        return;
+    }
+    let not_found = |req: Request| {
+        let _ = req.respond(Response::from_string("not found").with_status_code(404));
+    };
+    if !loopback_host(&req) {
+        return not_found(req);
+    }
+    let target = req.url().split('#').next().unwrap_or_default().to_owned();
+    let path = target.split('?').next().unwrap_or_default();
+    let id = path.strip_prefix("/preview/").and_then(|r| r.split_once('/')).map(|(id, _)| id);
+    if !id.is_some_and(|id| folders.lock().unwrap_or_else(PoisonError::into_inner).contains_key(id)) {
+        return not_found(req);
+    }
+    let src = format!("http://127.0.0.1:{content_port}{target}");
+    let page = format!(
+        "<!doctype html><meta charset=\"utf-8\"><title>preview</title>\
+         <style>html,body{{margin:0;height:100%}}iframe{{display:block;border:0;width:100%;height:100%}}</style>\
+         <iframe src=\"{}\" sandbox=\"allow-scripts allow-forms allow-modals allow-same-origin\" \
+         referrerpolicy=\"no-referrer\" allow=\"clipboard-write\"></iframe>",
+        html_attr(&src)
+    );
+    let csp = format!(
+        "default-src 'none'; style-src 'unsafe-inline'; frame-src http://127.0.0.1:{content_port}; \
+         base-uri 'none'; form-action 'none'; frame-ancestors *"
+    );
+    let _ = req.respond(
+        Response::from_string(page)
+            .with_header(header("Content-Type", "text/html; charset=utf-8"))
+            .with_header(header("Cache-Control", "no-store"))
+            .with_header(header("Content-Security-Policy", &csp))
+            .with_header(header("Referrer-Policy", "no-referrer"))
+            .with_header(header("X-Content-Type-Options", "nosniff")),
+    );
+}
+
+/// `s` safe inside a double-quoted HTML attribute.
+fn html_attr(s: &str) -> String {
+    s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
 /// The type a preview serves a file as; `None` for anything that isn't a
@@ -1621,7 +1728,7 @@ mod tests {
         std::fs::write(site.join("main.rs"), "private").unwrap();
 
         let (_, host, mcp_port) = serve_chat(&root);
-        let url = host.preview_url("s1", &site.join("index.html")).unwrap();
+        let url = page(&host.preview_url("s1", &site.join("index.html")).unwrap());
         let port = preview_port(&url);
         assert_ne!(port, mcp_port, "previews are never on the MCP server's origin");
         let path = url.split_once(&format!("127.0.0.1:{port}")).unwrap().1.to_owned();
@@ -1655,9 +1762,10 @@ mod tests {
         let mut head = String::new();
         let _ = s.read_to_string(&mut head);
         let csp = head.lines().find_map(|l| l.strip_prefix("Content-Security-Policy: ")).unwrap_or_default();
-        for part in ["connect-src 'self'", "form-action 'none'", "frame-ancestors *", "https:"] {
+        for part in ["connect-src 'self'", "form-action 'none'", "frame-ancestors *"] {
             assert!(csp.contains(part), "{part} in {csp}");
         }
+        assert!(!csp.contains("https:"), "nothing from the web until the user allows it: {csp}");
         assert!(csp.contains("sandbox ") && !csp.contains("allow-popups") && !csp.contains("allow-top-navigation"), "{csp}");
         assert_eq!(exchange(port, &format!("POST {path} HTTP/1.1\r\nHost: {local}"), "").0, 405);
         let _ = std::fs::remove_dir_all(root);
@@ -1667,6 +1775,49 @@ mod tests {
         url.strip_prefix("http://127.0.0.1:").and_then(|r| r.split('/').next()).and_then(|p| p.parse().ok()).unwrap()
     }
 
+    /// The page a preview URL (what the chat frames: the wrapper) frames.
+    fn page(url: &str) -> String {
+        let path = url.strip_prefix("http://127.0.0.1:").and_then(|r| r.split_once('/')).map(|(_, p)| format!("/{p}")).unwrap();
+        let (status, html) = get(preview_port(url), &path, "127.0.0.1");
+        assert_eq!(status, 200, "{url}");
+        html.split_once("<iframe src=\"").and_then(|(_, r)| r.split_once('"')).map(|(s, _)| s.replace("&amp;", "&")).unwrap()
+    }
+
+    /// The chat frames a wrapper with no script, on an origin of its own, that
+    /// may frame only the page's origin: the page can't navigate itself off the
+    /// machine, and can't reach into the wrapper to do it from there.
+    #[test]
+    fn the_chat_frames_a_wrapper_that_keeps_the_page_at_home() {
+        let root = temp_dir("wrapper");
+        std::fs::create_dir_all(root.join("site")).unwrap();
+        std::fs::write(root.join("site/index.html"), "<h1>home</h1>").unwrap();
+        let (_, host, _) = serve_chat(&root);
+        let url = host.preview_url("s1", &root.join("site/index.html")).unwrap();
+        let (frame_port, path) = (preview_port(&url), url.split_once("/preview/").map(|(_, p)| format!("/preview/{p}")).unwrap());
+
+        let inner = page(&url);
+        let content_port = preview_port(&inner);
+        assert_ne!(content_port, frame_port, "the page and its wrapper are different origins");
+        assert_eq!(inner, format!("http://127.0.0.1:{content_port}{path}"), "the same path, on the page's origin");
+        assert_eq!(get(content_port, &path, "127.0.0.1").1, "<h1>home</h1>");
+
+        let csp = preview_csp(frame_port, &path);
+        assert!(csp.contains("default-src 'none'"), "no script in the wrapper: {csp}");
+        assert!(csp.contains(&format!("frame-src http://127.0.0.1:{content_port};")), "its frame goes nowhere else: {csp}");
+        let (_, html) = get(frame_port, &path, "127.0.0.1");
+        assert!(!html.contains("<script"), "{html}");
+        assert!(html.contains("sandbox=\"allow-scripts allow-forms allow-modals allow-same-origin\""), "{html}");
+
+        // The query goes through, escaped; unknown ids, other methods and rebound hosts get nothing.
+        let (_, html) = get(frame_port, &format!("{path}?a=1&b=\"><script>"), "127.0.0.1");
+        assert!(html.contains("?a=1&amp;b=&quot;&gt;&lt;script&gt;\""), "{html}");
+        assert_eq!(get(frame_port, &format!("/preview/{}/index.html", "0".repeat(32)), "127.0.0.1").0, 404);
+        assert_eq!(get(frame_port, "/", "127.0.0.1").0, 404);
+        assert_eq!(get(frame_port, &path, "evil.example").0, 404);
+        assert_eq!(exchange(frame_port, &format!("POST {path} HTTP/1.1\r\nHost: 127.0.0.1"), "").0, 405);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// The CSP header of a preview response.
     fn preview_csp(port: u16, path: &str) -> String {
         let mut s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
@@ -1674,6 +1825,39 @@ mod tests {
         let mut head = String::new();
         let _ = s.read_to_string(&mut head);
         head.lines().find_map(|l| l.strip_prefix("Content-Security-Policy: ")).unwrap_or_default().to_owned()
+    }
+
+    /// A preview loads only its own files until the user allows web loads,
+    /// which serves it under a new id; the agent's URL stays local-only.
+    #[test]
+    fn previews_load_from_the_web_only_once_the_user_allows_it() {
+        let root = temp_dir("web");
+        std::fs::create_dir_all(root.join("site")).unwrap();
+        std::fs::write(root.join("site/index.html"), "<h1>cdn</h1>").unwrap();
+        let (_, host, _) = serve_chat(&root);
+        let local = host.preview_url("s1", &root.join("site/index.html")).unwrap();
+        let port = preview_port(&local);
+        let path = |url: &str| url.strip_prefix("http://127.0.0.1:").and_then(|r| r.split_once('/')).map(|(_, p)| format!("/{p}")).unwrap();
+        assert!(!preview_csp(preview_port(&page(&local)), &path(&page(&local))).contains("https:"));
+
+        let web = host.allow_web("s1", &local).unwrap();
+        assert_ne!(web, local, "a new id the agent never sees");
+        assert_eq!(preview_port(&web), port, "same origin: the page keeps its storage");
+        assert!(web.ends_with("/index.html"), "{web}");
+        assert!(preview_csp(preview_port(&page(&web)), &path(&page(&web))).contains("https:"));
+        assert_eq!(host.allow_web("s1", &web).unwrap(), web, "allowing again changes nothing");
+        // The agent's URL, and the URL it gets for the same page again, stay local-only.
+        assert!(!preview_csp(preview_port(&page(&local)), &path(&page(&local))).contains("https:"));
+        assert_eq!(host.preview_url("s1", &root.join("site/index.html")).unwrap(), local);
+
+        // Only this chat's previews, and only preview URLs.
+        let other = host.preview_url("s2", &root.join("site/index.html")).unwrap();
+        for (chat, url) in [("s2", local.as_str()), ("s1", other.as_str()), ("s3", local.as_str()), ("s1", "https://example.com/x")] {
+            assert!(host.allow_web(chat, url).is_err(), "{chat} {url}");
+        }
+        let unknown = format!("http://127.0.0.1:{port}/preview/{}/index.html", "0".repeat(32));
+        assert!(host.allow_web("s1", &unknown).is_err());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     /// Pages previewed in two chats are on two origins (storage isn't shared);
@@ -1687,11 +1871,11 @@ mod tests {
         let (_, host, _) = serve_chat(&root);
         assert!(host.previews.lock().unwrap().is_empty(), "no origin until a chat previews something");
 
-        let one = host.preview_url("s1", &root.join("site/index.html")).unwrap();
-        let two = host.preview_url("s2", &root.join("site/index.html")).unwrap();
+        let one = page(&host.preview_url("s1", &root.join("site/index.html")).unwrap());
+        let two = page(&host.preview_url("s2", &root.join("site/index.html")).unwrap());
         let (p1, p2) = (preview_port(&one), preview_port(&two));
         assert_ne!(p1, p2, "two chats, two origins: {one} {two}");
-        assert_eq!(preview_port(&host.preview_url("s1", &root.join("site/about.html")).unwrap()), p1, "one origin per chat, reused");
+        assert_eq!(preview_port(&page(&host.preview_url("s1", &root.join("site/about.html")).unwrap())), p1, "one origin per chat, reused");
         let path = |url: &str| url.strip_prefix("http://127.0.0.1:").and_then(|r| r.split_once('/')).map(|(_, p)| format!("/{p}")).unwrap();
         assert_eq!(get(p1, &path(&one), "127.0.0.1").1, "<h1>shared</h1>");
         assert_eq!(get(p2, &path(&two), "127.0.0.1").1, "<h1>shared</h1>");

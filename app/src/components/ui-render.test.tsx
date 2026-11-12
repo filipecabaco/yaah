@@ -132,6 +132,36 @@ describe("untrusted UI", () => {
     expect(screen.getByText("B — local · report/page.html")).toBeInTheDocument();
   });
 
+  it("lets a preview load from the web only after the user allows it, under the URL the app returns", async () => {
+    const user = userEvent.setup();
+    const local = "http://127.0.0.1:43117/preview/ab12/index.html";
+    const web = "http://127.0.0.1:43117/preview/cd34/index.html";
+    const invoke = ipcCalls();
+    invoke.mockImplementation((cmd: string) => (cmd === "allow_preview_web" ? Promise.resolve(web) : Promise.resolve(null)));
+    const tree = (src: string) => ({ type: "browser", props: { src } });
+    const { rerender } = render(
+      <ChatContext.Provider value={{ sessionId: "s1", cwd: "/tmp", busy: false }}>
+        <UiTree tree={tree(local)} props={{}} />
+      </ChatContext.Provider>,
+    );
+    expect(document.querySelector("iframe")).toHaveAttribute("src", local);
+
+    await user.click(screen.getByRole("button", { name: "Allow web loads" }));
+    expect(invoke).toHaveBeenCalledWith("allow_preview_web", { sessionId: "s1", url: local }, undefined);
+    await waitFor(() => expect(document.querySelector("iframe")).toHaveAttribute("src", web));
+    expect(screen.getByRole("button", { name: "Web loads on" })).toBeDisabled();
+
+    // A new page from the agent is local-only again.
+    const next = "http://127.0.0.1:43117/preview/ab12/other.html";
+    rerender(
+      <ChatContext.Provider value={{ sessionId: "s1", cwd: "/tmp", busy: false }}>
+        <UiTree tree={tree(next)} props={{}} />
+      </ChatContext.Provider>,
+    );
+    expect(document.querySelector("iframe")).toHaveAttribute("src", next);
+    expect(screen.getByRole("button", { name: "Allow web loads" })).toBeEnabled();
+  });
+
   it("fetches nothing for any other page until the user loads it", async () => {
     const user = userEvent.setup();
     const secret = "https://evil.example/?k=sk-live-123";
