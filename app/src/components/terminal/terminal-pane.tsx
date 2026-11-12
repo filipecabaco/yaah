@@ -3,7 +3,7 @@
 // comes back after a restart names a shell that's gone, so it opens a new one in the
 // same folder and says so; processes don't outlive the app.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ExternalLink, Maximize2, Minimize2, RotateCcw, SquareTerminal, X } from "lucide-react";
+import { ExternalLink, Maximize2, MessageSquare, Minimize2, RotateCcw, SquareTerminal, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -55,12 +55,18 @@ export function TerminalPane({
   pane,
   content,
   focused,
+  chatTitle,
+  onBackToChat,
   onContent,
   onClose,
 }: {
   pane: string;
   content: TerminalContent;
   focused: boolean;
+  /** The chat this pane was switched from (⌘J), when it still exists. */
+  chatTitle?: string;
+  /** Switch this pane back to that chat. */
+  onBackToChat?: () => void;
   /** The pane now shows this (its shell's id once it's open). */
   onContent: (c: TerminalContent) => void;
   onClose: () => void;
@@ -192,6 +198,19 @@ export function TerminalPane({
         >
           {title}
         </span>
+        {chatTitle && onBackToChat && (
+          <Button
+            size="xs"
+            variant="outline"
+            className="min-w-0 shrink"
+            title={`Back to the chat (${formatKeys(SHORTCUTS.toggleTerminal.keys)})`}
+            onClick={onBackToChat}
+          >
+            <MessageSquare />
+            <span className="truncate">{chatTitle}</span>
+            <kbd className="text-2xs text-muted-foreground">{formatKeys(SHORTCUTS.toggleTerminal.keys)}</kbd>
+          </Button>
+        )}
         {exit && (
           <Badge variant="secondary" className="shrink-0 text-muted-foreground">
             {exit.signal ? `ended (${exit.signal})` : `exited ${exit.exitCode ?? ""}`}

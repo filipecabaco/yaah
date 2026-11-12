@@ -91,7 +91,9 @@ export function useTerminals(y: Yaah) {
     const stash = swapped.current.get(id);
     if (here.content?.kind === "terminal") {
       // Back: the terminal is kept (with its shell's id) for the next switch.
-      if (!stash) {
+      const chatId = here.content.chatId;
+      const back: Selection = chatId && latest.current.sessions[chatId] ? { kind: "chat", id: chatId } : (stash?.chat ?? null);
+      if (!back) {
         // A terminal opened on its own has no chat to go back to in this pane: go to one beside it.
         const chat = panes.panes.find((p) => p.content?.kind === "chat");
         if (chat) {
@@ -100,16 +102,18 @@ export function useTerminals(y: Yaah) {
         }
         return;
       }
-      swapped.current.set(id, { ...stash, terminal: here.content });
-      panes.setPaneContent(id, stash.chat);
+      swapped.current.set(id, { chat: back, terminal: here.content });
+      panes.setPaneContent(id, back);
       focusPaneDom(id);
       return;
     }
     const origin = originOf(here.content, latest.current);
     const target = origin.cwd ? origin : (lastOrigin.current ?? {});
     const kept = stash?.terminal?.kind === "terminal" && (!target.cwd || stash.terminal.cwd === target.cwd) ? stash.terminal : null;
+    // The terminal belongs to the chat it replaced: the sidebar keeps showing that chat, and ⌘J goes back to it.
+    const chatId = here.content?.kind === "chat" ? here.content.id : undefined;
     swapped.current.set(id, { chat: here.content, terminal: undefined });
-    panes.setPaneContent(id, kept ?? { kind: "terminal", ...target });
+    panes.setPaneContent(id, kept ? { ...kept, chatId } : { kind: "terminal", ...target, chatId });
     focusPaneDom(id);
   }, []);
   const focusedOrigin = useCallback(() => originOf(latest.current.panes.focused.content, latest.current), []);

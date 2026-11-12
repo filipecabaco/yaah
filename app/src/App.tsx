@@ -8,6 +8,7 @@ import { ErrorText } from "@/components/error-text";
 import { CommandPalette, type PalettePage } from "@/components/command-palette";
 import { AgentSetupDialog, FirstRunSetup, type SettingsTab, type SettingsTarget } from "@/components/agent-setup";
 import { CopiedNote } from "@/components/copied-note";
+import { displayTitle } from "@/lib/chat-title";
 import { installCopyOnSelect } from "@/lib/clipboard";
 import { AppContextMenu, ChatActionsProvider } from "@/components/menus";
 import { ShortcutsDialog } from "@/components/shortcuts";
@@ -108,12 +109,14 @@ export default function App() {
     const byProject: Record<string, Pane[]> = {};
     for (const p of panes.panes) {
       if (p.content?.kind !== "terminal" && p.content?.kind !== "diff" && p.content?.kind !== "ui") continue;
+      // A chat's own terminal (⌘J) is that chat, not another pane.
+      if (p.content.kind === "terminal" && p.content.chatId && y.sessions[p.content.chatId]) continue;
       const project = linkedProject(p.content);
       if (project && y.projects.some((x) => x.id === project)) (byProject[project] ??= []).push(p);
       else loose.push(p);
     }
     return { openPanes: loose, projectPanes: byProject };
-  }, [panes.panes, y.projects]);
+  }, [panes.panes, y.projects, y.sessions]);
   const openChat = (id: string) => select({ kind: "chat", id });
   const selection = y.selection;
   // The Component library takes a pane; closing it goes back to what that pane showed before (use-layout.ts).
@@ -121,14 +124,20 @@ export default function App() {
   const { closeLibrary, focusedId, setPaneContent, close: closePane, focus: focusPane } = panes;
   /** The sidebar's selection, into the focused pane; its "Component library" entry toggles the library there. */
   const focusedKind = selection?.kind;
+  // The chat whose terminal the focused pane shows (⌘J): the sidebar shows that chat as open.
+  const swappedChat = selection?.kind === "terminal" && selection.chatId && y.sessions[selection.chatId] ? selection.chatId : null;
+  const { toggleTerminal } = terminals;
   const selectFromSidebar = useCallback(
     (s: Selection) => {
+      // Picking the chat whose terminal is showing switches the pane back to it.
+      if (s?.kind === "chat" && s.id === swappedChat) return toggleTerminal();
       if (s?.kind !== "components") return select(s);
       if (focusedKind === "components") closeLibrary(focusedId());
       else openLibrary();
     },
-    [select, openLibrary, closeLibrary, focusedId, focusedKind],
+    [select, openLibrary, closeLibrary, focusedId, focusedKind, swappedChat, toggleTerminal],
   );
+  const sidebarSelection = useMemo<Selection>(() => (swappedChat ? { kind: "chat", id: swappedChat } : selection), [swappedChat, selection]);
   // Stable, so the (memoised) sidebar doesn't re-render with the rest of the app.
   const { newQuickChat, newChatInFolder, agentId } = y;
   const { openForProject } = terminals;
@@ -418,6 +427,8 @@ export default function App() {
           pane={p.id}
           content={c}
           focused={focused}
+          chatTitle={c.chatId && y.sessions[c.chatId] ? displayTitle(y.sessions[c.chatId].title) : undefined}
+          onBackToChat={terminals.toggleTerminal}
           onContent={(next) => setPaneContent(p.id, next)}
           onClose={() => {
             if (panes.close(p.id)) focusPaneDom(panes.focusedId());
@@ -519,8 +530,8 @@ export default function App() {
                   projects={y.orderedProjects}
                   chatsByProject={y.chatsByProject}
                   quickChats={y.quickChats}
-                  selection={y.selection}
-                  activeProjectId={project?.id ?? null}
+                  selection={sidebarSelection}
+                  activeProjectId={project?.id ?? (swappedChat ? (y.sessions[swappedChat]?.projectId ?? null) : null)}
                   onSelect={selectFromSidebar}
                   onNewChat={y.newChat}
                   onProjectChange={y.putProject}

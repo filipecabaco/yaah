@@ -527,6 +527,7 @@ function ProjectNode({
                 )}
               >
                 <button
+                  aria-current={(selection?.kind === "chat" && selection.id === c.sessionId) || undefined}
                   onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
                   className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-xs"
                 >
@@ -745,6 +746,7 @@ function QuickChats({
               )}
             >
               <button
+                aria-current={(selection?.kind === "chat" && selection.id === c.sessionId) || undefined}
                 onClick={() => onSelect({ kind: "chat", id: c.sessionId })}
                 className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm"
               >
