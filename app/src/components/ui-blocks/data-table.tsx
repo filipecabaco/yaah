@@ -56,7 +56,14 @@ export default function UiDataTable({
   find?: string;
 }) {
   const cols = useMemo(() => toColumns(rawColumns), [rawColumns]);
-  const rows = useMemo(() => asArray(rawRows).filter(isObj), [rawRows]);
+  // Rows are objects keyed by column, or arrays in column order (CSV-shaped; agents often send these).
+  const rows = useMemo(
+    () =>
+      asArray(rawRows).flatMap((r): Obj[] =>
+        isObj(r) ? [r] : Array.isArray(r) ? [Object.fromEntries(cols.map((c, i) => [c.key, (r as unknown[])[i]]))] : [],
+      ),
+    [rawRows, cols],
+  );
   const [sorting, setSorting] = useState<SortingState>([]);
   const [filter, setFilter] = useFind(find);
   const { expanded } = useUiView();
