@@ -765,7 +765,7 @@
       }
     },
     "table": {
-      "description": "Rows of data under column headers. Cells are strings or numbers. Columns sort when clicked; tables over 8 rows get a filter box, so pass all the rows rather than a sample.",
+      "description": "Rows of data under column headers. Cells are strings, numbers or booleans. Columns sort when clicked; tables over 8 rows get a filter box, so pass all the rows rather than a sample. Example: { \"type\": \"table\", \"props\": { \"columns\": [\"Server\", \"Endpoint\"], \"rows\": [{ \"Server\": \"Stripe\", \"Endpoint\": \"mcp.stripe.com\" }, [\"Linear\", \"mcp.linear.app\"]] } }. Query results go in as a live binding: \"rows\": \"{{data.rows}}\".",
       "uses": [
         "@tanstack/react-table"
       ],
@@ -774,12 +774,12 @@
         "columns": {
           "type": "array",
           "required": true,
-          "description": "[{ key, label, align?: 'left'|'right' }]"
+          "description": "Column names like [\"Server\", \"Endpoint\"] (each name is also its row key), or objects { key, label?, align?: 'left'|'right' } when the header differs from the key."
         },
         "rows": {
           "type": "array",
           "required": true,
-          "description": "Objects keyed by column key."
+          "description": "One entry per row, either an object keyed by column key ({ \"Server\": \"Stripe\", \"Endpoint\": \"mcp.stripe.com\" }) or an array with one cell per column, in column order ([\"Stripe\", \"mcp.stripe.com\"]). A row whose keys match no column is refused, since it would show blank."
         },
         "empty": {
           "type": "string",

@@ -506,6 +506,19 @@ pub async fn mcp_login(app: AppHandle, name: String) -> Result<(), String> {
         .await
 }
 
+/// How an HTTP MCP server at `url` wants to be signed in to, found by asking it (a few seconds):
+/// "none" (it answered without a login), "oauth" (yaah can log in through the browser) or
+/// "manual" (it wants a login yaah can't register itself for: an Authorization header instead).
+#[tauri::command]
+pub async fn mcp_sign_in_kind(url: String) -> Result<&'static str, String> {
+    match mcp_oauth::discover(url.trim()).await {
+        Ok(e) if e.registration.is_some() => Ok("oauth"),
+        Ok(_) => Ok("manual"),
+        Err(e) if e == mcp_oauth::NO_LOGIN_WANTED => Ok("none"),
+        Err(e) => Err(e),
+    }
+}
+
 /// Forget the login of an HTTP MCP server.
 #[tauri::command]
 pub fn mcp_logout(name: String) -> Result<(), String> {

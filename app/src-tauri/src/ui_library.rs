@@ -42,6 +42,7 @@ mod chart;
 mod flow;
 mod map;
 mod regions;
+mod table;
 
 const PRIMITIVES_JSON: &str = include_str!("../../src/ui-primitives.json");
 const MAX_DEPTH: usize = 30;
@@ -1024,6 +1025,7 @@ fn validate(node: &Value, path: &str, lib: &dyn Resolve, ctx: &mut Ctx, depth: u
                 "chart" => chart::check(props, path, errs),
                 "map" => map::check(props, path, errs),
                 "flow" => flow::check(props, path, errs),
+                "table" => table::check(props, path, errs),
                 _ => {}
             }
             walk("children", ctx, errs);

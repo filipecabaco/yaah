@@ -2,8 +2,25 @@
 // yaah starts (ACP session/new and session/load `mcpServers`, next to yaah's
 // own `yaah-ui`). Rust stores, validates, tests and imports them
 // (mcp_servers.rs); this only shows them.
-import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, CircleCheck, Download, Loader2, Lock, Plug, Plus, Server, Wrench } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  AlertTriangle,
+  Check,
+  CircleCheck,
+  Download,
+  ExternalLink,
+  KeyRound,
+  LayoutGrid,
+  Loader2,
+  Lock,
+  LogIn,
+  LogOut,
+  Plug,
+  Plus,
+  Search,
+  Server,
+  Wrench,
+} from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,12 +42,22 @@ import {
   type McpList,
   type McpServerDraft,
   type McpServerInfo,
+  type McpSignInKind,
   type McpTestReport,
   type McpTransport,
 } from "@/lib/api";
 import { compactPath, plural } from "@/lib/format";
+import { openExternal } from "@/lib/links";
+import { MCP_CATALOG, MCP_CATALOG_CATEGORIES, addedAs, catalogDraft, freeName, type McpCatalogEntry } from "@/lib/mcp-catalog";
 
-type Selected = { kind: "server"; name: string } | { kind: "new" } | { kind: "builtin" } | { kind: "import" };
+type Selected =
+  | { kind: "server"; name: string }
+  | { kind: "new" }
+  | { kind: "builtin" }
+  | { kind: "import" }
+  | { kind: "catalog" }
+  /** A catalog entry that needs a key: the add form, filled in. */
+  | { kind: "preset"; id: string };
 
 const TRANSPORTS: { id: McpTransport; label: string; hint: string }[] = [
   { id: "stdio", label: "stdio (local command)", hint: "Every ACP agent supports it." },
@@ -73,8 +100,10 @@ export function McpSettings() {
     mcpApi.list().then(setList, setError);
   }, []);
 
-  // Until something is picked: the first server, or the empty "add" form.
-  const selected: Selected | null = picked ?? (list ? (list.servers[0] ? { kind: "server", name: list.servers[0].name } : { kind: "new" }) : null);
+  // Until something is picked: the first server, or the catalog to start from.
+  const selected: Selected | null =
+    picked ?? (list ? (list.servers[0] ? { kind: "server", name: list.servers[0].name } : { kind: "catalog" }) : null);
+  const preset = selected?.kind === "preset" ? MCP_CATALOG.find((e) => e.id === selected.id) : undefined;
   const server = selected?.kind === "server" ? list?.servers.find((s) => s.name === selected.name) : undefined;
 
   function toggle(name: string, enabled: boolean) {
@@ -132,6 +161,12 @@ export function McpSettings() {
           <ErrorText error={error} className="px-2 py-1" />
           <Separator className="my-2" />
           <NavRow
+            active={selected?.kind === "catalog" || selected?.kind === "preset"}
+            onClick={() => setPicked({ kind: "catalog" })}
+            label="Browse catalog"
+            icon={<LayoutGrid className="size-3.5 text-muted-foreground" />}
+          />
+          <NavRow
             active={selected?.kind === "new"}
             onClick={() => setPicked({ kind: "new" })}
             label="Add server"
@@ -153,6 +188,36 @@ export function McpSettings() {
         </p>
         {!list ? null : selected?.kind === "builtin" ? (
           <BuiltinCard about={list.builtin.about} name={list.builtin.name} />
+        ) : selected?.kind === "catalog" ? (
+          <CatalogPanel
+            servers={list.servers}
+            onAdded={async (name) => {
+              await reload();
+              setPicked({ kind: "server", name });
+            }}
+            onNeedsKey={(entry) => setPicked({ kind: "preset", id: entry.id })}
+            onOpen={(name) => setPicked({ kind: "server", name })}
+          />
+        ) : preset ? (
+          <Editor
+            key={`preset:${preset.id}`}
+            initial={catalogDraft(
+              preset,
+              freeName(
+                preset.id,
+                list.servers.map((s) => s.name),
+              ),
+            )}
+            server={undefined}
+            storePath={list.path}
+            title={`Add ${preset.label}`}
+            intro={<PresetIntro entry={preset} />}
+            onSaved={async (saved) => {
+              await reload();
+              setPicked({ kind: "server", name: saved.name });
+            }}
+            onRemoved={() => Promise.resolve(setPicked({ kind: "catalog" }))}
+          />
         ) : selected?.kind === "import" ? (
           <ImportPanel
             onImported={async (added) => {
@@ -208,12 +273,16 @@ function Editor({
   initial,
   server,
   storePath,
+  title,
+  intro,
   onSaved,
   onRemoved,
 }: {
   initial: McpServerDraft;
   server: McpServerInfo | undefined;
   storePath: string;
+  title?: string;
+  intro?: ReactNode;
   onSaved: (s: McpServerInfo) => Promise<void>;
   onRemoved: () => Promise<void>;
 }) {
@@ -233,7 +302,22 @@ function Editor({
       setTested(null);
       setTested(await mcpApi.test(current));
     });
-  const save = () => void run("save", async () => onSaved(await mcpApi.save(current)));
+  const [signingIn, setSigningIn] = useState(false);
+  // A new HTTP server that wants a browser login gets it straight away: paste the URL, Add, sign in.
+  // A failed or cancelled login isn't a failed save: the server opens with its "Sign in" button.
+  const save = () =>
+    void run("save", async () => {
+      const saved = await mcpApi.save(current);
+      if (!server && saved.transport === "http" && !hasAuthorization(current.headers)) {
+        const kind = await mcpApi.signInKind(saved.url).catch(() => "none" as const);
+        if (kind === "oauth") {
+          setSigningIn(true);
+          await mcpApi.login(saved.name).catch(() => {});
+          setSigningIn(false);
+        }
+      }
+      await onSaved(saved);
+    });
 
   return (
     <form
@@ -243,7 +327,11 @@ function Editor({
         save();
       }}
     >
-      <PanelHeader title={server ? server.name : "Add an MCP server"} extra={server && !server.enabled && <Badge variant="outline">off</Badge>} />
+      <PanelHeader
+        title={server ? server.name : (title ?? "Add an MCP server")}
+        extra={server && !server.enabled && <Badge variant="outline">off</Badge>}
+      />
+      {intro}
 
       {server?.problem && (
         <Alert>
@@ -272,6 +360,15 @@ function Editor({
             {server.unsupportedBy.join(", ")} can't connect to {server.transport} MCP servers, so their chats run without it.
           </AlertDescription>
         </Alert>
+      )}
+
+      {server?.transport === "http" && !hasAuthorization(server.headers) && (
+        <SignIn
+          // Asked again when the saved URL changes.
+          key={server.url}
+          server={server}
+          onChanged={() => onSaved(server)}
+        />
       )}
 
       <div className="grid gap-4">
@@ -311,7 +408,11 @@ function Editor({
             />
           </Field>
         ) : (
-          <Field id="mcp-url" label="URL">
+          <Field
+            id="mcp-url"
+            label="URL"
+            hint={draft.transport === "http" && !server ? "If the server needs a sign-in, your browser opens when you add it." : undefined}
+          >
             <Input
               id="mcp-url"
               className="font-mono text-xs"
@@ -360,7 +461,7 @@ function Editor({
         </Button>
         <Button type="submit" disabled={busy !== null || !ready || (!!server && !dirty)}>
           {busy === "save" ? <Loader2 className="animate-spin" /> : <Check />}
-          {server ? "Save changes" : "Add server"}
+          {signingIn ? "Waiting for the browser…" : server ? "Save changes" : "Add server"}
         </Button>
         {server && (
           <RemoveButton
@@ -566,4 +667,232 @@ function AvailableTo({ value, onChange }: { value: string[]; onChange: (agents: 
       </p>
     </fieldset>
   );
+}
+
+const AUTH_LABEL = { oauth: "sign in", none: "no sign-in", token: "API key" } as const;
+
+/** Well-known servers, added in one click: saved, then signed in through the browser when they need it. */
+function CatalogPanel({
+  servers,
+  onAdded,
+  onNeedsKey,
+  onOpen,
+}: {
+  servers: McpServerInfo[];
+  onAdded: (name: string) => Promise<void>;
+  onNeedsKey: (entry: McpCatalogEntry) => void;
+  onOpen: (name: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  /** The entry being added, and how far it got. */
+  const [busy, setBusy] = useState<{ id: string; what: string } | null>(null);
+  const [failed, setFailed] = useState<{ entry: McpCatalogEntry; saved: string | null; error: unknown } | null>(null);
+
+  const q = query.trim().toLowerCase();
+  const shown = MCP_CATALOG.filter((e) => !q || `${e.label} ${e.description} ${e.category} ${e.id}`.toLowerCase().includes(q));
+
+  async function add(entry: McpCatalogEntry) {
+    if (entry.auth === "token") return onNeedsKey(entry);
+    setFailed(null);
+    let saved: string | null = null;
+    try {
+      setBusy({ id: entry.id, what: "Adding…" });
+      saved = (
+        await mcpApi.save(
+          catalogDraft(
+            entry,
+            freeName(
+              entry.id,
+              servers.map((s) => s.name),
+            ),
+          ),
+        )
+      ).name;
+      if (entry.auth === "oauth") {
+        setBusy({ id: entry.id, what: "Waiting for the browser…" });
+        await mcpApi.login(saved);
+      }
+      await onAdded(saved);
+    } catch (error) {
+      setFailed({ entry, saved, error });
+      // Saved but not signed in: it's in the list, and /mcp or this card can log in again.
+      if (saved) await onAdded(saved).catch(() => {});
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-4">
+      <PanelHeader title="Add from the catalog">
+        <p className="text-sm text-muted-foreground">
+          Well-known servers, ready to go. Ones that need a sign-in open your browser once; yaah keeps the login on this machine.
+        </p>
+      </PanelHeader>
+      <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <Input
+          aria-label="Search the catalog"
+          className="pl-8"
+          placeholder="Stripe, Cloudflare, Postgres…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+      {failed && (
+        <ErrorAlert
+          title={failed.saved ? `Added ${failed.entry.label}, but the sign-in didn't finish` : `Couldn't add ${failed.entry.label}`}
+          error={failed.error}
+        />
+      )}
+      {shown.length === 0 && <p className="text-sm text-muted-foreground">Nothing in the catalog matches. Add it by hand with “Add server”.</p>}
+      {MCP_CATALOG_CATEGORIES.map((category) => {
+        const items = shown.filter((e) => e.category === category);
+        if (!items.length) return null;
+        return (
+          <fieldset key={category} className="flex flex-col gap-2">
+            <legend className="mb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">{category}</legend>
+            <ul className="grid gap-2 sm:grid-cols-2" aria-label={category}>
+              {items.map((entry) => {
+                const existing = addedAs(entry, servers);
+                const mine = busy?.id === entry.id;
+                return (
+                  <li key={entry.id} className="flex flex-col gap-2 rounded-lg border p-3">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-sm font-medium">{entry.label}</span>
+                      <Badge variant="outline" className="text-2xs">
+                        {AUTH_LABEL[entry.auth]}
+                      </Badge>
+                      <button
+                        type="button"
+                        className="ml-auto text-muted-foreground hover:text-foreground"
+                        title={`About ${entry.label}`}
+                        aria-label={`About ${entry.label}`}
+                        onClick={() => openExternal(entry.docs)}
+                      >
+                        <ExternalLink className="size-3.5" />
+                      </button>
+                    </div>
+                    <p className="flex-1 text-xs text-muted-foreground">{entry.description}</p>
+                    <div>
+                      {existing ? (
+                        <Button type="button" size="xs" variant="ghost" onClick={() => onOpen(existing.name)}>
+                          <Check /> Added as {existing.name}
+                        </Button>
+                      ) : (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={busy !== null}
+                          onClick={() => void add(entry)}
+                          aria-label={`Add ${entry.label}`}
+                        >
+                          {mine ? (
+                            <Loader2 className="animate-spin" />
+                          ) : entry.auth === "oauth" ? (
+                            <LogIn />
+                          ) : entry.auth === "token" ? (
+                            <KeyRound />
+                          ) : (
+                            <Plus />
+                          )}
+                          {mine ? busy.what : entry.auth === "oauth" ? "Add and sign in" : entry.auth === "token" ? "Add with a key…" : "Add"}
+                        </Button>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </fieldset>
+        );
+      })}
+    </section>
+  );
+}
+
+function PresetIntro({ entry }: { entry: McpCatalogEntry }) {
+  return (
+    <p className="text-sm text-muted-foreground">
+      {entry.description} {entry.token?.hint}{" "}
+      <button type="button" className="underline underline-offset-2 hover:text-foreground" onClick={() => openExternal(entry.docs)}>
+        How to get one
+      </button>
+    </p>
+  );
+}
+
+const hasAuthorization = (headers: Record<string, string>) => Object.keys(headers).some((k) => k.trim().toLowerCase() === "authorization");
+
+/** A saved HTTP server's login: signed in, one click to sign in, or why there's no button. */
+function SignIn({ server, onChanged }: { server: McpServerInfo; onChanged: () => Promise<void> }) {
+  const [kind, setKind] = useState<McpSignInKind | "checking" | null>(server.loggedIn ? null : "checking");
+  const { busy, failed, run } = useAction<"login" | "logout">();
+  useEffect(() => {
+    if (server.loggedIn) return;
+    let current = true;
+    mcpApi.signInKind(server.url).then(
+      (k) => current && setKind(k),
+      () => current && setKind(null),
+    );
+    return () => {
+      current = false;
+    };
+  }, [server.loggedIn, server.url]);
+
+  const logIn = () => void run("login", async () => (await mcpApi.login(server.name), onChanged()));
+  const logOut = () => void run("logout", async () => (await mcpApi.logout(server.name), setKind("oauth"), onChanged()));
+  const error = failed && <ErrorAlert title={failed.during === "login" ? "The sign-in didn't finish" : "Couldn't sign out"} error={failed.error} />;
+
+  if (server.loggedIn)
+    return (
+      <section aria-label="Sign-in" className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <CircleCheck className="size-4 text-emerald-600 dark:text-emerald-400" />
+          <span>Signed in through the browser.</span>
+          <Button type="button" size="xs" variant="outline" disabled={busy !== null} onClick={logIn}>
+            {busy === "login" ? <Loader2 className="animate-spin" /> : <LogIn />}
+            {busy === "login" ? "Waiting for the browser…" : "Sign in again"}
+          </Button>
+          <Button type="button" size="xs" variant="ghost" disabled={busy !== null} onClick={logOut}>
+            <LogOut /> Sign out
+          </Button>
+        </div>
+        {error}
+      </section>
+    );
+  if (kind === "checking")
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" /> Checking whether it needs a sign-in…
+      </p>
+    );
+  if (kind === "oauth")
+    return (
+      <Alert aria-label="Sign-in">
+        <LogIn />
+        <AlertTitle>Sign in to use it</AlertTitle>
+        <AlertDescription className="flex flex-col items-start gap-2">
+          <p>Agents get its tools once you've signed in. Your browser opens on its login page; yaah keeps the login on this machine.</p>
+          <Button type="button" size="sm" disabled={busy !== null} onClick={logIn}>
+            {busy === "login" ? <Loader2 className="animate-spin" /> : <LogIn />}
+            {busy === "login" ? "Waiting for the browser…" : "Sign in"}
+          </Button>
+          {error}
+        </AlertDescription>
+      </Alert>
+    );
+  if (kind === "manual")
+    return (
+      <Alert aria-label="Sign-in">
+        <KeyRound />
+        <AlertTitle>Needs a token</AlertTitle>
+        <AlertDescription>
+          It wants a login yaah can't open in the browser for you. Add an <code className="text-xs">Authorization</code> header below with a token
+          from the service, usually <code className="text-xs">Bearer &lt;token&gt;</code>.
+        </AlertDescription>
+      </Alert>
+    );
+  return null;
 }

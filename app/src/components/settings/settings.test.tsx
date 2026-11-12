@@ -258,3 +258,76 @@ describe("Settings → MCP servers: secrets", () => {
     expect(await within(dialog).findByText(/the environment variable `NOTES_TOKEN` was hidden; type its value again/)).toBeInTheDocument();
   });
 });
+
+describe("Settings → MCP servers: catalog", () => {
+  it("adds a sign-in server in one click: saved, logged in, then opened", async () => {
+    const { user, mock } = renderApp();
+    const dialog = await openSettings(user, "MCP servers");
+    await user.click(await within(dialog).findByRole("button", { name: "Browse catalog" }));
+
+    await user.type(within(dialog).getByRole("textbox", { name: "Search the catalog" }), "stripe");
+    expect(within(dialog).queryByRole("button", { name: "Add Linear" })).toBeNull();
+    await user.click(within(dialog).getByRole("button", { name: "Add Stripe" }));
+    expect(await within(dialog).findByText("Waiting for the browser…")).toBeInTheDocument();
+
+    // Once signed in, the new server opens in the editor.
+    expect(await within(dialog).findByRole("heading", { name: "stripe" }, { timeout: 3000 })).toBeInTheDocument();
+    expect(mock.mcpServers.find((s) => s.name === "stripe")).toMatchObject({ transport: "http", url: "https://mcp.stripe.com" });
+
+    // Back in the catalog it shows as added.
+    await user.click(within(dialog).getByRole("button", { name: "Browse catalog" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Search the catalog" }), "stripe");
+    expect(within(dialog).getByRole("button", { name: "Added as stripe" })).toBeInTheDocument();
+  });
+
+  it("opens the add form, filled in, for a server that needs a key", async () => {
+    const { user } = renderApp();
+    const dialog = await openSettings(user, "MCP servers");
+    await user.click(await within(dialog).findByRole("button", { name: "Browse catalog" }));
+    await user.click(within(dialog).getByRole("button", { name: "Add GitHub" }));
+
+    expect(await within(dialog).findByRole("heading", { name: "Add GitHub" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("textbox", { name: "URL" })).toHaveValue("https://api.githubcopilot.com/mcp/");
+    expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("github");
+    expect(within(dialog).getByText(/personal access token/)).toBeInTheDocument();
+  });
+});
+
+describe("Settings → MCP servers: sign-in", () => {
+  it("signs in right after adding a server by URL, then signs out and back in from its page", async () => {
+    const { user, mock } = renderApp();
+    const dialog = await openSettings(user, "MCP servers");
+    await user.click(within(await within(dialog).findByRole("navigation", { name: "MCP servers" })).getByRole("button", { name: "Add server" }));
+
+    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "payments");
+    await user.click(within(dialog).getByRole("combobox", { name: "Transport" }));
+    await user.click(await screen.findByRole("option", { name: "HTTP (streamable)" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "URL" }), "https://mcp.stripe.com");
+    expect(within(dialog).getByText(/your browser opens when you add it/)).toBeInTheDocument();
+    await user.click(within(dialog).getAllByRole("button", { name: "Add server" }).at(-1)!);
+    expect(await within(dialog).findByRole("button", { name: /Waiting for the browser/ })).toBeInTheDocument();
+
+    // Signed in once the browser is done.
+    expect(await within(dialog).findByText("Signed in through the browser.", undefined, { timeout: 4000 })).toBeInTheDocument();
+    expect(mock.mcpServers.find((s) => s.name === "payments")?.url).toBe("https://mcp.stripe.com");
+
+    // Signed out: one button signs in again.
+    await user.click(within(dialog).getByRole("button", { name: "Sign out" }));
+    const prompt = await within(dialog).findByRole("alert", { name: "Sign-in" });
+    expect(within(prompt).getByText("Sign in to use it")).toBeInTheDocument();
+    await user.click(within(prompt).getByRole("button", { name: "Sign in" }));
+    expect(await within(dialog).findByText("Signed in through the browser.", undefined, { timeout: 4000 })).toBeInTheDocument();
+  });
+
+  it("says a server wants a token when yaah can't sign in to it", async () => {
+    const { user } = renderApp();
+    const dialog = await openSettings(user, "MCP servers");
+    await user.click(within(await within(dialog).findByRole("navigation", { name: "MCP servers" })).getByRole("button", { name: "Add server" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "gh");
+    await user.click(within(dialog).getByRole("combobox", { name: "Transport" }));
+    await user.click(await screen.findByRole("option", { name: "HTTP (streamable)" }));
+    await user.type(within(dialog).getByRole("textbox", { name: "URL" }), "https://api.githubcopilot.com/mcp/");
+    await user.click(within(dialog).getAllByRole("button", { name: "Add server" }).at(-1)!);
+    expect(await within(dialog).findByText("Needs a token")).toBeInTheDocument();
+  });
+});

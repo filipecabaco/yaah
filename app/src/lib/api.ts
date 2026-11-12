@@ -1057,7 +1057,11 @@ export type McpServerInfo = McpServer & {
    */
   secretEnv?: string[];
   secretHeaders?: string[];
+  /** yaah holds a browser login for it (HTTP servers). */
+  loggedIn?: boolean;
 };
+/** How an HTTP server wants to be signed in to: not at all, through the browser, or with a header yaah can't get for you. */
+export type McpSignInKind = "none" | "oauth" | "manual";
 /** How a masked secret starts (mcp_servers.rs `MASK`). */
 export const SECRET_MASK = "••••";
 export type McpServerDraft = {
@@ -1123,6 +1127,8 @@ export const mcpApi = {
   /** Opens the browser on the server's login page; resolves when the login is done (or fails, or times out after 3 minutes). */
   login: (name: string) => invoke<void>("mcp_login", { name }),
   logout: (name: string) => invoke<void>("mcp_logout", { name }),
+  /** Asks the server at `url` (a few seconds) whether and how it wants a login. */
+  signInKind: (url: string) => invoke<McpSignInKind>("mcp_sign_in_kind", { url }),
   importCandidates: () => invoke<McpImportCandidate[]>("mcp_import_candidates"),
   import: (picks: { source: string; original: string }[]) => invoke<McpServerInfo[]>("import_mcp_servers", { picks }),
 };
