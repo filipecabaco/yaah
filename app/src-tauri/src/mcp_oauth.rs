@@ -121,6 +121,9 @@ fn resource_metadata_url(header: &str) -> Option<String> {
     })
 }
 
+/// What [`discover`] says when the server answered without asking for a login.
+pub const NO_LOGIN_WANTED: &str = "the server didn't ask for a login";
+
 /// Ask the server what it wants: its authorization server, and that server's endpoints.
 pub async fn discover(url: &str) -> Result<Endpoints, String> {
     let host = origin(url)?;
@@ -134,7 +137,7 @@ pub async fn discover(url: &str) -> Result<Endpoints, String> {
         .await
         .map_err(|e| format!("couldn't reach the server: {e}"))?;
     if probe.status().is_success() {
-        return Err("the server didn't ask for a login".into());
+        return Err(NO_LOGIN_WANTED.into());
     }
     let from_header = probe.headers().get(reqwest::header::WWW_AUTHENTICATE).and_then(|v| v.to_str().ok()).and_then(resource_metadata_url);
     let path = reqwest::Url::parse(url).map(|u| u.path().trim_end_matches('/').to_owned()).unwrap_or_default();

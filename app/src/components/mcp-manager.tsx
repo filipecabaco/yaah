@@ -118,7 +118,8 @@ function Body({ onClose }: { onClose: () => void }) {
         )}
         {servers?.length === 0 && !error && (
           <li className="px-2 py-6 text-sm text-muted-foreground">
-            No servers yet. Add one in Settings → MCP servers, or import the ones from Claude Code there.
+            No servers yet. Add Stripe, Cloudflare, Linear and more from the catalog in Settings → MCP servers, or import the ones from Claude Code
+            there.
           </li>
         )}
         {servers?.map((s, i) => {

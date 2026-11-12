@@ -773,6 +773,8 @@ pub struct ServerInfo {
     /// unchanged to keep the stored value, or a new one to replace it.
     pub secret_env: Vec<String>,
     pub secret_headers: Vec<String>,
+    /// yaah holds a browser login for it (HTTP servers; see `mcp_oauth.rs`).
+    pub logged_in: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -807,7 +809,8 @@ pub fn info(mut server: Server, profiles: &[agents::Profile]) -> ServerInfo {
         .map(|p| p.label.clone())
         .collect();
     let (secret_env, secret_headers) = masked(&mut server);
-    ServerInfo { command_line: server.command_line(), problem, unsupported_by, secret_env, secret_headers, server }
+    let logged_in = server.transport == Transport::Http && crate::mcp_oauth::logged_in(&server.name, &server.url);
+    ServerInfo { command_line: server.command_line(), problem, unsupported_by, secret_env, secret_headers, logged_in, server }
 }
 
 pub fn list() -> McpList {

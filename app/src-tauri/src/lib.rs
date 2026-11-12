@@ -167,6 +167,7 @@ pub fn run() {
             data_commands::mcp_status,
             data_commands::mcp_login,
             data_commands::mcp_logout,
+            data_commands::mcp_sign_in_kind,
             data_commands::import_mcp_servers,
             data_commands::list_providers,
             data_commands::save_provider,

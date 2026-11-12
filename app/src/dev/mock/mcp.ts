@@ -139,6 +139,9 @@ function unmask(d: McpServerDraft, stored: McpServer | undefined): McpServerDraf
   return { ...d, env: back(d.env, stored?.env, "environment variable"), headers: back(d.headers, stored?.headers, "header") };
 }
 
+/** Servers logged in through the browser. */
+const logins = new Set<string>();
+
 const info = (s: McpServer): McpServerInfo => {
   const [env, secretEnvKeys] = masked(s.env, secretEnv);
   const [headers, secretHeaders] = masked(s.headers, secretHeader);
@@ -151,6 +154,7 @@ const info = (s: McpServer): McpServerInfo => {
     commandLine: s.command ? [s.command, ...s.args].join(" ") : "",
     problem: s.transport === "stdio" && s.command === "uvx" ? "`uvx` isn't on your PATH, so agents won't get this server" : null,
     unsupportedBy: s.transport === "sse" ? ["Gemini CLI"] : [],
+    loggedIn: s.transport === "http" && logins.has(s.name),
   };
 };
 
@@ -179,7 +183,6 @@ function fromDraft(d: McpServerDraft): McpServer {
 }
 
 /** Servers the mock has logged in to. */
-const logins = new Set<string>();
 
 export function mcpReplies(m: Mock): Replies {
   const { state } = m;
@@ -270,6 +273,12 @@ export function mcpReplies(m: Mock): Replies {
       logins.add(name);
     },
     mcp_logout: ({ name }: { name: string }) => void logins.delete(name),
+    // Local servers answer without a login; GitHub's wants a token; any other remote one signs in.
+    mcp_sign_in_kind: async ({ url }: { url: string }) => {
+      await new Promise((r) => setTimeout(r, 300));
+      const host = new URL(url).hostname;
+      return host === "localhost" || host === "127.0.0.1" ? "none" : host === "api.githubcopilot.com" ? "manual" : "oauth";
+    },
     mcp_import_candidates: (): McpImportCandidate[] => candidates.map((c) => ({ ...c, alreadyAdded: c.alreadyAdded || taken(c.name) })),
     import_mcp_servers: ({ picks }: { picks: { source: string; original: string }[] }): McpServerInfo[] =>
       picks.map((p) => {
