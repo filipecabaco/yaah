@@ -416,6 +416,12 @@ pub async fn answer_ui(hub: State<'_, Arc<Hub>>, session_id: String, index: usiz
     hub.answer_ui(&session_id, index, values).await
 }
 
+/// The user clicked "Allow web loads" on a local preview: the URL to load it from instead.
+#[tauri::command]
+pub fn allow_preview_web(hub: State<'_, Arc<Hub>>, session_id: String, url: String) -> Result<String, String> {
+    hub.allow_preview_web(&session_id, &url)
+}
+
 /// The user changed fields of a form they haven't sent; the agent can read and edit the same draft.
 #[tauri::command]
 pub fn edit_ui(hub: State<'_, Arc<Hub>>, session_id: String, index: usize, values: serde_json::Value) -> Result<serde_json::Value, String> {

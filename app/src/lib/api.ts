@@ -934,6 +934,8 @@ export const api = {
   answerUi: (sessionId: string, index: number, values: Record<string, unknown>) => invoke<void>("answer_ui", { sessionId, index, values }),
   /** Change fields of an unsent form (the agent edits the same draft). */
   editUi: (sessionId: string, index: number, values: Record<string, unknown>) => invoke<unknown>("edit_ui", { sessionId, index, values }),
+  /** The user allowed a local preview to load from the web: the URL to load instead (a new preview id). */
+  allowPreviewWeb: (sessionId: string, url: string) => invoke<string>("allow_preview_web", { sessionId, url }),
   /** `attachments`: ids of what the composer attached (lib/attachments.ts `stage`). */
   /** Sends it, or queues it while a turn runs (Rust decides; session/queue.rs). */
   sendPrompt: (sessionId: string, text: string, mentions: string[] = [], attachments: string[] = []) =>

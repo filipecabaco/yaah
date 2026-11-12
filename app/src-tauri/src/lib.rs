@@ -222,6 +222,7 @@ pub fn run() {
             commands::import_agent_session,
             commands::answer_ui,
             commands::edit_ui,
+            commands::allow_preview_web,
             commands::rename_session,
             commands::delete_session,
             commands::search_files,

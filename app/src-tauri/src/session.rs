@@ -1082,6 +1082,12 @@ impl Hub {
         let _ = self.ui_host.set(host);
     }
 
+    /// The user allowed a local preview in this chat to load from the web: its new URL.
+    pub fn allow_preview_web(&self, session_id: &str, url: &str) -> Result<String, String> {
+        let host = self.ui_host.get().and_then(Weak::upgrade).ok_or("previews aren't being served")?;
+        host.allow_web(session_id, url)
+    }
+
     /// Teach new and reattached chats' agents about yaah's UI with `guide`.
     pub fn set_guide(&self, guide: Arc<Guide>) {
         let _ = self.guide.set(guide);

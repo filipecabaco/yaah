@@ -1278,6 +1278,8 @@ export function chatReplies(m: Mock): Replies {
       await show(sessionId, index, { ...ui, draft: { ...ui.draft, ...values }, draftBy: { ...ui.draftBy, ...by } });
       return null;
     },
+    // The dev server has no preview origin: the same URL, as if allowed.
+    allow_preview_web: ({ url }: { sessionId: string; url: string }) => Promise.resolve(url),
     cancel_turn: async ({ sessionId }: { sessionId: string }) => {
       await cancelTurn(sessionId);
       return null;
