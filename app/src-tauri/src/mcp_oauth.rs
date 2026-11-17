@@ -121,6 +121,23 @@ fn resource_metadata_url(header: &str) -> Option<String> {
     })
 }
 
+/// Where an authorization server's metadata may be, in the order the MCP spec gives.
+/// An issuer with a path (`https://h/auth/v1`) has the well-known segment inserted
+/// between host and path (RFC 8414 §3.1), so stripping the path finds nothing.
+fn metadata_urls(issuer: &str) -> Result<Vec<String>, String> {
+    let host = origin(issuer)?;
+    let path = reqwest::Url::parse(issuer).map(|u| u.path().trim_end_matches('/').to_owned()).unwrap_or_default();
+    Ok(if path.is_empty() {
+        vec![format!("{host}/.well-known/oauth-authorization-server"), format!("{host}/.well-known/openid-configuration")]
+    } else {
+        vec![
+            format!("{host}/.well-known/oauth-authorization-server{path}"),
+            format!("{host}/.well-known/openid-configuration{path}"),
+            format!("{host}{path}/.well-known/openid-configuration"),
+        ]
+    })
+}
+
 /// What [`discover`] says when the server answered without asking for a login.
 pub const NO_LOGIN_WANTED: &str = "the server didn't ask for a login";
 
@@ -155,8 +172,8 @@ pub async fn discover(url: &str) -> Result<Endpoints, String> {
     }
     let meta = {
         let mut found = None;
-        for suffix in ["oauth-authorization-server", "openid-configuration"] {
-            if let Some(m) = get_json(&format!("{}/.well-known/{suffix}", origin(&issuer)?)).await {
+        for c in metadata_urls(&issuer)? {
+            if let Some(m) = get_json(&c).await {
                 found = Some(m);
                 break;
             }

@@ -79,6 +79,22 @@ fn reads_the_metadata_url_out_of_the_header() {
 }
 
 #[test]
+fn an_issuer_with_a_path_keeps_it_in_the_metadata_url() {
+    assert_eq!(
+        metadata_urls("https://x.supabase.co/auth/v1").unwrap(),
+        [
+            "https://x.supabase.co/.well-known/oauth-authorization-server/auth/v1",
+            "https://x.supabase.co/.well-known/openid-configuration/auth/v1",
+            "https://x.supabase.co/auth/v1/.well-known/openid-configuration",
+        ]
+    );
+    assert_eq!(
+        metadata_urls("https://h:8443/").unwrap(),
+        ["https://h:8443/.well-known/oauth-authorization-server", "https://h:8443/.well-known/openid-configuration"]
+    );
+}
+
+#[test]
 fn the_challenge_is_the_hash_of_the_verifier() {
     let (verifier, challenge) = pkce();
     assert_eq!(challenge, URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes())));
