@@ -1060,6 +1060,16 @@ fn inline_files(host: &UiHost, session_id: &str, tree: &mut Value, props: &mut V
     crate::ui_files::inline(tree, props, &roots, &|p: &Path| host.preview_url(session_id, p))
 }
 
+/// Who may frame a preview (the page and its wrapper). `*` matches only
+/// http(s) origins, not the bundled app's `tauri://localhost` (macOS, Linux),
+/// so with `*` alone the webview refuses the frame and the chat shows a blank page.
+/// `frame-ancestors` checks every ancestor, so the page needs it as well as the wrapper.
+macro_rules! frame_ancestors {
+    () => {
+        "frame-ancestors * tauri:"
+    };
+}
+
 /// A previewed page loads only from its own folder (and `data:`/`blob:` URLs): no
 /// scripts, styles, fonts, images or frames from the web. Every web load is a
 /// URL the page chooses, so allowing any would let a page the agent wrote send
@@ -1067,13 +1077,19 @@ fn inline_files(host: &UiHost, session_id: &str, tree: &mut Value, props: &mut V
 /// XHR or WebSocket elsewhere, no form posts, no popups or top-level navigation
 /// (`sandbox` without `allow-popups`/`allow-top-navigation`; the same flags as
 /// the iframe in the chat).
-const PREVIEW_CSP: &str = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src 'self'; form-action 'none'; \
-    frame-ancestors *; sandbox allow-scripts allow-forms allow-modals allow-same-origin";
+const PREVIEW_CSP: &str = concat!(
+    "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; connect-src 'self'; form-action 'none'; ",
+    frame_ancestors!(),
+    "; sandbox allow-scripts allow-forms allow-modals allow-same-origin"
+);
 
 /// The policy once the user chose "Allow web loads" for a preview: CDN scripts,
 /// styles, fonts and images load, but the page still only talks to its own folder.
-const PREVIEW_WEB_CSP: &str = "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; connect-src 'self'; form-action 'none'; \
-    frame-ancestors *; sandbox allow-scripts allow-forms allow-modals allow-same-origin";
+const PREVIEW_WEB_CSP: &str = concat!(
+    "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; connect-src 'self'; form-action 'none'; ",
+    frame_ancestors!(),
+    "; sandbox allow-scripts allow-forms allow-modals allow-same-origin"
+);
 
 /// The file `rest` names inside the preview folder `dir`: never outside it (no
 /// `../`, no symlink out), and never a hidden file or folder (`.env`, `.git`).
@@ -1149,7 +1165,8 @@ fn serve_frame(folders: &Mutex<HashMap<String, Served>>, content_port: u16, req:
     );
     let csp = format!(
         "default-src 'none'; style-src 'unsafe-inline'; frame-src http://127.0.0.1:{content_port}; \
-         base-uri 'none'; form-action 'none'; frame-ancestors *"
+         base-uri 'none'; form-action 'none'; {}",
+        frame_ancestors!()
     );
     let _ = req.respond(
         Response::from_string(page)
@@ -1762,7 +1779,8 @@ mod tests {
         let mut head = String::new();
         let _ = s.read_to_string(&mut head);
         let csp = head.lines().find_map(|l| l.strip_prefix("Content-Security-Policy: ")).unwrap_or_default();
-        for part in ["connect-src 'self'", "form-action 'none'", "frame-ancestors *"] {
+        // The bundled app is `tauri://localhost`, which `*` alone doesn't match: WebKit would refuse the frame.
+        for part in ["connect-src 'self'", "form-action 'none'", "frame-ancestors * tauri:"] {
             assert!(csp.contains(part), "{part} in {csp}");
         }
         assert!(!csp.contains("https:"), "nothing from the web until the user allows it: {csp}");
@@ -1804,6 +1822,7 @@ mod tests {
         let csp = preview_csp(frame_port, &path);
         assert!(csp.contains("default-src 'none'"), "no script in the wrapper: {csp}");
         assert!(csp.contains(&format!("frame-src http://127.0.0.1:{content_port};")), "its frame goes nowhere else: {csp}");
+        assert!(csp.contains("frame-ancestors * tauri:"), "the bundled app (tauri://localhost) may frame it: {csp}");
         let (_, html) = get(frame_port, &path, "127.0.0.1");
         assert!(!html.contains("<script"), "{html}");
         assert!(html.contains("sandbox=\"allow-scripts allow-forms allow-modals allow-same-origin\""), "{html}");
