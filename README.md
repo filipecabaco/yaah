@@ -109,7 +109,7 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
 - **An editor pane, VS Code style:** open a folder to see its files, its git changes and a terminal in one pane, with no
   extensions. A file tree coloured by git status; tabs in Monaco with syntax highlighting, ⌘P to open a file and ⌘S to save;
   Source Control to stage, unstage, discard and commit (or amend) beside a commit graph; any change opens as a side-by-side diff
-  whose right side you can edit; and Ctrl+` opens a terminal underneath.
+  whose right side you can edit; and `` Ctrl+` `` opens a terminal underneath.
 - **Open in terminal, and agents' commands live:** open any folder in Ghostty, iTerm or Terminal. When an agent runs its commands
   through ACP's terminal capability, the tool card shows them live. (Claude Code's and Codex's current adapters run their own
   commands and don't use it yet.)
