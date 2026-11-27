@@ -556,7 +556,7 @@ pub(crate) async fn working_view(cwd: &Path, mode: &str, base: Option<&str>, sin
         _ => None,
     };
     let base_oid = match &base {
-        Some(b) => text(git(&root, &["rev-parse", "--verify", "-q", "--end-of-options", b], 4096).await.map(|o| o.stdout).unwrap_or_default()),
+        Some(b) => text(git(&root, &["rev-parse", "--verify", "-q", "--end-of-options", b], 4096).await.map_or_default(|o| o.stdout)),
         None => String::new(),
     };
     let fingerprint = fingerprint(&root, &status, &[mode, base.as_deref().unwrap_or(""), base_oid.trim()]);
@@ -578,8 +578,7 @@ pub(crate) async fn working_view(cwd: &Path, mode: &str, base: Option<&str>, sin
     view["diff"] = diff(&source, &root).await?;
     let untracked: Vec<&str> = parsed["files"]
         .as_array()
-        .map(|f| f.iter().filter(|f| f["worktree"] == "untracked").filter_map(|f| f["path"].as_str()).take(MAX_UNTRACKED).collect())
-        .unwrap_or_default();
+        .map_or_default(|f| f.iter().filter(|f| f["worktree"] == "untracked").filter_map(|f| f["path"].as_str()).take(MAX_UNTRACKED).collect());
     view["untracked"] = json!(untracked);
     Ok(view)
 }

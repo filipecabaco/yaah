@@ -329,7 +329,7 @@ impl Agent {
                 return send(&json!({ "jsonrpc": "2.0", "id": id, "error": { "code": -32000, "message": "Authentication required" } }));
             }
             _ => {
-                let name = std::env::var("YAAH_AGENT_NAME").map(|n| format!("{n} ")).unwrap_or_default();
+                let name = std::env::var("YAAH_AGENT_NAME").map_or_default(|n| format!("{n} "));
                 chunk(&sid, &format!("{name}echo: {text}"));
             }
         }
@@ -375,7 +375,7 @@ impl Agent {
     /// One request of each kind, about `<dir>/inside.txt`, `<dir>-other/x.txt` (a sibling whose
     /// name starts the same) and `<dir>/link` (a symlink the test points at that sibling).
     fn kinds(&mut self, sid: &str, dir: &str) {
-        let base = std::path::Path::new(dir).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let base = std::path::Path::new(dir).file_name().map_or_default(|n| n.to_string_lossy().into_owned());
         let inside = format!("{dir}/inside.txt");
         let at = |p: &str| json!([{ "path": p }]);
         let read = |id: &str, path: &str| json!({ "toolCallId": id, "title": format!("Read {path}"), "kind": "read", "locations": at(path) });

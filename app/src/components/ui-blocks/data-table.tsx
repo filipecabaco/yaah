@@ -2,12 +2,16 @@
 // Sortable columns; a filter box past 8 rows; pages past 25. Loaded on demand.
 import { useMemo, useState } from "react";
 import {
+  columnFilteringFeature,
+  createFilteredRowModel,
+  createPaginatedRowModel,
+  createSortedRowModel,
   flexRender,
-  getCoreRowModel,
-  getFilteredRowModel,
-  getPaginationRowModel,
-  getSortedRowModel,
-  useReactTable,
+  globalFilteringFeature,
+  rowPaginationFeature,
+  rowSortingFeature,
+  tableFeatures,
+  useTable,
   type ColumnDef,
   type SortingState,
 } from "@tanstack/react-table";
@@ -24,6 +28,17 @@ import { cn } from "@/lib/utils";
 import { growAttr, growClass, useUiView } from "@/components/ui-view";
 
 type Column = { key: string; label: string; align?: "left" | "right" };
+
+/** What the table does (TanStack Table v9 registers each feature and its row model explicitly): sort, filter, page. */
+const features = tableFeatures({
+  rowSortingFeature,
+  columnFilteringFeature,
+  globalFilteringFeature,
+  rowPaginationFeature,
+  sortedRowModel: createSortedRowModel(),
+  filteredRowModel: createFilteredRowModel(),
+  paginatedRowModel: createPaginatedRowModel(),
+});
 
 const FILTER_FROM = 8;
 const PAGE = 25;
@@ -80,32 +95,29 @@ export default function UiDataTable({
     [cols, rows],
   );
 
-  const columns = useMemo<ColumnDef<Obj>[]>(
+  const columns = useMemo<ColumnDef<typeof features, Obj, unknown>[]>(
     () =>
       cols.map((c) => ({
         id: c.key,
         accessorFn: (r) => r[c.key],
         header: c.label,
         cell: (info) => show(info.getValue()),
-        sortingFn: (a, b, id) => compare(a.getValue(id), b.getValue(id)),
+        sortFn: (a, b, id) => compare(a.getValue(id), b.getValue(id)),
       })),
     [cols],
   );
 
   const needle = filter.toLowerCase();
   // The React Compiler isn't used here, so its "can't memoise this" notice doesn't apply.
-  const table = useReactTable({
+  const table = useTable({
+    features,
     data: rows,
     columns,
     state: { sorting, globalFilter: filter },
     onSortingChange: setSorting,
     onGlobalFilterChange: setFilter,
     globalFilterFn: (row) => cols.some((c) => show(row.original[c.key]).toLowerCase().includes(needle)),
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    initialState: { pagination: { pageSize: PAGE } },
+    initialState: { pagination: { pageIndex: 0, pageSize: PAGE } },
     // Live re-renders shouldn't throw the user back to page 1.
     autoResetPageIndex: false,
   });
@@ -175,7 +187,7 @@ export default function UiDataTable({
             ) : (
               pageRows.map((r) => (
                 <TableRow key={r.id}>
-                  {r.getVisibleCells().map((c) => (
+                  {r.getAllCells().map((c) => (
                     <TableCell
                       key={c.id}
                       className={cn(right.has(c.column.id) && "text-right tabular-nums", resize.widths && "overflow-hidden text-ellipsis")}
@@ -193,7 +205,7 @@ export default function UiDataTable({
       {pages > 1 && (
         <div className="flex items-center justify-end gap-2 text-xs text-muted-foreground">
           <span className="tabular-nums">
-            Page {table.getState().pagination.pageIndex + 1} of {pages}
+            Page {table.state.pagination.pageIndex + 1} of {pages}
           </span>
           <Button variant="outline" size="xs" onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
             Previous

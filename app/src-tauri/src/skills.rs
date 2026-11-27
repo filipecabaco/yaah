@@ -768,9 +768,9 @@ pub async fn lookup(input: &str, installed_dirs: &[String]) -> Result<Lookup, St
                     }
                 }
                 let md = PlannedFile {
-                    repo_path: tree_md.as_ref().map(|e| e.path.clone()).unwrap_or_default(),
+                    repo_path: tree_md.as_ref().map_or_default(|e| e.path.clone()),
                     rel: "SKILL.md".into(),
-                    blob: tree_md.map(|e| e.sha).unwrap_or_default(),
+                    blob: tree_md.map_or_default(|e| e.sha),
                     size: 0,
                     executable: false,
                 };
@@ -965,7 +965,7 @@ fn known_skill(dir: &str, known: &[String]) -> Result<PathBuf, String> {
     let p = PathBuf::from(dir);
     let name = p.file_name().and_then(|n| n.to_str()).ok_or_else(|| format!("{dir} isn't a skill folder"))?;
     folder_name(name)?;
-    let parent = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
+    let parent = p.parent().map_or_default(|d| d.to_string_lossy().into_owned());
     if !known.contains(&parent) {
         return Err(format!("{dir} isn't in a skills folder of an agent yaah runs"));
     }

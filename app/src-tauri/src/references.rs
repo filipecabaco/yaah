@@ -223,7 +223,7 @@ pub fn parse_link(input: &str, gitlab_base: Option<&str>) -> Option<Token> {
     let raw = input.trim().trim_start_matches('<').trim_end_matches('>');
     let url = reqwest::Url::parse(raw).ok().filter(|u| matches!(u.scheme(), "https" | "http"))?;
     let host = url.host_str()?.to_lowercase();
-    let segs: Vec<&str> = url.path_segments().map(|s| s.filter(|p| !p.is_empty()).collect()).unwrap_or_default();
+    let segs: Vec<&str> = url.path_segments().map_or_default(|s| s.filter(|p| !p.is_empty()).collect());
     let found = |service, id: String, kind| Some(Token { service, end: id.len(), id, kind, start: 0 });
     match (host.as_str(), segs.as_slice()) {
         ("github.com" | "www.github.com", [o, r, which @ ("issues" | "pull"), n, ..]) => {
@@ -892,7 +892,7 @@ fn gitlab_row(v: &Value, kind: Kind) -> Option<Reference> {
 }
 
 fn encode(q: &str) -> String {
-    reqwest::Url::parse_with_params("http://x/", [("search", q)]).map(|u| u.query().unwrap_or_default().to_owned()).unwrap_or_default()
+    reqwest::Url::parse_with_params("http://x/", [("search", q)]).map_or_default(|u| u.query().unwrap_or_default().to_owned())
 }
 
 async fn gitlab_candidates(i: &'static Integrations, scope: &Scope, q: &str) -> Result<Vec<Candidate>, String> {

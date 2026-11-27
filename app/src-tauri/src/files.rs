@@ -22,7 +22,7 @@ pub fn search(roots: &[PathBuf], query: &str, limit: usize) -> Vec<FileMatch> {
     let mut scored = vec![];
     let mut seen = 0;
     for root in roots {
-        let prefix = if several { root.file_name().map(|n| format!("{}/", n.to_string_lossy())).unwrap_or_default() } else { String::new() };
+        let prefix = if several { root.file_name().map_or_default(|n| format!("{}/", n.to_string_lossy())) } else { String::new() };
         walk(root, root, 0, &mut seen, &mut |path, rel| {
             let label = format!("{prefix}{rel}");
             if let Some(s) = score(&q, &label.to_lowercase()) {

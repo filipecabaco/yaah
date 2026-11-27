@@ -102,14 +102,20 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
   libraries from git, or share yours as a library for your team.
 - **Projects that start from your tracker:** pick a GitHub, GitLab or Linear issue (or paste its link) and yaah creates
   the project, writes the issue into its brief, adds your local clone and drafts the first message.
-- **Split panes, terminals and diffs:** ⌘D / ⌘⇧D split the window like a terminal, ⌃⌘= balances the panes, and ⌘W on the
-  last pane goes home. A pane holds a chat, a project, your login shell (⌘T) or a read-only diff of a repo (all changes, staged,
-  unstaged, or against a branch). Open terminals and diffs are listed in the sidebar, under their project when opened from one.
+- **Split panes, editors, terminals and diffs:** ⌘D / ⌘⇧D split the window like a terminal, ⌃⌘= balances the panes, and ⌘W on the
+  last pane goes home. A pane holds a chat, a project, an editor, your login shell (⌘T) or a read-only diff of a repo (all changes,
+  staged, unstaged, or against a branch). Open editors, terminals and diffs are listed in the sidebar, under their project when
+  opened from one.
+- **An editor pane, VS Code style:** open a folder to see its files, its git changes and a terminal in one pane, with no
+  extensions. A file tree coloured by git status; tabs in Monaco with syntax highlighting, ⌘P to open a file and ⌘S to save;
+  Source Control to stage, unstage, discard and commit (or amend) beside a commit graph; any change opens as a side-by-side diff
+  whose right side you can edit; and `` Ctrl+` `` opens a terminal underneath.
 - **Open in terminal, and agents' commands live:** open any folder in Ghostty, iTerm or Terminal. When an agent runs its commands
   through ACP's terminal capability, the tool card shows them live. (Claude Code's and Codex's current adapters run their own
   commands and don't use it yet.)
 - **Resume a session…** Import a session you started in the Claude Code or Codex CLI and carry on in yaah.
-- **A calmer chat:** full-width, your message on the right and the agent's reply in a soft bubble. Runs of tool calls fold into
+- **A calmer chat:** full-width, your message on the right and the agent's reply in a soft bubble. Every chat is named after
+  its first message, even when you switched agents before sending it. Runs of tool calls fold into
   one row, screenshots agents take show inline, a chat opens at its latest message, and any rendered UI has an Expand button that
   fills a dialog.
 - **Fewer permission prompts:** reads inside the chat's folders are allowed without asking, an MCP server can be trusted in one
@@ -123,6 +129,13 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
 - **Your fonts:** pick an interface font and a code font and their sizes; they apply everywhere, terminals included.
   The two sizes are linked unless you unlink them, and ⌘= / ⌘- / ⌘0 change them from anywhere.
 - **Your model account:** goose, OpenCode and Claude Code can run on Amazon Bedrock or OpenRouter.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/public/shots/editor-pane-dark.webp">
+    <img src="site/public/shots/editor-pane-light.webp" alt="An editor pane: Source Control with staged and changed files and a commit graph, a file open as a side-by-side diff, and a terminal underneath" width="900">
+  </picture>
+</p>
 
 <p align="center">
   <picture>
@@ -149,6 +162,9 @@ in prose, and ask you questions one line at a time. yaah gives them a better way
 
 - **Agent UI is data:** components render with yaah's own building blocks, and web pages load only when you click.
 - **Read-only by default:** Postgres runs as a read-only role (yaah refuses superusers), and every tracker integration only reads.
+- **The editor writes only when you do:** a file is saved when you save it, and not if something else changed it since you
+  opened it (you choose to overwrite or take the disk's version). Paths stay inside the folder the editor opened, symlinks
+  included, and git stages, discards or commits only from your clicks; discarding asks first.
 - **The agent asks before its tools run** (edits, commands, fetches), unless you said "don't ask again", the call is a read inside the chat's folders, or it comes from an MCP server you trusted. Only yaah's own UI tools skip the prompt.
 - **MDX never runs:** yaah parses its syntax only and never evaluates imports, expressions or scripts.
 - **Secrets stay put:** tokens are in your keychain or a 0600 file. They go only to the process that needs them, and never into an agent's command line.

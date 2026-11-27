@@ -178,7 +178,7 @@ pub async fn editor_git_status(cwd: String, since: Option<String>) -> Result<Val
     // Where the pane's folder sits in the repository (`""` at its top), both real paths: how the
     // view turns a change's path into one of its own files.
     let real_root = root.canonicalize().unwrap_or_else(|_| root.clone());
-    v["prefix"] = json!(dir.strip_prefix(&real_root).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default());
+    v["prefix"] = json!(dir.strip_prefix(&real_root).map_or_default(|p| p.to_string_lossy().into_owned()));
     if v["unchanged"] != json!(true) {
         v["hasCommits"] = json!(git::has_commits(&root).await);
     }

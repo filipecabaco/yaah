@@ -55,7 +55,7 @@ async fn main() {
     );
 
     let cwd = std::env::var("YAAH_CWD").unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().into_owned());
-    let extra: Vec<String> = std::env::var("YAAH_EXTRA_DIRS").map(|v| v.split(':').map(str::to_owned).collect()).unwrap_or_default();
+    let extra: Vec<String> = std::env::var("YAAH_EXTRA_DIRS").map_or_default(|v| v.split(':').map(str::to_owned).collect());
     let sid = match conn.request("session/new", json!({ "cwd": cwd, "mcpServers": [], "additionalDirectories": extra })).await {
         Ok(v) => v["sessionId"].as_str().unwrap_or_default().to_owned(),
         Err(e) => return println!("session/new error: {e}"),

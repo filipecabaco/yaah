@@ -75,11 +75,21 @@ struct SystemState {
 }
 
 impl SystemState {
-    fn new() -> Self {
-        let mut sys = System::new();
+    /// The system as first read, or why it can't be (sysinfo doesn't support it).
+    fn new() -> Result<Self, String> {
+        let mut sys = System::new().map_err(|e| format!("can't read this system: {e}"))?;
         sys.refresh_cpu_usage();
         sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cpu());
-        Self { sys, disks: Disks::new(), refreshed: Instant::now(), last: None }
+        let disks = Disks::new().map_err(|e| format!("can't read this system's disks: {e}"))?;
+        Ok(Self { sys, disks, refreshed: Instant::now(), last: None })
+    }
+
+    /// The state in `slot`, made on first use (and tried again after a failure).
+    fn ensure(slot: &mut Option<Self>) -> Result<&mut Self, String> {
+        if slot.is_none() {
+            *slot = Some(Self::new()?);
+        }
+        slot.as_mut().ok_or_else(|| "can't read this system".to_owned())
     }
 }
 
@@ -191,7 +201,8 @@ impl Sources {
         // CPU usage is a delta between two refreshes: take the first one now, off the caller's thread.
         let first = system.clone();
         let _ = std::thread::Builder::new().name("yaah-sources-init".into()).spawn(move || {
-            first.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(SystemState::new);
+            // A failure here is reported by the first read, which tries again.
+            let _ = SystemState::ensure(&mut first.lock().unwrap_or_else(PoisonError::into_inner));
         });
         Self {
             system,
@@ -236,11 +247,9 @@ impl Sources {
             "system" => {
                 // Refreshing reads every process: off the async threads.
                 let state = self.system.clone();
-                tokio::task::spawn_blocking(move || {
-                    snapshot(state.lock().unwrap_or_else(PoisonError::into_inner).get_or_insert_with(SystemState::new))
-                })
-                .await
-                .map_err(|e| format!("system: {e}"))
+                tokio::task::spawn_blocking(move || SystemState::ensure(&mut state.lock().unwrap_or_else(PoisonError::into_inner)).map(snapshot))
+                    .await
+                    .map_err(|e| format!("system: {e}"))?
             }
             "docker.containers" => self.docker_containers().await,
             "docker.stats" => self.docker_stats(source["container"].as_str()).await,
@@ -400,19 +409,21 @@ fn snapshot(state: &mut SystemState) -> Value {
             })
         })
         .collect();
-    let load = System::load_average();
+    // Not every system has one (Windows): `null` there.
+    let load = System::load_average().ok();
+    let load_of = |f: fn(&sysinfo::LoadAvg) -> f64| load.as_ref().map(|l| round(f(l), 2));
     let v = json!({
         "host": System::host_name().unwrap_or_default(),
-        "uptimeSecs": System::uptime(),
+        "uptimeSecs": System::uptime().unwrap_or_default(),
         "cpu": round(f64::from(sys.global_cpu_usage()), 1),
-        "cores": sys.cpus().iter().map(|c| round(f64::from(c.cpu_usage()), 1)).collect::<Vec<_>>(),
+        "cores": sys.cpus().iter().map(|c| round(f64::from(c.usage()), 1)).collect::<Vec<_>>(),
         "memUsedGb": round(gib(sys.used_memory()), 2),
         "memTotalGb": round(gib(sys.total_memory()), 2),
         "memPct": percent(sys.used_memory(), sys.total_memory()),
         "swapUsedGb": round(gib(sys.used_swap()), 2),
-        "load1": round(load.one, 2),
-        "load5": round(load.five, 2),
-        "load15": round(load.fifteen, 2),
+        "load1": load_of(|l| l.one),
+        "load5": load_of(|l| l.five),
+        "load15": load_of(|l| l.fifteen),
         "disks": disks,
         "processes": top,
     });
@@ -704,7 +715,7 @@ fn shape_pr(p: &Value) -> Value {
     let review = p["reviewDecision"].as_str().unwrap_or_default();
     let mut label = state.chars();
     let state_label =
-        if draft && state == "open" { "Draft".to_owned() } else { label.next().map(|c| c.to_uppercase().chain(label).collect()).unwrap_or_default() };
+        if draft && state == "open" { "Draft".to_owned() } else { label.next().map_or_default(|c| c.to_uppercase().chain(label).collect()) };
     json!({
         "number": p["number"], "title": p["title"], "url": p["url"], "body": p["body"],
         "state": state,
@@ -740,14 +751,10 @@ fn target(url: &str) -> String {
     url.parse::<tokio_postgres::Config>().ok().map_or_else(
         || "?".into(),
         |c| {
-            let host = c
-                .get_hosts()
-                .first()
-                .map(|h| match h {
-                    tokio_postgres::config::Host::Tcp(h) => h.clone(),
-                    tokio_postgres::config::Host::Unix(p) => p.display().to_string(),
-                })
-                .unwrap_or_default();
+            let host = c.get_hosts().first().map_or_default(|h| match h {
+                tokio_postgres::config::Host::Tcp(h) => h.clone(),
+                tokio_postgres::config::Host::Unix(p) => p.display().to_string(),
+            });
             let port = c.get_ports().first().copied().unwrap_or(5432);
             format!("{host}:{port}/{}", c.get_dbname().unwrap_or(""))
         },

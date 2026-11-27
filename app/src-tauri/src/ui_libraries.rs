@@ -1130,7 +1130,7 @@ impl Library {
     pub async fn update(&self, id: &str) -> Result<LibraryUpdate, String> {
         let store = self.store()?;
         let record = store.records().into_iter().find(|r| r.id == id).ok_or_else(|| format!("no component library `{id}` is installed"))?;
-        let before = self.packs().iter().find(|p| p.id() == id).map(|p| p.loaded.digests.clone()).unwrap_or_default();
+        let before = self.packs().iter().find(|p| p.id() == id).map_or_default(|p| p.loaded.digests.clone());
         let (from, to) = match &record.source {
             LibrarySource::Git { url, git_ref } => {
                 std::fs::create_dir_all(store.staging()).map_err(|e| format!("create {}: {e}", store.staging().display()))?;
@@ -1180,7 +1180,7 @@ impl Library {
             }
         };
         self.reload();
-        let after = self.packs().iter().find(|p| p.id() == id).map(|p| p.loaded.digests.clone()).unwrap_or_default();
+        let after = self.packs().iter().find(|p| p.id() == id).map_or_default(|p| p.loaded.digests.clone());
         let changed = before
             .keys()
             .chain(after.keys())
@@ -1246,7 +1246,7 @@ impl Library {
             }
             let c = p.loaded.components.get(short).cloned().ok_or_else(|| format!("`{name}` isn't a component `{lib}` loaded"))?;
             let at = p.record.commit.as_deref().map(|s| &s[..s.len().min(7)]).or(p.loaded.manifest.version.as_deref());
-            (c, format!("{}{}", p.loaded.manifest.title, at.map(|a| format!(" @ {a}")).unwrap_or_default()))
+            (c, format!("{}{}", p.loaded.manifest.title, at.map_or_default(|a| format!(" @ {a}"))))
         };
         let new = new_name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(short);
         if !ui::valid_name(new) {

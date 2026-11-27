@@ -1084,7 +1084,7 @@ pub(crate) fn check_props(schema: &Value, props: &Value, path: &str, errs: &mut 
             errs.push(format!("{path}: missing required prop `{req}`"));
         }
     }
-    let defined: HashMap<&String, &Value> = schema["properties"].as_object().map(|p| p.iter().collect()).unwrap_or_default();
+    let defined: HashMap<&String, &Value> = schema["properties"].as_object().map_or_default(|p| p.iter().collect());
     for (k, v) in props {
         match defined.get(k) {
             None if !defined.is_empty() => errs.push(format!("{path}: `{k}` isn't in the component's props schema")),

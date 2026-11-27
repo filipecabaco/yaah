@@ -417,7 +417,7 @@ struct Seen {
 /// The processes `pid` started (and theirs), still running.
 fn descendants(pid: u32) -> Vec<(u32, String)> {
     use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System};
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else { return vec![] };
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing());
     let mut found: Vec<(u32, String)> = vec![];
     let mut frontier = vec![pid];
@@ -436,7 +436,7 @@ fn descendants(pid: u32) -> Vec<(u32, String)> {
 fn still_running(pids: &[(u32, String)]) -> Vec<(u32, String)> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let ids: Vec<Pid> = pids.iter().map(|(p, _)| Pid::from_u32(*p)).collect();
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else { return vec![] };
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&ids), true, ProcessRefreshKind::nothing());
     pids.iter().filter(|(p, _)| sys.process(Pid::from_u32(*p)).is_some()).cloned().collect()
 }
@@ -444,7 +444,7 @@ fn still_running(pids: &[(u32, String)]) -> Vec<(u32, String)> {
 fn kill_all(pids: &[(u32, String)]) {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
     let ids: Vec<Pid> = pids.iter().map(|(p, _)| Pid::from_u32(*p)).collect();
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else { return };
     sys.refresh_processes_specifics(ProcessesToUpdate::Some(&ids), true, ProcessRefreshKind::nothing());
     for id in ids {
         if let Some(p) = sys.process(id) {
@@ -683,7 +683,7 @@ async fn session_check(conn: &Connection, params: &Value, expect: &Expect, updat
 /// Clean shutdown: close stdin, it exits, and nothing it started keeps running.
 /// Anything left is killed.
 async fn shutdown_check(conn: &Connection) -> Check {
-    let children = conn.pid().map(descendants).unwrap_or_default();
+    let children = conn.pid().map_or_default(descendants);
     let stopped = conn.shutdown(EXIT_TIMEOUT).await;
     // Give its children a moment to see their parent go.
     let mut left = still_running(&children);
@@ -731,7 +731,7 @@ fn tool_plan(cwd: &Path) -> Vec<Plan> {
 /// Every running process from `pid` down, with its command line.
 fn argv_tree(pid: u32) -> Vec<(u32, String)> {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else { return vec![] };
     sys.refresh_processes_specifics(ProcessesToUpdate::All, true, ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always));
     let mut ids = vec![pid];
     ids.extend(descendants(pid).into_iter().map(|(p, _)| p));
@@ -939,7 +939,7 @@ fn argv_check(conn: &Connection, argv: &[String], secrets: &[&str]) -> Check {
     let holds = |a: &str| secrets.iter().any(|s| a.contains(s));
     let redact = |a: &str| secrets.iter().fold(a.to_owned(), |a, s| a.replace(s, "<key>"));
     let mut exposed: Vec<String> = argv.iter().filter(|a| holds(a)).map(|a| redact(a)).collect();
-    let tree = conn.pid().map(argv_tree).unwrap_or_default();
+    let tree = conn.pid().map_or_default(argv_tree);
     exposed.extend(tree.iter().filter(|(_, a)| holds(a)).map(|(p, a)| {
         let redacted = redact(a);
         let at = redacted.find("<key>").unwrap_or(0);

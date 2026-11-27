@@ -123,7 +123,7 @@ pub async fn read_source(
     source: serde_json::Value,
     session: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let roots = session.map(|id| hub.session_roots(&id)).unwrap_or_default();
+    let roots = session.map_or_default(|id| hub.session_roots(&id));
     sources.read_in(&source, &roots).await
 }
 

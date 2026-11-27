@@ -263,7 +263,7 @@ const USAGE_OUT: u64 = 7;
 #[allow(clippy::single_match_else, reason = "each answer is a tool call or text, side by side")]
 impl Reply<'_> {
     fn args(&self) -> String {
-        self.call.map(|(_, a)| a.to_string()).unwrap_or_default()
+        self.call.map_or_default(|(_, a)| a.to_string())
     }
 
     fn chat(&self) -> Value {

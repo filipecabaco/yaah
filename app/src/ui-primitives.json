@@ -1178,7 +1178,7 @@
     "kinds": {
       "system": {
         "params": {},
-        "returns": "{ host, uptimeSecs, cpu (%), cores: [%], memUsedGb, memTotalGb, memPct, swapUsedGb, load1, load5, load15, disks: [{ mount, totalGb, usedGb, pct }], processes: [{ pid, name, cpu, memGb }] (top 8 by CPU) }"
+        "returns": "{ host, uptimeSecs, cpu (%), cores: [%], memUsedGb, memTotalGb, memPct, swapUsedGb, load1, load5, load15 (null where the system has no load average), disks: [{ mount, totalGb, usedGb, pct }], processes: [{ pid, name, cpu, memGb }] (top 8 by CPU) }"
       },
       "docker.containers": {
         "params": {},

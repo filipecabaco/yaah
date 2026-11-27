@@ -731,7 +731,7 @@ impl Integrations {
             return Err(format!("{label}: {message}"));
         }
         if !status.is_success() {
-            return Err(format!("{label}: HTTP {status}{}", r["message"].as_str().map(|m| format!(": {m}")).unwrap_or_default()));
+            return Err(format!("{label}: HTTP {status}{}", r["message"].as_str().map_or_default(|m| format!(": {m}"))));
         }
         if !r.is_object() {
             return Err(format!("{label}: the answer wasn't JSON"));
@@ -1057,7 +1057,7 @@ fn type_rank(t: &str) -> usize {
 }
 
 fn shape_board(team: &Value, issues: &Value) -> Value {
-    let mut states: Vec<&Value> = team["states"]["nodes"].as_array().map(|a| a.iter().collect()).unwrap_or_default();
+    let mut states: Vec<&Value> = team["states"]["nodes"].as_array().map_or_default(|a| a.iter().collect());
     states.sort_by(|a, b| {
         type_rank(a["type"].as_str().unwrap_or(""))
             .cmp(&type_rank(b["type"].as_str().unwrap_or("")))
@@ -1083,7 +1083,7 @@ fn shape_board(team: &Value, issues: &Value) -> Value {
 
 fn shape_cycle(team: &Value, today: i64) -> Value {
     let c = &team["activeCycle"];
-    let nums = |k: &str| c[k].as_array().map(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>()).unwrap_or_default();
+    let nums = |k: &str| c[k].as_array().map_or_default(|a| a.iter().filter_map(Value::as_f64).collect::<Vec<_>>());
     let (scope, done, issues, issues_done) =
         (nums("scopeHistory"), nums("completedScopeHistory"), nums("issueCountHistory"), nums("completedIssueCountHistory"));
     let start = day_number(c["startsAt"].as_str().unwrap_or(""));

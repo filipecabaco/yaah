@@ -263,7 +263,7 @@ fn parse_models(v: &Value) -> Option<ConfigOption> {
 /// composer's model and effort marked. Empty when it carries none.
 pub fn offered(v: &Value) -> Vec<ConfigOption> {
     let mut options: Vec<ConfigOption> =
-        v["configOptions"].as_array().map(|a| a.iter().filter_map(parse_option).take(MAX_OPTIONS).collect()).unwrap_or_default();
+        v["configOptions"].as_array().map_or_default(|a| a.iter().filter_map(parse_option).take(MAX_OPTIONS).collect());
     let mut ids = BTreeSet::new();
     options.retain(|o| ids.insert(o.id.clone()));
     let has_model = |options: &[ConfigOption]| options.iter().any(|o| o.category.as_deref() == Some("model") || o.id == "model");
@@ -375,7 +375,7 @@ impl Hub {
     }
 
     fn profile_defaults(&self, profile: &str) -> BTreeMap<String, String> {
-        self.config_defaults.get().map(|f| defaults_in(f, profile)).unwrap_or_default()
+        self.config_defaults.get().map_or_default(|f| defaults_in(f, profile))
     }
 
     /// The model and effort options of `account_id`'s newest chat that has any.
@@ -388,7 +388,7 @@ impl Hub {
                 newest = Some((info.created_at, info.config.options.clone()));
             }
         }
-        newest.map(|(_, o)| o).unwrap_or_default().into_iter().filter(|o| o.role.is_some()).collect()
+        newest.map_or_default(|(_, o)| o).into_iter().filter(|o| o.role.is_some()).collect()
     }
 
     /// Settings → Agents: what a profile's new chats start with.

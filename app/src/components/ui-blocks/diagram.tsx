@@ -23,7 +23,16 @@ const appTheme = () => (document.documentElement.classList.contains("dark") ? "d
 // Every diagram is drawn once per theme; reopening a chat shows it from here.
 const cache = new DiagramCache(async (id, text, theme) => {
   if (initialized !== theme) {
-    mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: theme as "dark" | "neutral", fontFamily: "inherit" });
+    // Mermaid 12 lays out and colours flowcharts, state and class diagrams anew by default; dagre and
+    // the classic look keep agents' diagrams as they were drawn before.
+    mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: "strict",
+      theme: theme as "dark" | "neutral",
+      fontFamily: "inherit",
+      layout: "dagre",
+      look: "classic",
+    });
     initialized = theme;
   }
   const { svg } = await mermaid.render(id, text);
