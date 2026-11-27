@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, FolderGit2, MessageSquarePlus, SquareTerminal } from "lucide-react";
 import { AgentMenu } from "@/components/agent-choice";
 import { Mark } from "@/components/brand/mark";
@@ -44,6 +44,8 @@ const ProjectView = preloadable(() => import("@/components/project-view").then((
 const McpManager = preloadable(() => import("@/components/mcp-manager").then((m) => m.McpManager));
 const LoginDialog = preloadable(() => import("@/components/login-dialog").then((m) => m.LoginDialog));
 const NewProjectDialog = preloadable(() => import("@/components/new-project-dialog").then((m) => m.NewProjectDialog));
+// Monaco is big: loaded when the first editor pane opens, never preloaded at idle.
+const EditorPane = lazy(() => import("@/components/editor/editor-pane"));
 const RepoPicker = preloadable(() => import("@/components/repo-picker").then((m) => m.RepoPicker));
 
 /** True from the first time `on` is, so a dialog's code loads only once it's wanted, and then stays for its close animation. */
@@ -102,13 +104,13 @@ export default function App() {
   // Side panes beside a chat (a diff, a UI moved out of it): the agent's `ui_open_pane` and "Open in a side pane".
   const uiPanes = useSidePanes(y);
   const select = y.setSelection;
-  // Terminal, diff and UI panes, listed in the sidebar: under the project each was opened from, the rest
+  // Terminal, diff, editor and UI panes, listed in the sidebar: under the project each was opened from, the rest
   // beside the chats (a link to a project that's gone counts as none). Stable while the tree and projects are.
   const { openPanes, projectPanes } = useMemo(() => {
     const loose: Pane[] = [];
     const byProject: Record<string, Pane[]> = {};
     for (const p of panes.panes) {
-      if (p.content?.kind !== "terminal" && p.content?.kind !== "diff" && p.content?.kind !== "ui") continue;
+      if (p.content?.kind !== "terminal" && p.content?.kind !== "diff" && p.content?.kind !== "editor" && p.content?.kind !== "ui") continue;
       // A chat's own terminal (⌘J) is that chat, not another pane.
       if (p.content.kind === "terminal" && p.content.chatId && y.sessions[p.content.chatId]) continue;
       const project = linkedProject(p.content);
@@ -144,6 +146,7 @@ export default function App() {
   const sidebar = {
     onProjectTerminal: useCallback((id: string) => openForProject(id, "terminal"), [openForProject]),
     onProjectDiff: useCallback((id: string) => openForProject(id, "diff"), [openForProject]),
+    onProjectEditor: useCallback((id: string) => openForProject(id, "editor"), [openForProject]),
     onManageAgents: useCallback(() => setSetup({ kind: "manage", id: agentId || undefined }), [agentId]),
     onSettings: useCallback(() => setSetup({ kind: "settings" }), []),
     onNewQuickChat: useCallback(() => withAgent(() => newQuickChat()), [withAgent, newQuickChat]),
@@ -405,6 +408,7 @@ export default function App() {
             onLogin={setLoginFor}
             onNewTerminal={sidebar.onProjectTerminal}
             onOpenDiff={sidebar.onProjectDiff}
+            onOpenEditor={sidebar.onProjectEditor}
             // Asked from the sidebar, which acts on the focused pane.
             askDelete={focused && askDelete === pr.id}
             onAskDeleteSeen={clearAskDelete}
@@ -448,6 +452,20 @@ export default function App() {
           onClose={() => closePaneById(p.id)}
         />
       );
+    } else if (c?.kind === "editor") {
+      labels[p.id] = `Editor: ${c.cwd ? baseName(c.cwd) : "pick a folder"}`;
+      contents[p.id] = (
+        <Suspense fallback={blank}>
+          <EditorPane
+            pane={p.id}
+            content={c}
+            chats={y.chatOrder}
+            projects={y.orderedProjects}
+            onContent={(next) => setPaneContent(p.id, next)}
+            onClose={() => closePaneById(p.id)}
+          />
+        </Suspense>
+      );
     } else if (c?.kind === "ui") {
       const s = y.sessions[c.chat];
       labels[p.id] = `UI from ${s?.title ?? "a chat"}`;
@@ -466,6 +484,7 @@ export default function App() {
           onOpen={(s) => setPaneContent(p.id, s)}
           onNewTerminal={(cwd) => setPaneContent(p.id, { kind: "terminal", cwd })}
           onNewDiff={(cwd) => setPaneContent(p.id, { kind: "diff", cwd })}
+          onNewEditor={(cwd) => setPaneContent(p.id, { kind: "editor", cwd })}
           onResume={(accountId, s) => y.resumeSession(accountId, s, p.id)}
           // Esc on an empty search: the pane goes (the last one goes home instead).
           onClose={() => {

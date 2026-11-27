@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 import { displayTitle } from "@/lib/chat-title";
 import {
+  Code2,
   Bot,
   ChevronDown,
   ChevronRight,
@@ -62,7 +63,7 @@ import {
   type SessionInfo,
 } from "@/lib/api";
 import { baseName } from "@/lib/format";
-import type { Pane } from "@/lib/layout";
+import { isFolderPane, type Pane } from "@/lib/layout";
 import { usePaneInfo } from "@/lib/pane-info";
 import type { Selection } from "@/hooks/use-yaah";
 import { useTrafficLights } from "@/hooks/use-titlebar";
@@ -113,6 +114,7 @@ type Props = {
   /** A terminal or diff pane in the project's first repo, listed under it (its context menu). */
   onProjectTerminal: (projectId: string) => void;
   onProjectDiff: (projectId: string) => void;
+  onProjectEditor: (projectId: string) => void;
   /** The pane the keyboard is in. */
   focusedPaneId: string;
   onFocusPane: (id: string) => void;
@@ -274,6 +276,7 @@ export const Sidebar = memo(function Sidebar(props: Props) {
                       onDelete={props.onDeleteProject}
                       onTerminal={props.onProjectTerminal}
                       onDiff={props.onProjectDiff}
+                      onEditor={props.onProjectEditor}
                       panes={props.projectPanes[p.id] ?? NO_PANES}
                       focusedPaneId={props.focusedPaneId}
                       onFocusPane={props.onFocusPane}
@@ -437,6 +440,7 @@ function ProjectNode({
   onDelete,
   onTerminal,
   onDiff,
+  onEditor,
   panes,
   focusedPaneId,
   onFocusPane,
@@ -455,6 +459,7 @@ function ProjectNode({
   onDelete: (id: string) => void;
   onTerminal: (id: string) => void;
   onDiff: (id: string) => void;
+  onEditor: (id: string) => void;
   /** Its open terminal and diff panes, listed after its chats. */
   panes: Pane[];
   focusedPaneId: string;
@@ -478,6 +483,7 @@ function ProjectNode({
         onDelete={onDelete}
         onTerminal={onTerminal}
         onDiff={onDiff}
+        onEditor={onEditor}
       >
         <div
           className={cn(
@@ -625,6 +631,7 @@ function ProjectMenu({
   onDelete,
   onTerminal,
   onDiff,
+  onEditor,
   children,
 }: {
   project: Project;
@@ -639,6 +646,7 @@ function ProjectMenu({
   onDelete: (id: string) => void;
   onTerminal: (id: string) => void;
   onDiff: (id: string) => void;
+  onEditor: (id: string) => void;
   children: ReactElement;
 }) {
   return (
@@ -662,6 +670,9 @@ function ProjectMenu({
         </ContextMenuItem>
         <ContextMenuItem onSelect={() => onDiff(project.id)}>
           <GitCompare /> Open diff
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onEditor(project.id)}>
+          <Code2 /> Open in editor
         </ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem onSelect={() => onRename(project.id)}>
@@ -818,12 +829,13 @@ function PaneRow({
   const info = usePaneInfo(pane.id);
   const content = pane.content;
   const diff = content?.kind === "diff";
+  const editor = content?.kind === "editor";
   // A chat's UI moved into a pane: named by the UI, its chat beside it (ui-pane.tsx publishes both).
   const ui = content?.kind === "ui";
-  const kind = ui ? "UI" : diff ? "Diff" : "Terminal";
-  const cwd = content?.kind === "terminal" || content?.kind === "diff" ? content.cwd : undefined;
+  const kind = ui ? "UI" : diff ? "Diff" : editor ? "Editor" : "Terminal";
+  const cwd = isFolderPane(content) ? content.cwd : undefined;
   const name = info?.title ?? (cwd ? baseName(cwd) : kind);
-  const Icon = ui ? LayoutPanelTop : diff ? GitCompare : SquareTerminal;
+  const Icon = ui ? LayoutPanelTop : diff ? GitCompare : editor ? Code2 : SquareTerminal;
   return (
     <li>
       <ContextMenu>

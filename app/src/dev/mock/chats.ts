@@ -1167,7 +1167,14 @@ export function chatReplies(m: Mock): Replies {
       if (queued) return queued;
       // references.rs reads the message's `github#…` tokens before the turn starts.
       if (referencesIn(state, text).length) await m.wait(400);
-      if (!state.transcripts[sessionId]?.length) s.title = (text.split("\n")[0] ?? "").slice(0, 60);
+      // As session.rs: named by the first message that can name it while it still has the placeholder
+      // (an agent switch or added folders before it are entries too, so "no entries yet" isn't the test).
+      const first =
+        text
+          .split("\n")
+          .find((l) => l.trim())
+          ?.trim() ?? files[0]?.name;
+      if (s.title === "New chat" && first) s.title = first.slice(0, 60);
       // The turn runs on after the command returns, as in Rust, where the chat is running from here on
       // (so a message sent before the recording's first step queues rather than replacing this turn).
       s.running = true;

@@ -10,6 +10,8 @@
 //! validated before they reach the command line, and come after
 //! `--end-of-options` / `--` anyway. Output is capped at [`MAX_TEXT`].
 
+pub(crate) mod editor;
+
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

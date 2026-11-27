@@ -43,11 +43,16 @@ export function TerminalFolders({
   onPick: (cwd: string | undefined) => void;
   onBack: () => void;
   /** What the folder is for: a terminal's start (with the default folder as a choice), or a diff to read. */
-  purpose?: "terminal" | "diff";
+  purpose?: "terminal" | "diff" | "editor";
 }) {
   const [search, setSearch] = useState("");
   const folders = useMemo(() => knownFolders(chats, projects), [chats, projects]);
-  const diff = purpose === "diff";
+  const diff = purpose !== "terminal";
+  const words = {
+    terminal: { title: "Folder for the new terminal", heading: "Start the shell in" },
+    diff: { title: "Folder with the repository", heading: "Show the changes of" },
+    editor: { title: "Folder to open in the editor", heading: "Open in the editor" },
+  }[purpose];
   const fixed: Folder[] = [
     ...(diff ? [] : [{ id: "default", icon: <House />, label: "Default folder", detail: "the last one used, or home" }]),
     { id: "browse", icon: <FolderSearch />, label: "Choose a folder…", browse: true },
@@ -58,17 +63,12 @@ export function TerminalFolders({
     : [...fixed, ...folders.slice(0, SHOWN * 2)];
   const pick = async (f: Folder) => {
     if (!f.browse) return onPick(f.path);
-    const dir = await open({ directory: true, title: diff ? "Folder with the repository" : "Folder for the new terminal" });
+    const dir = await open({ directory: true, title: words.title });
     if (typeof dir === "string") onPick(dir);
   };
 
   return (
-    <Command
-      shouldFilter={false}
-      vimBindings={false}
-      className="h-auto rounded-xl! border shadow-xs"
-      label={diff ? "Folder with the repository" : "Folder for the new terminal"}
-    >
+    <Command shouldFilter={false} vimBindings={false} className="h-auto rounded-xl! border shadow-xs" label={words.title}>
       <CommandInput
         data-pane-autofocus
         autoFocus
@@ -84,7 +84,7 @@ export function TerminalFolders({
         }}
       />
       <CommandList className="max-h-[50vh]">
-        <CommandGroup heading={diff ? "Show the changes of" : "Start the shell in"}>
+        <CommandGroup heading={words.heading}>
           {list.map((f) => (
             <CommandItem key={f.id} value={f.id} title={f.path ? compactPath(f.path) : undefined} onSelect={() => void pick(f)}>
               {f.icon ?? <FolderOpen />}

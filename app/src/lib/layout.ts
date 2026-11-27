@@ -1,6 +1,6 @@
 // Split panes: the main area as a tree of row and column splits (Ghostty-style),
 // each leaf a pane showing a chat, a project, the component library, a picker, a
-// terminal, a diff, a chat's UI or the home screen. Pure functions over plain data; the app keeps the tree in
+// terminal, a diff, an editor, a chat's UI or the home screen. Pure functions over plain data; the app keeps the tree in
 // use-yaah.ts and Rust saves it (settings.rs `layout`, checked and pruned by layout.rs).
 
 /**
@@ -19,6 +19,8 @@ export type Selection =
   /** `chatId`: the chat this terminal was switched to from with ⌘J, in the same pane; it stands in for that chat. */
   | { kind: "terminal"; cwd?: string; id?: string; projectId?: string; chatId?: string }
   | { kind: "diff"; cwd?: string; mode?: DiffMode; base?: string; projectId?: string }
+  /** The files of `cwd` with its repository's Source Control, VS Code style; `file` (relative to `cwd`) is the one it had open. */
+  | { kind: "editor"; cwd?: string; file?: string; projectId?: string }
   | { kind: "ui"; chat: string; index: number }
   | null;
 
@@ -125,7 +127,10 @@ export function closePane(layout: Layout, id: string): Layout {
  * mode and base can change). Opening it again reuses that pane instead of stacking another.
  */
 export function showing(layout: Layout, content: Selection): Pane | undefined {
-  const same = (c: Selection) => (content?.kind === "diff" && c?.kind === "diff" ? !!content.cwd && c.cwd === content.cwd : sameContent(c, content));
+  const same = (c: Selection) =>
+    (content?.kind === "diff" && c?.kind === "diff") || (content?.kind === "editor" && c?.kind === "editor")
+      ? !!content.cwd && c.cwd === content.cwd
+      : sameContent(c, content);
   return panesOf(layout.root).find((p) => same(p.content));
 }
 
@@ -193,12 +198,16 @@ export function shownUis(layout: Layout): Map<string, string> {
 
 export const uiKey = (chat: string, index: number) => `${index}\u0000${chat}`;
 
-/** The project a terminal or diff pane belongs to, if it was opened from one. */
-export const linkedProject = (c: Selection): string | undefined => (c?.kind === "terminal" || c?.kind === "diff" ? c.projectId : undefined);
+/** A pane working in a folder that can belong to a project: a terminal, a diff or an editor. */
+export const isFolderPane = (c: Selection): c is Extract<Selection, { kind: "terminal" | "diff" | "editor" }> =>
+  c?.kind === "terminal" || c?.kind === "diff" || c?.kind === "editor";
+
+/** The project a terminal, diff or editor pane belongs to, if it was opened from one. */
+export const linkedProject = (c: Selection): string | undefined => (isFolderPane(c) ? c.projectId : undefined);
 
 /** `c` without its project link when `keep` rejects that project (deleted): the pane goes on working, unlinked. */
 export function unlinkUnless(c: Selection, keep: (projectId: string) => boolean): Selection {
-  if ((c?.kind !== "terminal" && c?.kind !== "diff") || !c.projectId || keep(c.projectId)) return c;
+  if (!isFolderPane(c) || !c.projectId || keep(c.projectId)) return c;
   const next = { ...c };
   delete next.projectId;
   return next;
@@ -239,6 +248,7 @@ export function sameContent(a: Selection, b: Selection): boolean {
   if (!a || !b || a.kind !== b.kind) return false;
   if (a.kind === "terminal") return b.kind === "terminal" && a.id === b.id && a.cwd === b.cwd && a.projectId === b.projectId;
   if (a.kind === "diff") return b.kind === "diff" && a.cwd === b.cwd && a.mode === b.mode && a.base === b.base && a.projectId === b.projectId;
+  if (a.kind === "editor") return b.kind === "editor" && a.cwd === b.cwd && a.file === b.file && a.projectId === b.projectId;
   if (a.kind === "ui") return b.kind === "ui" && a.chat === b.chat && a.index === b.index;
   return !("id" in a) || a.id === (b as { id: string }).id;
 }
