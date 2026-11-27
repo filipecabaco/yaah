@@ -12,6 +12,7 @@ mod commands;
 mod config_commands;
 mod data_commands;
 mod diff_commands;
+mod editor_commands;
 mod files;
 pub mod fonts;
 pub mod integrations;
@@ -243,6 +244,18 @@ pub fn run() {
             config_commands::agent_config_defaults,
             config_commands::set_agent_config_default,
             diff_commands::diff_pane_read,
+            editor_commands::editor_list,
+            editor_commands::editor_read,
+            editor_commands::editor_write,
+            editor_commands::editor_create,
+            editor_commands::editor_find,
+            editor_commands::editor_git_status,
+            editor_commands::editor_git_file,
+            editor_commands::editor_git_stage,
+            editor_commands::editor_git_unstage,
+            editor_commands::editor_git_discard,
+            editor_commands::editor_git_commit,
+            editor_commands::editor_git_graph,
             terminal_commands::terminal_open,
             terminal_commands::terminal_attach,
             terminal_commands::terminal_detach,

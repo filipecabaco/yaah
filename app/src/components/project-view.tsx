@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { displayTitle } from "@/lib/chat-title";
-import { ChevronDown, FolderGit2, GitCompare, Loader2, MessageSquarePlus, ShieldCheck, SquareTerminal, Trash2, X } from "lucide-react";
+import { ChevronDown, Code2, FolderGit2, GitCompare, Loader2, MessageSquarePlus, ShieldCheck, SquareTerminal, Trash2, X } from "lucide-react";
 import { AgentMenu, AgentSelect } from "@/components/agent-choice";
 import { ChatMenu } from "@/components/menus";
 import { RepoPicker } from "@/components/repo-picker";
@@ -34,6 +34,7 @@ type Props = {
   /** A terminal or diff pane to the right, in the project's first repo and listed under it in the sidebar. */
   onNewTerminal?: (projectId: string) => void;
   onOpenDiff?: (projectId: string) => void;
+  onOpenEditor?: (projectId: string) => void;
   /** Set by the sidebar's Delete… item: show the delete confirmation. */
   askDelete?: boolean;
   onAskDeleteSeen?: () => void;
@@ -58,6 +59,7 @@ export function ProjectView({
   onLogin,
   onNewTerminal,
   onOpenDiff,
+  onOpenEditor,
   askDelete,
   onAskDeleteSeen,
   askRename,
@@ -381,9 +383,14 @@ export function ProjectView({
                 <GitCompare /> Open diff
               </Button>
             )}
+            {onOpenEditor && (
+              <Button variant="outline" size="sm" onClick={() => onOpenEditor(project.id)}>
+                <Code2 /> Open in editor
+              </Button>
+            )}
           </div>
           <p className="text-xs text-muted-foreground">
-            Chats, terminals and diffs open in the first repo; chats can work across the rest. Changes apply to new chats.
+            Chats, terminals, diffs and editors open in the first repo; chats can work across the rest. Changes apply to new chats.
           </p>
           <RepoPicker
             open={picking}

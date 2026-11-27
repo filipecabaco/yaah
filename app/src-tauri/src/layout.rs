@@ -1,6 +1,6 @@
 //! The window's layout, as the user left it: the split panes (a tree of row and
 //! column splits, each pane showing a chat, a project, the component library, the
-//! picker, a terminal, a diff, a chat's UI or the home screen) and the sidebar (hidden or not, its width). Saved in
+//! picker, a terminal, a diff, an editor, a chat's UI or the home screen) and the sidebar (hidden or not, its width). Saved in
 //! `settings.json` (`layout`, `sidebar`) through `settings.rs`; read back checked,
 //! with the panes on chats or projects deleted since dropped.
 //!
@@ -62,6 +62,17 @@ pub enum Content {
         #[serde(default, rename = "projectId", skip_serializing_if = "Option::is_none")]
         project_id: Option<String>,
     },
+    /// An editor pane: the files of folder `cwd` with its repository's Source Control, VS Code
+    /// style. `file`: the file it had open (relative to `cwd`), reopened after a restart.
+    /// `project_id` as for a terminal.
+    Editor {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        #[serde(default, rename = "projectId", skip_serializing_if = "Option::is_none")]
+        project_id: Option<String>,
+    },
     /// A UI the agent rendered in chat `chat`, moved out of its transcript into a pane
     /// (`ui_open_pane`, or the entry's own "Open in a side pane"). `index` is the entry's place
     /// in the transcript. It goes with its chat.
@@ -95,14 +106,19 @@ impl Content {
                     && base.as_ref().is_none_or(|b| b.len() <= MAX_FIELD && !b.contains('\0'))
                     && sane_project(project_id.as_ref())
             }
+            Self::Editor { cwd, file, project_id } => {
+                cwd.as_ref().is_none_or(|c| c.len() <= MAX_FIELD && !c.contains('\0'))
+                    && file.as_ref().is_none_or(|f| f.len() <= MAX_FIELD && !f.contains('\0'))
+                    && sane_project(project_id.as_ref())
+            }
             Self::Ui { chat, .. } => !chat.is_empty() && chat.len() <= MAX_CHAT_ID && !chat.chars().any(char::is_control),
             _ => true,
         }
     }
 
-    /// A terminal or diff no longer belongs to a project that's gone; it stays open, unlinked.
+    /// A terminal, diff or editor no longer belongs to a project that's gone; it stays open, unlinked.
     fn unlink_gone(&mut self, project_exists: &impl Fn(&str) -> bool) {
-        if let Self::Terminal { project_id, .. } | Self::Diff { project_id, .. } = self
+        if let Self::Terminal { project_id, .. } | Self::Diff { project_id, .. } | Self::Editor { project_id, .. } = self
             && project_id.as_deref().is_some_and(|p| !project_exists(p))
         {
             *project_id = None;
@@ -261,7 +277,7 @@ impl Layout {
             return Err(format!("two panes or splits are called {dup}"));
         }
         if !self.root.sane() {
-            return Err("a terminal, diff or UI pane's folder, id, chat or project isn't one the UI makes".into());
+            return Err("a terminal, diff, editor or UI pane's folder, id, chat or project isn't one the UI makes".into());
         }
         let root = self.root.with_sane_ratios();
         let mut panes = vec![];
@@ -450,6 +466,26 @@ mod tests {
         assert_eq!(pruned.pane_ids(), ["p2", "p3"]);
         let long = json!({ "root": pane("p1", json!({ "kind": "diff", "base": "x".repeat(5000) })), "focused": "p1" });
         assert!(from_saved(Some(&long)).is_none());
+    }
+
+    #[test]
+    fn editor_panes_round_trip_and_lose_only_a_gone_project() {
+        let saved = json!({
+            "root": split(
+                "s1",
+                "row",
+                0.5,
+                pane("p1", json!({ "kind": "editor", "cwd": "/work/repo", "file": "src/main.rs", "projectId": "gone" })),
+                pane("p2", json!({ "kind": "editor" })),
+            ),
+            "focused": "p1",
+        });
+        let l = from_saved(Some(&saved)).expect("valid");
+        assert_eq!(serde_json::to_value(&l).unwrap(), saved, "saved as the UI sent it");
+        let pruned = serde_json::to_value(l.pruned(|_| false, |_| false)).unwrap();
+        assert_eq!(pruned["root"]["a"]["content"], json!({ "kind": "editor", "cwd": "/work/repo", "file": "src/main.rs" }));
+        let bad = json!({ "root": pane("p1", json!({ "kind": "editor", "file": "a\u{0}b" })), "focused": "p1" });
+        assert!(from_saved(Some(&bad)).is_none());
     }
 
     #[test]

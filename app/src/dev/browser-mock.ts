@@ -9,6 +9,7 @@ import { attachmentReplies, installDragBridge, pickAttachments } from "./mock/at
 import { chatReplies, stopTurn } from "./mock/chats";
 import { configReplies } from "./mock/config";
 import { diffReplies } from "./mock/diff";
+import { editorReplies } from "./mock/editor";
 import type { Mock, Replies } from "./mock/context";
 import { integrationReplies } from "./mock/integrations";
 import { libraryReplies, pickFolder } from "./mock/library";
@@ -89,6 +90,7 @@ export function installBrowserMock(options: BrowserMockOptions = {}) {
     ...referenceReplies(m),
     ...terminalReplies(m),
     ...diffReplies(),
+    ...editorReplies(),
     ...resumeReplies(m),
     ...attachmentReplies(m),
     // Plugins: a folder picker (a sample folder on the library screens, cancelled elsewhere), and links and folders that open nowhere.

@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { Yaah } from "@/hooks/use-yaah";
 import type { Project } from "@/lib/api";
-import type { Selection } from "@/lib/layout";
+import { isFolderPane, type Selection } from "@/lib/layout";
 import { focusPaneDom } from "@/lib/pane-focus";
 
 export type TerminalTarget = { cwd?: string; id?: string; projectId?: string };
@@ -47,7 +47,7 @@ export function originOf(c: Selection, y: Pick<Yaah, "sessions" | "projects">): 
     const p = project(c.id);
     return p ? { cwd: p.dirs[0] ?? p.contextDir, projectId: p.id } : {};
   }
-  if (c?.kind === "terminal" || c?.kind === "diff") return { cwd: c.cwd, projectId: project(c.projectId)?.id };
+  if (isFolderPane(c)) return { cwd: c.cwd, projectId: project(c.projectId)?.id };
   return {};
 }
 
@@ -120,9 +120,11 @@ export function useTerminals(y: Yaah) {
   const open = useCallback((target: TerminalTarget, where: Where) => show({ kind: "terminal", ...target }, where), [show]);
   /** A diff pane of the repository `cwd` is in (none: the pane asks which folder). */
   const openDiff = useCallback((origin: Origin, where: Where = "split") => show({ kind: "diff", ...origin }, where), [show]);
+  /** An editor pane on folder `cwd` (none: the pane asks which folder). */
+  const openEditor = useCallback((origin: Origin, where: Where = "split") => show({ kind: "editor", ...origin }, where), [show]);
   /** A terminal or diff of project `id`, in its first repo and listed under it (its page, its sidebar menu). */
   const openForProject = useCallback(
-    (id: string, kind: "terminal" | "diff") => {
+    (id: string, kind: "terminal" | "diff" | "editor") => {
       const origin = originOf({ kind: "project", id }, latest.current);
       if (origin.projectId) show({ kind, ...origin }, "split");
     },
@@ -144,6 +146,7 @@ export function useTerminals(y: Yaah) {
       /** A terminal in `cwd` (else the default folder: the last one used, or home); no project unless `projectId`. */
       open,
       openDiff,
+      openEditor,
       openForProject,
       /** ⌘T and "New terminal here": a new split to the right, in the focused pane's folder and project. */
       openHere: () => open(focusedOrigin(), "split"),
@@ -152,6 +155,6 @@ export function useTerminals(y: Yaah) {
       /** The focused pane's folder and project, if it has them. */
       focusedOrigin,
     }),
-    [open, openDiff, openForProject, focusedOrigin, toggleTerminal],
+    [open, openDiff, openEditor, openForProject, focusedOrigin, toggleTerminal],
   );
 }
