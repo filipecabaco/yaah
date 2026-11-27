@@ -66,6 +66,10 @@ how they were taken are in `docs/experiments/2026-11-03-website/`, and for the s
 there and convert it to WebP into `public/shots/` with the same name (`<name>-light.webp`,
 `<name>-dark.webp`).
 
+`editor-pane` (0.11.0) was taken the same way, at 1440×900 and 2×: the billing revamp project's
+"Open in editor", the project pane closed, Source Control, `lib/billing.ex` opened as a diff, and
+Ctrl+` for the terminal; resized to 1600×1000.
+
 ## Content rules
 
 The page only states what `app/README.md`, `app/PRODUCT.md`, `REVIEW.md` and `docs/` say is built.

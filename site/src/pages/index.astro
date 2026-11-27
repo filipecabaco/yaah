@@ -67,6 +67,13 @@ const composerKeys: [string, string[]][] = [
   ["Bold, italic or code over a selection", ["⌘", "B", "I", "E"]],
 ];
 
+// The editor pane's own keys (app/src/components/editor/editor-pane.tsx).
+const editorKeys: [string, string[]][] = [
+  ["Open a file by name", ["⌘", "P"]],
+  ["Save", ["⌘", "S"]],
+  ["Show or hide the terminal underneath", ["Ctrl", "`"]],
+];
+
 // install.sh --help: the options worth showing here.
 const installOptions: [string, string][] = [
   ["--version v0.5.1", "Install that release instead of the latest."],
@@ -435,12 +442,22 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
           />
         </Feature>
 
-        <Feature id="panes" title="Split panes, terminals and diffs">
+        <Feature id="panes" title="Split panes, editors, terminals and diffs">
           <p>
             <Kbd>⌘</Kbd> <Kbd>D</Kbd> splits the window like a terminal does, and <Kbd>⌘</Kbd> <Kbd>⇧</Kbd> <Kbd>D</Kbd> splits it downward. Each pane
-            holds its own chat, project, terminal or diff, with its own scroll and message box. Drag a divider, or double-click it to even things out;
+            holds its own chat, project, editor, terminal or diff, with its own scroll and message box. Drag a divider, or double-click it to even things out;
             <Kbd>⌃</Kbd> <Kbd>⌘</Kbd> <Kbd>=</Kbd> balances every pane. Each pane has a close button, <Kbd>⌘</Kbd> <Kbd>W</Kbd> on the last one goes back
             to the home screen, and the sidebar folds away with <Kbd>⌘</Kbd> <Kbd>B</Kbd>. The layout is saved and comes back when you restart.
+          </p>
+          <p>
+            An <strong>editor pane</strong> opens a folder the way VS Code does, without the extensions: its files in a tree coloured by git status,
+            tabs in Monaco with syntax highlighting, and Source Control to stage, unstage, discard and commit (or amend) beside a commit graph. A change
+            opens as a side-by-side diff whose right side is the file itself, so you can fix it there. <Kbd>Ctrl</Kbd> <Kbd>`</Kbd> opens a terminal
+            underneath. Open it from the pane picker ("Open editor…"), <Kbd>⌘</Kbd> <Kbd>K</Kbd>, or a project.
+          </p>
+          <p>
+            A save is refused when something else (the agent, git, another editor) changed the file since you opened it, and you choose to overwrite or
+            take the version on disk. A file open in two editors is one buffer, and unsaved edits stay when a pane is swapped out and back.
           </p>
           <p>
             A <strong>diff pane</strong> shows a git repository's changes, read-only: everything since the last commit, staged, unstaged, or the
@@ -448,7 +465,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             3 seconds while the window is visible. Open it from <Kbd>⌘</Kbd> <Kbd>K</Kbd> ("Diff of this folder"), the pane picker, or a project.
           </p>
           <p>
-            Open terminals and diffs are listed in the sidebar, under their project when you opened them from one. A row focuses its pane, and its
+            Open editors, terminals and diffs are listed in the sidebar, under their project when you opened them from one. A row focuses its pane, and its
             close button closes it.
           </p>
           <p>
@@ -465,6 +482,13 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             "Open as pane". Claude Code's and Codex's current adapters run their own commands and don't call it yet.
           </p>
           <div slot="media" class="space-y-5">
+            <Shot
+            name="editor-pane"
+            width={1600}
+            height={1000}
+            alt="yaah with an editor pane on the api repository: Source Control lists one staged and three changed files above a commit graph, billing.ex is open as a side-by-side diff of the index and the working tree, and a terminal is open underneath. The sidebar lists the editor as api, 4 changes, under the billing revamp project."
+            caption="An editor pane: Source Control, a change as a split diff, and the terminal underneath (Ctrl+`)."
+          />
             <Shot
             name="diff-pane"
             width={1600}
@@ -572,6 +596,7 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
             <li><strong>Answers fold away.</strong> An allowed request becomes a small chip on its tool card ("Allowed", "Auto-allowed · read-only in this chat's folders"), so only pending questions take space.</li>
             <li><strong>No agent code runs in the app.</strong> Agent UI is JSON drawn by yaah's renderer, and libraries are data too.</li>
             <li><strong>Data access is read-only.</strong> Postgres only as a read-only role, in a read-only transaction. GitHub, Linear and GitLab are read, never written.</li>
+            <li><strong>The editor writes only when you do.</strong> A file is saved when you save it, and only if nothing changed it since you opened it. Paths stay inside the folder the editor opened, symlinks included, and git stages, discards or commits only from your clicks; discarding asks first.</li>
             <li><strong>Credentials stay in yaah.</strong> Agents see connection names, not passwords or tokens.</li>
             <li><strong>Web content loads on click.</strong> A web page in a browser frame waits for you to load it. Local previews are served from a separate origin with a strict Content-Security-Policy.</li>
             <li><strong>Your agent's settings stay yours.</strong> yaah writes nothing into <code>~/.claude*</code>, <code>~/.codex</code> or any other agent config.</li>
@@ -700,6 +725,15 @@ GRANT pg_read_all_data TO yaah_ro;</code></pre>
               composerKeys.map(([label, keys], i) => (
                 <>
                   <span class="inline-flex gap-1 align-middle">{keys.map((k) => <Kbd>{k}</Kbd>)}</span> {label.toLowerCase()}{i < composerKeys.length - 1 ? "; " : "."}
+                </>
+              ))
+            }
+          </p>
+          <p>
+            In an editor pane: {
+              editorKeys.map(([label, keys], i) => (
+                <>
+                  <span class="inline-flex gap-1 align-middle">{keys.map((k) => <Kbd>{k}</Kbd>)}</span> {label.toLowerCase()}{i < editorKeys.length - 1 ? "; " : "."}
                 </>
               ))
             }
