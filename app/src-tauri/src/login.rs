@@ -55,7 +55,7 @@ impl Logins {
         let method = methods.iter().find(|m| m["id"] == method_id).ok_or_else(|| format!("agent does not offer login method {method_id}"))?;
         let kind = method["type"].as_str().unwrap_or("agent");
         if !matches!(kind, "agent" | "terminal") {
-            let vars = agents::auth_methods(std::slice::from_ref(method)).first().map(|m| m.vars.join(", ")).unwrap_or_default();
+            let vars = agents::auth_methods(std::slice::from_ref(method)).first().map_or_default(|m| m.vars.join(", "));
             return Err(if vars.is_empty() {
                 format!("yaah can't run `{kind}` logins; set the agent's credentials in its environment instead")
             } else {

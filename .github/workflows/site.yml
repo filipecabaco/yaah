@@ -35,7 +35,7 @@ concurrency:
 
 env:
   # mise's own version, the same as ci.yml and ci/Dockerfile.
-  MISE_VERSION: "2026.10.21"
+  MISE_VERSION: "2026.11.14"
 
 jobs:
   build:

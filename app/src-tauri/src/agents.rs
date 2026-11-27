@@ -1137,7 +1137,7 @@ fn auth_method(m: &Value) -> Option<AuthMethod> {
     // env_var methods have described their variables as `vars: [{name}]`, `varName`, and `name`.
     let vars = match m["vars"].as_array() {
         Some(vars) => vars.iter().filter_map(|v| v["name"].as_str().or(v.as_str()).map(str::to_owned)).collect(),
-        None => m["varName"].as_str().map(|v| vec![v.to_owned()]).unwrap_or_default(),
+        None => m["varName"].as_str().map_or_default(|v| vec![v.to_owned()]),
     };
     Some(AuthMethod {
         id: m["id"].as_str().or(m["methodId"].as_str())?.to_owned(),

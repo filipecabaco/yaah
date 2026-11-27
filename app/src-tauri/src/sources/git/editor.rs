@@ -269,15 +269,12 @@ pub(crate) async fn discard(root: &Path, paths: &[String]) -> Result<(), String>
     let paths = write_paths(paths)?;
     let status = status_view(root, None).await?;
     let listed = |key: &str, untracked: bool| -> Vec<String> {
-        status[key]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter(|f| f["untracked"].as_bool().unwrap_or(false) == untracked)
-                    .filter_map(|f| f["path"].as_str().map(str::to_owned))
-                    .collect()
-            })
-            .unwrap_or_default()
+        status[key].as_array().map_or_default(|a| {
+            a.iter()
+                .filter(|f| f["untracked"].as_bool().unwrap_or(false) == untracked)
+                .filter_map(|f| f["path"].as_str().map(str::to_owned))
+                .collect()
+        })
     };
     let (changed, untracked) = (listed("changes", false), listed("changes", true));
     let (mut restore, mut remove) = (vec![], vec![]);

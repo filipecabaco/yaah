@@ -668,7 +668,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for req in server.incoming_requests() {
-                let accept = req.headers().iter().find(|h| h.field.equiv("accept")).map(|h| h.value.to_string()).unwrap_or_default();
+                let accept = req.headers().iter().find(|h| h.field.equiv("accept")).map_or_default(|h| h.value.to_string());
                 let path = req.url().to_owned();
                 let _ = tx.send((path.clone(), accept));
                 let (status, body) = answers.iter().find(|(p, ..)| *p == path).map_or((404, "{}".to_owned()), |(_, s, b)| (*s, b.clone()));

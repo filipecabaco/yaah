@@ -619,7 +619,7 @@ fn toml_mcp_servers(text: &str) -> Vec<(String, Option<bool>)> {
         let trimmed = line.trim_start();
         if trimmed.starts_with('[') {
             let header = trimmed.trim_start_matches('[');
-            table = toml_key(header, ']').map(|(k, _)| k).unwrap_or_default();
+            table = toml_key(header, ']').map_or_default(|(k, _)| k);
             if table.first().is_some_and(|t| t == "mcp_servers")
                 && let Some(name) = table.get(1)
             {

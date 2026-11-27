@@ -31,7 +31,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   # mise's own version, the same as ci/Dockerfile.
-  MISE_VERSION: "2026.10.21"
+  MISE_VERSION: "2026.11.14"
 
 jobs:
   rust:

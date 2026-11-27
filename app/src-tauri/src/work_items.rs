@@ -291,7 +291,7 @@ pub fn parse_input(input: &str) -> Result<Parsed, String> {
     if with_scheme.starts_with("https://") || with_scheme.starts_with("http://") {
         let url = reqwest::Url::parse(&with_scheme).map_err(|_| nope())?;
         let host = url.host_str().unwrap_or_default().to_lowercase();
-        let segs: Vec<&str> = url.path_segments().map(|s| s.filter(|p| !p.is_empty()).collect()).unwrap_or_default();
+        let segs: Vec<&str> = url.path_segments().map_or_default(|s| s.filter(|p| !p.is_empty()).collect());
         let item = |service, id: String| Ok(Parsed { service: Some(service), id, origin: None });
         match (host.as_str(), segs.as_slice()) {
             ("github.com" | "www.github.com", [o, r, "issues", n, ..]) => {

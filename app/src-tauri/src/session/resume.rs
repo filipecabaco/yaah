@@ -115,7 +115,7 @@ impl Hub {
         }
 
         let project = project_for_cwd(projects, cwd);
-        let additional_dirs = project.map(|p| project_chat_dirs(p, cwd, &[])).unwrap_or_default();
+        let additional_dirs = project.map_or_default(|p| project_chat_dirs(p, cwd, &[]));
         let given_title = title.map(one_line).filter(|t| !t.is_empty());
         let info = SessionInfo {
             session_id: acp_id.to_owned(),

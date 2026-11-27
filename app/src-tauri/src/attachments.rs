@@ -182,7 +182,7 @@ pub fn sniff_mime(sample: &[u8], name: &str) -> (String, bool) {
         return (format_mime(f).to_owned(), false);
     }
     if looks_like_text(sample) {
-        let ext = Path::new(name).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+        let ext = Path::new(name).extension().and_then(|e| e.to_str()).map_or_default(str::to_ascii_lowercase);
         let mime = match ext.as_str() {
             "md" | "markdown" => "text/markdown",
             "json" => "application/json",
@@ -214,7 +214,7 @@ pub fn describe(paths: &[String]) -> Vec<Described> {
             let kind = if path.is_dir() {
                 Kind::Folder
             } else {
-                let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+                let ext = path.extension().and_then(|e| e.to_str()).map_or_default(str::to_ascii_lowercase);
                 if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") { Kind::Image } else { Kind::File }
             };
             Described { name: name_of(path), kind }

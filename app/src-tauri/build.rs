@@ -12,8 +12,7 @@ fn bundle_components() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("components");
     println!("cargo:rerun-if-changed={}", dir.display());
     let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .map(|it| it.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect())
-        .unwrap_or_default();
+        .map_or_default(|it| it.filter_map(Result::ok).map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).collect());
     files.sort();
     let mut out = String::from("&[\n");
     for f in &files {

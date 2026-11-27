@@ -1058,7 +1058,7 @@ impl Hub {
     /// (and restoring the ones there) when it is given. Only each saved chat's
     /// info is read now; its entries are read when it is first opened.
     pub fn open(app: Emit, store: Option<PathBuf>, profiles: &'static Store) -> Self {
-        let sessions = store.as_deref().map(load_sessions).unwrap_or_default();
+        let sessions = store.as_deref().map_or_default(load_sessions);
         if let Some(dir) = &store {
             eprintln!("[sessions] found {} chats in {}", sessions.len(), dir.display());
         }
@@ -1196,12 +1196,9 @@ impl Hub {
             let _ = tx.send(Some(values));
             return Ok(());
         }
-        let summary = values
-            .as_object()
-            .map(|o| {
-                o.iter().map(|(k, v)| format!("- {k}: {}", v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect::<Vec<_>>().join("\n")
-            })
-            .unwrap_or_default();
+        let summary = values.as_object().map_or_default(|o| {
+            o.iter().map(|(k, v)| format!("- {k}: {}", v.as_str().map_or_else(|| v.to_string(), str::to_owned))).collect::<Vec<_>>().join("\n")
+        });
         let text = format!("My answers to \"{title}\":\n{summary}\n\n```json\n{}\n```", serde_json::to_string_pretty(&values).unwrap_or_default());
         self.prompt(session_id, text, vec![]).await
     }
@@ -1356,7 +1353,7 @@ impl Hub {
         stage(if servers.is_empty() { StartStage::Session } else { StartStage::McpServers }, &servers);
 
         let res = agent.conn.request("session/new", params).await;
-        let offered = res.as_ref().map(config::offered).unwrap_or_default();
+        let offered = res.as_ref().map_or_default(config::offered);
         let session_id = res
             .map_err(|e| self.shared.rpc_error(&account.id, &e, "session/new failed"))
             .and_then(|r| {

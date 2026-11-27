@@ -10,7 +10,7 @@ fn config(f: &Fixture, sid: &str) -> ChatConfig {
 }
 
 fn current(f: &Fixture, sid: &str, id: &str) -> String {
-    config(f, sid).options.iter().find(|o| o.id == id).map(|o| o.current.clone()).unwrap_or_default()
+    config(f, sid).options.iter().find(|o| o.id == id).map_or_default(|o| o.current.clone())
 }
 
 fn set(f: &Fixture, sid: &str, id: &str, value: &str) -> Result<SessionInfo, String> {

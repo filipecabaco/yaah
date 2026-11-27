@@ -45,7 +45,7 @@ ENV HOME=/home/runner \
     CI=true
 
 # mise, pinned; then the toolchain, in its own layer so a source change doesn't reinstall it.
-ARG MISE_VERSION=v2026.10.21
+ARG MISE_VERSION=v2026.11.14
 RUN curl -fsSL https://mise.run | MISE_VERSION=${MISE_VERSION} MISE_INSTALL_PATH=/home/runner/.local/bin/mise sh
 COPY --from=toolchain --chown=runner:runner /tools.toml /home/runner/toolchain/mise.toml
 RUN cd /home/runner/toolchain && mise install && mise ls --current

@@ -265,7 +265,7 @@ impl UiHost {
             folders.insert(id.clone(), Served { dir, web: false });
             id
         };
-        let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = file.file_name().map_or_default(|n| n.to_string_lossy().into_owned());
         Ok(format!("http://127.0.0.1:{}/preview/{id}/{}", site.port, encode_path(&name)))
     }
 
@@ -696,7 +696,7 @@ fn requested_folders(paths: &Value) -> Result<Vec<String>, Vec<String>> {
 /// Folders the chat already has are left out; with none left, nothing is asked.
 fn request_folders(host: &UiHost, session_id: &str, args: &Value) -> Result<String, Vec<String>> {
     let paths = requested_folders(&args["paths"])?;
-    let reason = args["reason"].as_str().map(str::trim).unwrap_or_default();
+    let reason = args["reason"].as_str().map_or_default(str::trim);
     if reason.is_empty() {
         return Err(vec!["`reason` is required: why you need these folders, in a few words, for the user".into()]);
     }

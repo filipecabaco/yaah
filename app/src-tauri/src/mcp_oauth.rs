@@ -126,7 +126,7 @@ fn resource_metadata_url(header: &str) -> Option<String> {
 /// between host and path (RFC 8414 §3.1), so stripping the path finds nothing.
 fn metadata_urls(issuer: &str) -> Result<Vec<String>, String> {
     let host = origin(issuer)?;
-    let path = reqwest::Url::parse(issuer).map(|u| u.path().trim_end_matches('/').to_owned()).unwrap_or_default();
+    let path = reqwest::Url::parse(issuer).map_or_default(|u| u.path().trim_end_matches('/').to_owned());
     Ok(if path.is_empty() {
         vec![format!("{host}/.well-known/oauth-authorization-server"), format!("{host}/.well-known/openid-configuration")]
     } else {
@@ -157,7 +157,7 @@ pub async fn discover(url: &str) -> Result<Endpoints, String> {
         return Err(NO_LOGIN_WANTED.into());
     }
     let from_header = probe.headers().get(reqwest::header::WWW_AUTHENTICATE).and_then(|v| v.to_str().ok()).and_then(resource_metadata_url);
-    let path = reqwest::Url::parse(url).map(|u| u.path().trim_end_matches('/').to_owned()).unwrap_or_default();
+    let path = reqwest::Url::parse(url).map_or_default(|u| u.path().trim_end_matches('/').to_owned());
     let mut candidates = from_header.into_iter().collect::<Vec<_>>();
     candidates.push(format!("{host}/.well-known/oauth-protected-resource{path}"));
     candidates.push(format!("{host}/.well-known/oauth-protected-resource"));
@@ -265,7 +265,7 @@ fn wait_for_code(server: &tiny_http::Server, state: &str) -> Result<String, Stri
         }
         if let Some(err) = q.get("error") {
             let _ = req.respond(page("Login refused. You can close this tab and go back to yaah."));
-            return Err(format!("the login was refused: {err}{}", q.get("error_description").map(|d| format!(" ({d})")).unwrap_or_default()));
+            return Err(format!("the login was refused: {err}{}", q.get("error_description").map_or_default(|d| format!(" ({d})"))));
         }
         let Some(code) = q.get("code") else {
             let _ = req.respond(page("No login code came back.").with_status_code(400));
