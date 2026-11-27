@@ -749,6 +749,43 @@ const election: Recording = [
 ];
 
 /** "chart gallery": a short message, then one small dashboard per subject (chart-gallery.ts). */
+/** One diagram of each common kind, as an agent would render them (`diagram` primitive, Mermaid). */
+const diagramGallery: [string, string][] = [
+  [
+    "Request flow",
+    "flowchart LR\n  App[yaah] -->|prompt| Agent\n  Agent -->|tool call| MCP[yaah-ui MCP]\n  MCP -->|render| App\n  Agent -->|reply| App",
+  ],
+  [
+    "Permission prompt",
+    "sequenceDiagram\n  Agent->>yaah: request_permission\n  yaah->>User: ask\n  User-->>yaah: allow once\n  yaah-->>Agent: allowed",
+  ],
+  [
+    "Chat lifecycle",
+    "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running: send\n  Running --> Idle: end_turn\n  Running --> Waiting: permission\n  Waiting --> Running: answer",
+  ],
+];
+
+const diagrams: Recording = [
+  { event: "session-info", running: true, stopReason: null },
+  { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
+  { event: "session-entry", index: 1, entry: { type: "agent", text: "A flowchart, a sequence and a state diagram.", messageId: null } },
+  ...diagramGallery.flatMap(([title, text], i): Recording => {
+    const tree = { type: "diagram", props: { text } };
+    const input = { title, tree };
+    const id = `diagram-${i}`;
+    return [
+      { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "in_progress", input) },
+      {
+        event: "session-entry",
+        index: 3 + i * 2,
+        entry: { type: "ui", askId: null, answer: null, title, component: null, version: null, tree, props: {} },
+      },
+      { event: "session-entry", index: 2 + i * 2, entry: call(id, "mcp__yaah-ui__ui_render", "other", "completed", input, "Rendered.") },
+    ];
+  }),
+  { event: "session-info", running: false, stopReason: "end_turn" },
+];
+
 const gallery: Recording = [
   { event: "session-info", running: true, stopReason: null },
   { event: "session-entry", index: 0, entry: { type: "user", text: "", attachments: [] } },
@@ -849,6 +886,7 @@ const routes: [RegExp, readonly MockStep[]][] = [
   [/command output|tool cards/i, commandOutput],
   [/election (dashboard|night)/i, election],
   [/chart gallery/i, gallery],
+  [/diagram gallery/i, diagrams],
   [/map gallery/i, mapGalleryRecording],
   [/map types/i, mapTypesRecording],
   [/flow graphs?/i, flowGraphsRecording],
