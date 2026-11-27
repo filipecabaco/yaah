@@ -60,6 +60,14 @@ pub const ADAPTER_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp@0.99.1"
 /// First run of an npx-launched agent downloads it, so allow for that.
 pub const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(180);
 const TITLE_MAX_CHARS: usize = 60;
+/// A chat's title until its first message names it (`title_from`).
+const UNTITLED: &str = "New chat";
+
+/// A title from a message: its first non-blank line, else the first attached file's name.
+fn title_from(text: &str, file: Option<&str>) -> Option<String> {
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty()).or(file)?;
+    Some(truncate(first, TITLE_MAX_CHARS))
+}
 /// Titles yaah makes up when the agent names nothing. Too vague to remember a
 /// "don't ask again" by: it would answer requests the user never saw.
 const UNNAMED_REQUEST: &str = "The agent wants to run a tool";
@@ -562,6 +570,17 @@ fn load_sessions(dir: &Path) -> HashMap<String, Session> {
         .filter_map(|path| {
             let mut info = read_info(&path).inspect_err(|e| eprintln!("[sessions] skipping {}: {e}", path.display())).ok()?;
             info.running = false;
+            // Chats left untitled before the fix above: named from their first message now (saved with their next change).
+            if info.title == UNTITLED
+                && let Some(t) = read_entries(&path).ok().and_then(|es| {
+                    es.iter().find_map(|e| match e {
+                        Entry::User { text, files, .. } => title_from(text, files.first().map(|f| f.name.as_str())),
+                        _ => None,
+                    })
+                })
+            {
+                info.title = t;
+            }
             // Messages still queued wait for "Resume queue" (session/queue.rs).
             info.queue.restored();
             Some((info.session_id.clone(), Session::unloaded(info, path)))
@@ -1362,7 +1381,7 @@ impl Hub {
             account_id: account.id,
             cwd,
             additional_dirs,
-            title: "New chat".into(),
+            title: UNTITLED.into(),
             running: false,
             stop_reason: None,
             commands: vec![],
@@ -1898,9 +1917,12 @@ impl Hub {
             s.info.running = true;
             s.info.stop_reason = None;
             s.plan_index = None;
-            if s.entries.is_empty() {
-                let first = text.lines().find(|l| !l.trim().is_empty()).or_else(|| files.first().map(|f| f.name.as_str()));
-                s.info.title = truncate(first.unwrap_or_default(), TITLE_MAX_CHARS);
+            // Named by the first message that can name it. Not "the chat is empty": an agent or model
+            // switch, or folders added, before the first message are entries too, and left it untitled.
+            if s.info.title == UNTITLED
+                && let Some(t) = title_from(&text, files.first().map(|f| f.name.as_str()))
+            {
+                s.info.title = t;
             }
             let mut blocks = vec![];
             let mut attachments = vec![];
@@ -4055,6 +4077,33 @@ mod lazy_tests {
             assert!(started.elapsed() < Duration::from_secs(5), "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+
+    #[test]
+    fn a_chat_is_titled_by_its_first_message_even_after_a_switch() {
+        assert_eq!(title_from("\n  \n  Fix the invoice rounding\nmore", None).as_deref(), Some("Fix the invoice rounding"));
+        assert_eq!(title_from("   ", Some("screenshot.png")).as_deref(), Some("screenshot.png"));
+        assert_eq!(title_from("", None), None);
+
+        // Saved untitled because an agent switch came before the first message: titled when it loads.
+        let dir = temp();
+        let mut info = test_info("untitled");
+        info.title = UNTITLED.into();
+        let entries = vec![
+            Entry::Switch { account_id: "b".into(), label: "Claude (personal)".into(), from: None },
+            Entry::User { text: "\ncould we use webcontainers?".into(), attachments: vec![], files: vec![], references: vec![] },
+        ];
+        let saved = json!({ "info": info, "entries": entries });
+        std::fs::write(dir.join("untitled.json"), serde_json::to_vec(&saved).unwrap()).unwrap();
+        // One with no message yet keeps the placeholder.
+        let mut empty = test_info("empty");
+        empty.title = UNTITLED.into();
+        std::fs::write(dir.join("empty.json"), serde_json::to_vec(&json!({ "info": empty, "entries": [] })).unwrap()).unwrap();
+
+        let loaded = load_sessions(&dir);
+        assert_eq!(loaded["untitled"].info.title, "could we use webcontainers?");
+        assert_eq!(loaded["empty"].info.title, UNTITLED);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
